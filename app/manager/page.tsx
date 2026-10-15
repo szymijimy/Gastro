@@ -9,8 +9,9 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { InventoryModule } from "@/components/InventoryModule"
 import { ShiftCalendar } from "@/components/ShiftCalendar"
+import { InventoryModule } from "@/components/InventoryModule"
+import { ManagerScheduleModule } from "@/components/ManagerScheduleModule"
 
 const ROLE_COLORS = [
   { name: "Niebieski", value: "#2563eb" },
@@ -25,7 +26,6 @@ const ROLE_COLORS = [
 
 type PriorityLevel = "high" | "normal" | "low"
 
-// Komponent rysujący ikonkę priorytetu
 const PriorityIcon = ({ priority }: { priority: PriorityLevel }) => {
   if (priority === "high") {
     return (
@@ -52,6 +52,34 @@ const PriorityIcon = ({ priority }: { priority: PriorityLevel }) => {
       </svg>
     </span>
   )
+}
+
+const formatLocalDate = (date: Date): string => {
+  const yyyy = date.getFullYear()
+  const mm = String(date.getMonth() + 1).padStart(2, "0")
+  const dd = String(date.getDate()).padStart(2, "0")
+  return `${yyyy}-${mm}-${dd}`
+}
+
+const shiftDateByDays = (dateStr: string, days: number): string => {
+  if (!dateStr) return ""
+  const [y, m, d] = dateStr.split("-").map(Number)
+  const dateObj = new Date(y, m - 1, d)
+  dateObj.setDate(dateObj.getDate() + days)
+  return formatLocalDate(dateObj)
+}
+
+const getFriendlyDateLabel = (dateStr: string, todayStr: string): string => {
+  if (!dateStr) return ""
+  const [y, m, d] = dateStr.split("-").map(Number)
+  const dateObj = new Date(y, m - 1, d)
+  const weekday = dateObj.toLocaleDateString("pl-PL", { weekday: "long" })
+  const capitalizedWeekday = weekday.charAt(0).toUpperCase() + weekday.slice(1)
+
+  if (dateStr === todayStr) return `Dzisiaj (${capitalizedWeekday})`
+  if (dateStr === shiftDateByDays(todayStr, -1)) return `Wczoraj (${capitalizedWeekday})`
+  if (dateStr === shiftDateByDays(todayStr, 1)) return `Jutro (${capitalizedWeekday})`
+  return capitalizedWeekday
 }
 
 type SchedulePeriod = {
@@ -82,6 +110,8 @@ type Announcement = {
   title: string
   content: string
   is_pinned: boolean
+  visible_from: string | null
+  visible_until: string | null
   created_at: string
 }
 
@@ -93,10 +123,10 @@ type TodoItem = {
   priority: PriorityLevel
   target_date: string
   is_completed: boolean
+  note: string | null
   created_at: string
 }
 
-// Wartość przypisania w formularzu: "all" | "role:NazwaRoli" | "user:UUID"
 type DraftTask = {
   id: string
   text: string
@@ -105,7 +135,194 @@ type DraftTask = {
 }
 
 // ============================================================================
-// WYDZIELONY KOMPONENT MODALA (brak lagów podczas pisania!)
+// KOMPONENT WIERSZA ZADANIA
+// ============================================================================
+function TodoItemRow({
+  todo,
+  roleColor,
+  staffMemberName,
+  onToggle,
+  onUpdatePriority,
+  onSaveNote,
+  onDelete,
+}: {
+  todo: TodoItem
+  roleColor: string | null
+  staffMemberName: string | null
+  onToggle: (todo: TodoItem) => void
+  onUpdatePriority: (todoId: string, newPriority: PriorityLevel) => void
+  onSaveNote: (todoId: string, noteText: string | null) => Promise<void>
+  onDelete: (id: string) => void
+}) {
+  const [isEditingNote, setIsEditingNote] = useState(false)
+  const [noteDraft, setNoteDraft] = useState(todo.note || "")
+  const [savingNote, setSavingNote] = useState(false)
+
+  const priority = todo.priority || "normal"
+
+  const handleSave = async () => {
+    setSavingNote(true)
+    const trimmed = noteDraft.trim()
+    await onSaveNote(todo.id, trimmed ? trimmed : null)
+    setSavingNote(false)
+    setIsEditingNote(false)
+  }
+
+  return (
+    <div
+      className={`p-3 rounded-lg border transition-colors ${
+        todo.is_completed
+          ? "bg-zinc-50 border-zinc-200 opacity-75"
+          : "bg-white border-zinc-200 hover:bg-zinc-50/50"
+      }`}
+    >
+      <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3 flex-1 min-w-0">
+          <input
+            type="checkbox"
+            checked={todo.is_completed}
+            onChange={() => onToggle(todo)}
+            className="w-4 h-4 rounded border-zinc-300 cursor-pointer shrink-0"
+          />
+
+          <PriorityIcon priority={priority} />
+
+          <span
+            onClick={() => onToggle(todo)}
+            className={`text-sm font-medium cursor-pointer ${
+              todo.is_completed ? "line-through text-zinc-400" : "text-zinc-800"
+            }`}
+          >
+            {todo.task}
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {todo.assigned_user_id ? (
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+              👤 {staffMemberName}
+            </span>
+          ) : todo.assigned_role ? (
+            <span
+              className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold text-white"
+              style={{ backgroundColor: roleColor || "#71717a" }}
+            >
+              🏷️ {todo.assigned_role}
+            </span>
+          ) : (
+            <span className="px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-zinc-100 text-zinc-600">
+              👥 Wszyscy
+            </span>
+          )}
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setNoteDraft(todo.note || "")
+              setIsEditingNote(!isEditingNote)
+            }}
+            className={`h-7 px-2 text-xs ${
+              todo.note ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100" : "text-zinc-600"
+            }`}
+          >
+            {todo.note ? "✏️ Uwaga" : "💬 Dodaj uwagę"}
+          </Button>
+
+          <select
+            value={priority}
+            onChange={(e) => onUpdatePriority(todo.id, e.target.value as PriorityLevel)}
+            className="h-7 rounded border border-zinc-200 bg-white px-1.5 text-xs text-zinc-700"
+            title="Zmień priorytet"
+          >
+            <option value="high">Wysoki</option>
+            <option value="normal">Normalny</option>
+            <option value="low">Niski</option>
+          </select>
+
+          <Button
+            variant="destructive"
+            size="sm"
+            className="h-7 px-2.5 text-xs"
+            onClick={() => onDelete(todo.id)}
+          >
+            Usuń
+          </Button>
+        </div>
+      </div>
+
+      {todo.note && !isEditingNote && (
+        <div className="mt-2.5 ml-7 p-2.5 rounded-md bg-amber-50/80 border border-amber-200 text-xs text-amber-900 flex items-start justify-between gap-2">
+          <div>
+            <span className="font-semibold">⚠️ Uwaga do zadania: </span>
+            <span>{todo.note}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setNoteDraft(todo.note || "")
+              setIsEditingNote(true)
+            }}
+            className="text-[11px] font-semibold underline shrink-0 hover:text-amber-700"
+          >
+            Edytuj
+          </button>
+        </div>
+      )}
+
+      {isEditingNote && (
+        <div className="mt-3 ml-7 p-3 rounded-lg bg-zinc-50 border border-zinc-200 space-y-2">
+          <Label className="text-xs text-zinc-700">
+            Uwaga / komentarz (np. dlaczego wykonano tylko częściowo):
+          </Label>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <Input
+              placeholder="np. Tylko pół butelki soku z cytryny, bo skończyły się owoce..."
+              value={noteDraft}
+              onChange={(e) => setNoteDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  handleSave()
+                }
+              }}
+              className="h-8 text-xs bg-white flex-1"
+              autoFocus
+            />
+            <div className="flex items-center gap-1.5 shrink-0">
+              <Button type="button" size="sm" className="h-8 text-xs" onClick={handleSave} disabled={savingNote}>
+                {savingNote ? "Zapis..." : "Zapisz uwagę"}
+              </Button>
+              {todo.note && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs text-red-600 hover:text-red-700"
+                  onClick={async () => {
+                    setSavingNote(true)
+                    await onSaveNote(todo.id, null)
+                    setSavingNote(false)
+                    setIsEditingNote(false)
+                  }}
+                >
+                  Usuń uwagę
+                </Button>
+              )}
+              <Button type="button" variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setIsEditingNote(false)}>
+                Anuluj
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================================================
+// KOMPONENT MODALA ZADAŃ
 // ============================================================================
 function TodoBatchModal({
   isOpen,
@@ -154,7 +371,7 @@ function TodoBatchModal({
         id: crypto.randomUUID(),
         text: "",
         priority: "normal",
-        assignee: currentAssignee, // Dziedziczy przypisanie z poprzedniego punktu dla wygody!
+        assignee: currentAssignee,
       }
       setDraftTasks(prev => {
         const copy = [...prev]
@@ -195,8 +412,8 @@ function TodoBatchModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
-      <div className="bg-white rounded-xl shadow-xl border w-full max-w-3xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-xl shadow-xl border w-full max-w-3xl overflow-hidden">
         <div className="flex items-center justify-between px-6 py-4 border-b bg-zinc-50">
           <div>
             <h2 className="text-lg font-bold text-zinc-900">Dodaj listę zadań</h2>
@@ -204,11 +421,7 @@ function TodoBatchModal({
               Wpisz zadanie, wybierz dla kogo (rola lub osoba) i naciśnij <kbd className="px-1.5 py-0.5 bg-white border rounded text-[11px] font-semibold">Enter</kbd>, aby przejść do kolejnego punktu.
             </p>
           </div>
-          <button 
-            type="button"
-            onClick={onClose}
-            className="text-zinc-400 hover:text-zinc-700 text-xl font-bold leading-none px-2"
-          >
+          <button type="button" onClick={onClose} className="text-zinc-400 hover:text-zinc-700 text-xl font-bold leading-none px-2">
             ×
           </button>
         </div>
@@ -221,7 +434,6 @@ function TodoBatchModal({
                   {index + 1}.
                 </span>
                 
-                {/* Treść punktu */}
                 <Input
                   ref={(el) => { taskInputRefs.current[index] = el }}
                   placeholder={index === 0 ? "np. Pokroić cytryny i limonki przed otwarciem..." : "Kolejne zadanie..."}
@@ -231,7 +443,6 @@ function TodoBatchModal({
                   className="flex-1 min-w-[200px]"
                 />
 
-                {/* Przypisanie: Wszyscy / Rola / Konkretny pracownik */}
                 <select
                   value={item.assignee}
                   onChange={(e) => updateRow(index, { assignee: e.target.value })}
@@ -262,7 +473,6 @@ function TodoBatchModal({
                   )}
                 </select>
 
-                {/* Wybór priorytetu z ikonką */}
                 <div className="flex items-center gap-1.5 bg-zinc-50 border border-zinc-200 rounded-md px-2 h-10 shrink-0">
                   <PriorityIcon priority={item.priority} />
                   <select
@@ -308,10 +518,9 @@ function TodoBatchModal({
             </Button>
           </div>
 
-          {/* Stopka modala: tylko data i przyciski akcji */}
           <div className="px-6 py-4 bg-zinc-50 border-t flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <Label className="text-xs font-medium text-zinc-600 whitespace-nowrap">Data wykonania:</Label>
+              <Label className="text-xs font-medium text-zinc-600 whitespace-nowrap">Wystaw na dzień:</Label>
               <Input
                 type="date"
                 value={targetDate}
@@ -337,7 +546,7 @@ function TodoBatchModal({
 }
 
 // ============================================================================
-// GŁÓWNY PANEL MANAGERA
+//GŁÓWNY PANEL MANAGERA
 // ============================================================================
 export default function ManagerDashboard() {
   const router = useRouter()
@@ -359,6 +568,7 @@ export default function ManagerDashboard() {
 
   // Stany dla pracowników
   const [staff, setStaff] = useState<StaffMember[]>([])
+  const [newStaffName, setNewStaffName] = useState("")
   const [newStaffEmail, setNewStaffEmail] = useState("")
   const [newStaffRole, setNewStaffRole] = useState("")
   const [newStaffRate, setNewStaffRate] = useState("")
@@ -368,16 +578,22 @@ export default function ManagerDashboard() {
   const [newAnnouncementTitle, setNewAnnouncementTitle] = useState("")
   const [newAnnouncementContent, setNewAnnouncementContent] = useState("")
   const [newAnnouncementPinned, setNewAnnouncementPinned] = useState(false)
+  const [newAnnouncementFrom, setNewAnnouncementFrom] = useState("")
+  const [newAnnouncementUntil, setNewAnnouncementUntil] = useState("")
+  const [selectedAnnouncementModal, setSelectedAnnouncementModal] = useState<Announcement | null>(null)
 
   // Stany dla To-do list
   const [todos, setTodos] = useState<TodoItem[]>([])
-  const [todoFilterDate, setTodoFilterDate] = useState<string>("")
+  const [selectedTodoDate, setSelectedTodoDate] = useState<string>("")
   const [isTodoModalOpen, setIsTodoModalOpen] = useState(false)
 
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    setTodayStr(new Date().toISOString().split("T")[0])
+    const localToday = formatLocalDate(new Date())
+    setTodayStr(localToday)
+    setSelectedTodoDate(localToday)
+
     const fetchDashboardData = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) {
@@ -397,7 +613,6 @@ export default function ManagerDashboard() {
         const firstRestaurantId = userRestaurants[0].restaurant_id
         setActiveRestaurantId(firstRestaurantId)
         
-        // 1. Pobieranie okresów grafiku
         const { data: periodsData } = await supabase
           .from('schedule_periods')
           .select('*')
@@ -405,7 +620,6 @@ export default function ManagerDashboard() {
           .order('start_date', { ascending: false })
         if (periodsData) setPeriods(periodsData)
 
-        // 2. Pobieranie ról wraz z kolorami
         const { data: rolesData } = await supabase
           .from('restaurant_roles')
           .select('id, name, color')
@@ -421,7 +635,6 @@ export default function ManagerDashboard() {
           }
         }
 
-        // 3. Pobieranie listy pracowników
         const { data: staffData, error: staffError } = await supabase
           .from('restaurant_users')
           .select(`
@@ -452,7 +665,6 @@ export default function ManagerDashboard() {
           setStaff(formattedStaff)
         }
 
-        // 4. Pobieranie ogłoszeń
         const { data: announcementsData } = await supabase
           .from('restaurant_announcements')
           .select('*')
@@ -461,7 +673,6 @@ export default function ManagerDashboard() {
           .order('created_at', { ascending: false })
         if (announcementsData) setAnnouncements(announcementsData)
 
-        // 5. Pobieranie zadań (To-do)
         const { data: todosData } = await supabase
           .from('restaurant_todos')
           .select('*')
@@ -559,16 +770,17 @@ export default function ManagerDashboard() {
     setRoles(roles.filter(r => r.id !== roleId))
   }
 
-  // --- PRACOWNICY ---
+  // --- PRACOWNICY (DODAWANIE Z IMIENIEM + EDYCJA IMIENIA W TABELI) ---
   const handleAddStaff = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!activeRestaurantId || !newStaffEmail || !newStaffRole) return
+    if (!activeRestaurantId || !newStaffEmail || !newStaffRole || !newStaffName.trim()) return
 
     const { data, error } = await supabase.rpc('add_staff_member', {
       p_restaurant_id: activeRestaurantId,
       p_email: newStaffEmail.trim(),
       p_role: newStaffRole,
-      p_hourly_rate: parseFloat(newStaffRate) || 0
+      p_hourly_rate: parseFloat(newStaffRate) || 0,
+      p_full_name: newStaffName.trim(),
     })
 
     if (error) {
@@ -577,9 +789,36 @@ export default function ManagerDashboard() {
       alert(data)
     } else {
       alert("Pracownik pomyślnie dodany do lokalu!")
+      setNewStaffName("")
       setNewStaffEmail("")
       setNewStaffRate("")
       window.location.reload()
+    }
+  }
+
+  const handleNameChangeLocal = (userId: string, newName: string) => {
+    setStaff(prev =>
+      prev.map(member =>
+        member.user_id === userId
+          ? { ...member, users: { ...member.users, full_name: newName } }
+          : member
+      )
+    )
+  }
+
+  const handleSaveStaffName = async (userId: string, fullName: string) => {
+    if (!activeRestaurantId) return
+    const trimmed = fullName.trim()
+    if (!trimmed) return
+
+    const { error } = await supabase.rpc('update_staff_member_name', {
+      p_restaurant_id: activeRestaurantId,
+      p_user_id: userId,
+      p_full_name: trimmed,
+    })
+
+    if (error) {
+      alert("Błąd podczas zapisywania imienia: " + error.message)
     }
   }
 
@@ -647,10 +886,15 @@ export default function ManagerDashboard() {
     setStaff(staff.filter(member => member.user_id !== userId))
   }
 
-  // --- TABLICA OGŁOSZEŃ ---
+  // --- TABLICA OGŁOSZEŃ (Z ZAKRESEM DAT I POP-UPEM) ---
   const handleCreateAnnouncement = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!activeRestaurantId || !newAnnouncementTitle.trim() || !newAnnouncementContent.trim()) return
+
+    if (newAnnouncementFrom && newAnnouncementUntil && newAnnouncementFrom > newAnnouncementUntil) {
+      alert("Data 'Widoczne od' nie może być późniejsza niż data 'Widoczne do'.")
+      return
+    }
 
     const { data, error } = await supabase
       .from('restaurant_announcements')
@@ -658,7 +902,9 @@ export default function ManagerDashboard() {
         restaurant_id: activeRestaurantId,
         title: newAnnouncementTitle.trim(),
         content: newAnnouncementContent.trim(),
-        is_pinned: newAnnouncementPinned
+        is_pinned: newAnnouncementPinned,
+        visible_from: newAnnouncementFrom || null,
+        visible_until: newAnnouncementUntil || null,
       }])
       .select()
 
@@ -668,15 +914,18 @@ export default function ManagerDashboard() {
     }
 
     if (data && data[0]) {
-      const updated = [data[0], ...announcements].sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned))
+      const updated = [data[0] as Announcement, ...announcements].sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned))
       setAnnouncements(updated)
       setNewAnnouncementTitle("")
       setNewAnnouncementContent("")
       setNewAnnouncementPinned(false)
+      setNewAnnouncementFrom("")
+      setNewAnnouncementUntil("")
     }
   }
 
-  const handleTogglePinAnnouncement = async (item: Announcement) => {
+  const handleTogglePinAnnouncement = async (item: Announcement, e: React.MouseEvent) => {
+    e.stopPropagation()
     const newPinned = !item.is_pinned
     const { error } = await supabase
       .from('restaurant_announcements')
@@ -688,10 +937,14 @@ export default function ManagerDashboard() {
         .map(a => a.id === item.id ? { ...a, is_pinned: newPinned } : a)
         .sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned))
       setAnnouncements(updated)
+      if (selectedAnnouncementModal?.id === item.id) {
+        setSelectedAnnouncementModal({ ...item, is_pinned: newPinned })
+      }
     }
   }
 
-  const handleDeleteAnnouncement = async (id: string) => {
+  const handleDeleteAnnouncement = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation()
     const { error } = await supabase
       .from('restaurant_announcements')
       .delete()
@@ -699,6 +952,40 @@ export default function ManagerDashboard() {
 
     if (!error) {
       setAnnouncements(announcements.filter(a => a.id !== id))
+      if (selectedAnnouncementModal?.id === id) {
+        setSelectedAnnouncementModal(null)
+      }
+    }
+  }
+
+  // Pomocnicza funkcja określająca status widoczności ogłoszenia
+  const getAnnouncementVisibilityBadge = (item: Announcement) => {
+    const from = item.visible_from
+    const until = item.visible_until
+
+    if (from && todayStr && todayStr < from) {
+      return {
+        label: `⏳ Zaplanowane (od ${from}${until ? ` do ${until}` : ""})`,
+        className: "bg-blue-50 text-blue-700 border-blue-200",
+      }
+    }
+    if (until && todayStr && todayStr > until) {
+      return {
+        label: `⌛ Wygasło (do ${until})`,
+        className: "bg-zinc-100 text-zinc-500 border-zinc-200",
+      }
+    }
+    if (from || until) {
+      const rangeText =
+        from && until ? `${from} – ${until}` : from ? `od ${from}` : `do ${until}`
+      return {
+        label: `🟢 Aktywne (${rangeText})`,
+        className: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      }
+    }
+    return {
+      label: "🟢 Widoczne bezterminowo",
+      className: "bg-emerald-50 text-emerald-700 border-emerald-200",
     }
   }
 
@@ -720,10 +1007,11 @@ export default function ManagerDashboard() {
         restaurant_id: activeRestaurantId,
         task: t.text.trim(),
         priority: t.priority,
-        target_date: targetDate || todayStr,
+        target_date: targetDate || selectedTodoDate || todayStr,
         assigned_role,
         assigned_user_id,
-        is_completed: false
+        is_completed: false,
+        note: null
       }
     })
 
@@ -739,6 +1027,7 @@ export default function ManagerDashboard() {
 
     if (data) {
       setTodos(prev => [...(data as TodoItem[]), ...prev])
+      if (targetDate) setSelectedTodoDate(targetDate)
       setIsTodoModalOpen(false)
     }
   }
@@ -751,7 +1040,7 @@ export default function ManagerDashboard() {
       .eq('id', todo.id)
 
     if (!error) {
-      setTodos(todos.map(t => t.id === todo.id ? { ...t, is_completed: updatedStatus } : t))
+      setTodos(prev => prev.map(t => t.id === todo.id ? { ...t, is_completed: updatedStatus } : t))
     }
   }
 
@@ -762,8 +1051,22 @@ export default function ManagerDashboard() {
       .eq('id', todoId)
 
     if (!error) {
-      setTodos(todos.map(t => t.id === todoId ? { ...t, priority: newPriority } : t))
+      setTodos(prev => prev.map(t => t.id === todoId ? { ...t, priority: newPriority } : t))
     }
+  }
+
+  const handleSaveTodoNote = async (todoId: string, noteText: string | null) => {
+    const { error } = await supabase
+      .from('restaurant_todos')
+      .update({ note: noteText })
+      .eq('id', todoId)
+
+    if (error) {
+      alert("Błąd zapisywania uwagi: " + error.message)
+      return
+    }
+
+    setTodos(prev => prev.map(t => t.id === todoId ? { ...t, note: noteText } : t))
   }
 
   const handleDeleteTodo = async (id: string) => {
@@ -773,7 +1076,7 @@ export default function ManagerDashboard() {
       .eq('id', id)
 
     if (!error) {
-      setTodos(todos.filter(t => t.id !== id))
+      setTodos(prev => prev.filter(t => t.id !== id))
     }
   }
 
@@ -786,8 +1089,8 @@ export default function ManagerDashboard() {
 
   const activeRestaurantName = restaurants.find(r => r.restaurant_id === activeRestaurantId)?.restaurants?.name
 
-  const filteredTodos = todos
-    .filter(t => (todoFilterDate ? t.target_date === todoFilterDate : true))
+  const dayTodos = todos
+    .filter(t => t.target_date === selectedTodoDate)
     .sort((a, b) => {
       if (a.is_completed !== b.is_completed) {
         return Number(a.is_completed) - Number(b.is_completed)
@@ -795,7 +1098,7 @@ export default function ManagerDashboard() {
       return priorityWeight(b.priority || "normal") - priorityWeight(a.priority || "normal")
     })
 
-  const completedTodosCount = filteredTodos.filter(t => t.is_completed).length
+  const completedTodosCount = dayTodos.filter(t => t.is_completed).length
 
   return (
     <div className="min-h-screen bg-zinc-100 p-8">
@@ -823,39 +1126,11 @@ export default function ManagerDashboard() {
             
             {/* 1. ZAKŁADKA GRAFIKU */}
             <TabsContent value="schedule" className="mt-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <Card className="col-span-1 h-fit">
-                  <CardHeader><CardTitle>Nowy Okres</CardTitle></CardHeader>
-                  <CardContent>
-                    <form onSubmit={handleCreatePeriod} className="space-y-4">
-                      <div className="space-y-2"><Label>Początek</Label><Input type="date" value={newStartDate} onChange={e => setNewStartDate(e.target.value)} required /></div>
-                      <div className="space-y-2"><Label>Koniec</Label><Input type="date" value={newEndDate} onChange={e => setNewEndDate(e.target.value)} required /></div>
-                      <Button type="submit" className="w-full">Otwórz grafik</Button>
-                    </form>
-                  </CardContent>
-                </Card>
-                <Card className="col-span-1 md:col-span-2">
-                  <CardHeader><CardTitle>Zarządzanie Grafikami</CardTitle></CardHeader>
-                  <CardContent>
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Okres</TableHead>
-                          <TableHead>Status</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {periods.map((p) => (
-                          <TableRow key={p.id}>
-                            <TableCell>{p.start_date} do {p.end_date}</TableCell>
-                            <TableCell><span className="px-2 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700">{p.status.toUpperCase()}</span></TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </CardContent>
-                </Card>
-              </div>
+              <ManagerScheduleModule
+                restaurantId={activeRestaurantId}
+                staff={staff}
+                roles={roles}
+              />
             </TabsContent>
 
             {/* 2. ZAKŁADKA KALENDARZA */}
@@ -867,10 +1142,19 @@ export default function ManagerDashboard() {
                 <Card className="col-span-1 h-fit">
                   <CardHeader>
                     <CardTitle>Dodaj Pracownika</CardTitle>
-                    <CardDescription>Przypisz konto użytkownika do wybranej roli w lokalu.</CardDescription>
+                    <CardDescription>Nadaj pracownikowi wyświetlane imię i przypisz go do roli w lokalu.</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <form onSubmit={handleAddStaff} className="space-y-4">
+                      <div className="space-y-2">
+                        <Label>Imię / podpis pracownika</Label>
+                        <Input
+                          placeholder="np. Szymon lub Magda O."
+                          value={newStaffName}
+                          onChange={e => setNewStaffName(e.target.value)}
+                          required
+                        />
+                      </div>
                       <div className="space-y-2">
                         <Label>Email konta pracownika</Label>
                         <Input type="email" placeholder="pracownik@email.com" value={newStaffEmail} onChange={e => setNewStaffEmail(e.target.value)} required />
@@ -904,13 +1188,15 @@ export default function ManagerDashboard() {
                 <Card className="col-span-1 md:col-span-2">
                   <CardHeader>
                     <CardTitle>Twój Zespół</CardTitle>
-                    <CardDescription>Możesz bezpośrednio zmienić rolę, edytować stawkę godzinową (zapisuje się automatycznie) lub usunąć pracownika.</CardDescription>
+                    <CardDescription>
+                      Możesz bezpośrednio zmienić podpis pracownika (np. „Magda O.”), jego rolę oraz stawkę godzinową.
+                    </CardDescription>
                   </CardHeader>
                   <CardContent>
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          <TableHead>Imię i Nazwisko</TableHead>
+                          <TableHead>Imię / Podpis i Email</TableHead>
                           <TableHead>Rola</TableHead>
                           <TableHead className="text-right">Stawka (zł/h)</TableHead>
                           <TableHead className="text-right">Akcje</TableHead>
@@ -924,10 +1210,24 @@ export default function ManagerDashboard() {
                           return (
                             <TableRow key={member.user_id}>
                               <TableCell className="font-medium">
-                                {member.users?.full_name || "Brak imienia"}
-                                {isMe && <span className="ml-2 text-xs text-zinc-400 font-normal">(Ty)</span>}
+                                <div className="flex items-center gap-1.5">
+                                  <Input
+                                    value={member.users?.full_name || ""}
+                                    placeholder="Wpisz imię..."
+                                    onChange={(e) => handleNameChangeLocal(member.user_id, e.target.value)}
+                                    onBlur={(e) => handleSaveStaffName(member.user_id, e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        e.currentTarget.blur()
+                                      }
+                                    }}
+                                    className="h-8 max-w-[180px] text-xs font-semibold px-2 bg-white"
+                                    title="Kliknij, aby zmienić wyświetlane imię pracownika"
+                                  />
+                                  {isMe && <span className="text-xs text-zinc-400 font-normal">(Ty)</span>}
+                                </div>
                                 {member.users?.email && (
-                                  <span className="block text-xs text-zinc-400">
+                                  <span className="block text-[11px] text-zinc-400 mt-1 pl-1">
                                     {member.users.email}
                                   </span>
                                 )}
@@ -1089,13 +1389,13 @@ export default function ManagerDashboard() {
               </div>
             </TabsContent>
 
-            {/* 5. ZAKŁADKA: TABLICA OGŁOSZEŃ */}
+            {/* 5. ZAKŁADKA: TABLICA OGŁOSZEŃ Z ZAKRESEM DAT I POP-UPEM */}
             <TabsContent value="announcements" className="mt-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <Card className="col-span-1 h-fit">
                   <CardHeader>
                     <CardTitle>Nowe Ogłoszenie</CardTitle>
-                    <CardDescription>Opublikuj ważną informację dla swojego zespołu.</CardDescription>
+                    <CardDescription>Opublikuj informację i opcjonalnie ustaw dni jej widoczności.</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <form onSubmit={handleCreateAnnouncement} className="space-y-4">
@@ -1119,6 +1419,32 @@ export default function ManagerDashboard() {
                           className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         />
                       </div>
+
+                      {/* Zakres dat widoczności ogłoszenia */}
+                      <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 space-y-3">
+                        <div className="space-y-1">
+                          <Label className="text-xs font-semibold text-zinc-700">Widoczne od dnia (opcjonalnie)</Label>
+                          <Input
+                            type="date"
+                            value={newAnnouncementFrom}
+                            onChange={e => setNewAnnouncementFrom(e.target.value)}
+                            className="h-8 text-xs bg-white"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs font-semibold text-zinc-700">Widoczne do dnia (opcjonalnie)</Label>
+                          <Input
+                            type="date"
+                            value={newAnnouncementUntil}
+                            onChange={e => setNewAnnouncementUntil(e.target.value)}
+                            className="h-8 text-xs bg-white"
+                          />
+                        </div>
+                        <p className="text-[11px] text-zinc-500 leading-tight">
+                          Zostaw oba pola puste, aby ogłoszenie było widoczne na stałe.
+                        </p>
+                      </div>
+
                       <label className="flex items-center gap-2 text-sm text-zinc-700 cursor-pointer select-none">
                         <input 
                           type="checkbox" 
@@ -1136,7 +1462,9 @@ export default function ManagerDashboard() {
                 <Card className="col-span-1 md:col-span-2">
                   <CardHeader>
                     <CardTitle>Tablica Ogłoszeń</CardTitle>
-                    <CardDescription>Komunikaty widoczne dla pracowników lokalu.</CardDescription>
+                    <CardDescription>
+                      Kliknij w dowolne ogłoszenie, aby otworzyć pełny podgląd w oknie pop-up.
+                    </CardDescription>
                   </CardHeader>
                   <CardContent>
                     {announcements.length === 0 ? (
@@ -1144,48 +1472,60 @@ export default function ManagerDashboard() {
                         Brak ogłoszeń na tablicy. Dodaj pierwsze ogłoszenie w formularzu obok.
                       </p>
                     ) : (
-                      <div className="space-y-4">
-                        {announcements.map((item) => (
-                          <div 
-                            key={item.id} 
-                            className={`p-4 rounded-lg border transition-colors ${
-                              item.is_pinned ? "bg-amber-50/60 border-amber-200" : "bg-zinc-50/50 border-zinc-200"
-                            }`}
-                          >
-                            <div className="flex justify-between items-start gap-4">
-                              <div>
-                                <div className="flex items-center gap-2">
-                                  {item.is_pinned && (
-                                    <span className="px-2 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-800 rounded-full">
-                                      📌 Przypięte
+                      <div className="space-y-3">
+                        {announcements.map((item) => {
+                          const visBadge = getAnnouncementVisibilityBadge(item)
+                          return (
+                            <div 
+                              key={item.id}
+                              onClick={() => setSelectedAnnouncementModal(item)}
+                              className={`p-4 rounded-xl border transition-all cursor-pointer hover:shadow-md ${
+                                item.is_pinned ? "bg-amber-50/60 border-amber-200" : "bg-white border-zinc-200 hover:border-zinc-300"
+                              }`}
+                            >
+                              <div className="flex justify-between items-start gap-4">
+                                <div className="space-y-1">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    {item.is_pinned && (
+                                      <span className="px-2 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-800 rounded-full">
+                                        📌 Przypięte
+                                      </span>
+                                    )}
+                                    <span className={`px-2 py-0.5 text-[11px] font-medium border rounded-full ${visBadge.className}`}>
+                                      {visBadge.label}
                                     </span>
-                                  )}
-                                  <h3 className="font-semibold text-zinc-900">{item.title}</h3>
+                                  </div>
+                                  <h3 className="font-bold text-zinc-900 pt-0.5">{item.title}</h3>
+                                  <span className="block text-xs text-zinc-400">
+                                    Utworzono: {new Date(item.created_at).toLocaleString("pl-PL", { dateStyle: "medium", timeStyle: "short" })}
+                                  </span>
                                 </div>
-                                <span className="text-xs text-zinc-400">
-                                  {new Date(item.created_at).toLocaleString("pl-PL", { dateStyle: "medium", timeStyle: "short" })}
-                                </span>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <Button 
+                                    variant="outline" 
+                                    size="sm"
+                                    onClick={(e) => handleTogglePinAnnouncement(item, e)}
+                                  >
+                                    {item.is_pinned ? "Odepnij" : "Przypnij"}
+                                  </Button>
+                                  <Button 
+                                    variant="destructive" 
+                                    size="sm"
+                                    onClick={(e) => handleDeleteAnnouncement(item.id, e)}
+                                  >
+                                    Usuń
+                                  </Button>
+                                </div>
                               </div>
-                              <div className="flex items-center gap-2 shrink-0">
-                                <Button 
-                                  variant="outline" 
-                                  size="sm"
-                                  onClick={() => handleTogglePinAnnouncement(item)}
-                                >
-                                  {item.is_pinned ? "Odepnij" : "Przypnij"}
-                                </Button>
-                                <Button 
-                                  variant="destructive" 
-                                  size="sm"
-                                  onClick={() => handleDeleteAnnouncement(item.id)}
-                                >
-                                  Usuń
-                                </Button>
-                              </div>
+                              <p className="mt-2.5 text-sm text-zinc-700 whitespace-pre-wrap line-clamp-3">
+                                {item.content}
+                              </p>
+                              <span className="inline-block mt-2 text-xs font-semibold text-blue-600">
+                                Otwórz pełny widok →
+                              </span>
                             </div>
-                            <p className="mt-2 text-sm text-zinc-700 whitespace-pre-wrap">{item.content}</p>
-                          </div>
-                        ))}
+                          )
+                        })}
                       </div>
                     )}
                   </CardContent>
@@ -1197,142 +1537,108 @@ export default function ManagerDashboard() {
             <TabsContent value="todos" className="mt-6">
               <Card>
                 <CardHeader>
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div>
                       <CardTitle>Lista Zadań (To-do)</CardTitle>
                       <CardDescription>
-                        Zadania ułożone według priorytetu. Możesz przypisywać zadania do ról lub konkretnych pracowników.
+                        Przełączaj się między dniami, sprawdzaj postępy oraz uwagi zgłoszone przez zespół.
                       </CardDescription>
                     </div>
-                    <div className="flex flex-wrap items-center gap-3">
-                      <div className="flex items-center gap-2">
+                    <Button onClick={() => setIsTodoModalOpen(true)} className="h-9">
+                      + Dodaj zadania
+                    </Button>
+                  </div>
+
+                  <div className="mt-4 pt-4 border-t flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setSelectedTodoDate(prev => shiftDateByDays(prev, -1))}
+                        title="Poprzedni dzień"
+                        className="h-9 px-3 font-bold"
+                      >
+                        ←
+                      </Button>
+
+                      <div className="flex items-center gap-2 bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-1">
+                        <span className="text-xs font-semibold text-zinc-700 whitespace-nowrap">
+                          {getFriendlyDateLabel(selectedTodoDate, todayStr)}:
+                        </span>
                         <Input
                           type="date"
-                          value={todoFilterDate}
-                          onChange={(e) => setTodoFilterDate(e.target.value)}
-                          className="h-9 w-40 text-xs"
+                          value={selectedTodoDate}
+                          onChange={(e) => {
+                            if (e.target.value) setSelectedTodoDate(e.target.value)
+                          }}
+                          className="h-7 w-36 border-0 bg-transparent p-0 text-xs font-bold text-zinc-900 focus-visible:ring-0 cursor-pointer"
+                          title="Kliknij, aby wybrać datę z kalendarza"
                         />
-                        {todoFilterDate && (
-                          <Button variant="ghost" size="sm" onClick={() => setTodoFilterDate("")} className="h-9 text-xs">
-                            Wszystkie daty
-                          </Button>
-                        )}
                       </div>
-                      <Button onClick={() => setIsTodoModalOpen(true)} className="h-9">
-                        + Dodaj zadania
+
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setSelectedTodoDate(prev => shiftDateByDays(prev, 1))}
+                        title="Następny dzień"
+                        className="h-9 px-3 font-bold"
+                      >
+                        →
                       </Button>
+
+                      {selectedTodoDate !== todayStr && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setSelectedTodoDate(todayStr)}
+                          className="h-9 text-xs text-blue-600 hover:text-blue-700"
+                        >
+                          Wróć do dzisiaj
+                        </Button>
+                      )}
                     </div>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex flex-wrap items-center justify-between gap-2 pb-4 mb-4 border-b text-xs text-zinc-500">
-                    <div className="flex items-center gap-4">
-                      <span className="flex items-center gap-1"><PriorityIcon priority="high" /> Wysoki</span>
-                      <span className="flex items-center gap-1"><PriorityIcon priority="normal" /> Normalny</span>
-                      <span className="flex items-center gap-1"><PriorityIcon priority="low" /> Niski</span>
-                    </div>
-                    {filteredTodos.length > 0 && (
-                      <span className="font-semibold px-2.5 py-1 rounded-full bg-zinc-100 text-zinc-700">
-                        Wykonano: {completedTodosCount} / {filteredTodos.length}
+
+                    {dayTodos.length > 0 && (
+                      <span className="text-xs font-semibold px-3 py-1.5 rounded-full bg-zinc-100 text-zinc-700">
+                        Wykonano: {completedTodosCount} / {dayTodos.length}
                       </span>
                     )}
                   </div>
+                </CardHeader>
 
-                  {filteredTodos.length === 0 ? (
-                    <div className="text-center py-10 space-y-3">
+                <CardContent>
+                  <div className="flex flex-wrap items-center gap-4 pb-4 mb-4 border-b text-xs text-zinc-500">
+                    <span className="flex items-center gap-1"><PriorityIcon priority="high" /> Wysoki</span>
+                    <span className="flex items-center gap-1"><PriorityIcon priority="normal" /> Normalny</span>
+                    <span className="flex items-center gap-1"><PriorityIcon priority="low" /> Niski</span>
+                  </div>
+
+                  {dayTodos.length === 0 ? (
+                    <div className="text-center py-12 space-y-3 border-2 border-dashed rounded-xl">
                       <p className="text-sm text-zinc-500">
-                        {todoFilterDate 
-                          ? `Brak zadań zaplanowanych na dzień ${todoFilterDate}.` 
-                          : "Lista zadań jest jeszcze pusta."}
+                        Brak zadań zaplanowanych na dzień <strong className="text-zinc-800">{selectedTodoDate}</strong>.
                       </p>
                       <Button variant="outline" size="sm" onClick={() => setIsTodoModalOpen(true)}>
-                        Utwórz pierwszą listę zadań
+                        + Dodaj zadania na ten dzień
                       </Button>
                     </div>
                   ) : (
-                    <div className="space-y-2">
-                      {filteredTodos.map((todo) => {
-                        const priority = todo.priority || "normal"
-                        const roleColor = todo.assigned_role ? getRoleColor(todo.assigned_role) : null
-                        const isToday = todo.target_date === todayStr
-
-                        return (
-                          <div 
-                            key={todo.id}
-                            className={`flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 p-3 rounded-lg border transition-colors ${
-                              todo.is_completed ? "bg-zinc-50 border-zinc-200 opacity-60" : "bg-white border-zinc-200 hover:bg-zinc-50/50"
-                            }`}
-                          >
-                            <div className="flex items-center gap-3 flex-1 min-w-0">
-                              <input 
-                                type="checkbox"
-                                checked={todo.is_completed}
-                                onChange={() => handleToggleTodo(todo)}
-                                className="w-4 h-4 rounded border-zinc-300 cursor-pointer shrink-0"
-                              />
-                              
-                              <PriorityIcon priority={priority} />
-
-                              <span 
-                                onClick={() => handleToggleTodo(todo)}
-                                className={`text-sm font-medium cursor-pointer truncate ${
-                                  todo.is_completed ? "line-through text-zinc-400" : "text-zinc-800"
-                                }`}
-                              >
-                                {todo.task}
-                              </span>
-                            </div>
-
-                            <div className="flex items-center gap-2 shrink-0">
-                              {todo.target_date && (
-                                <span className={`px-2 py-0.5 rounded text-[11px] font-medium ${
-                                  isToday ? "bg-blue-50 text-blue-700 border border-blue-200" : "bg-zinc-100 text-zinc-600"
-                                }`}>
-                                  {isToday ? `Dzisiaj (${todo.target_date})` : todo.target_date}
-                                </span>
-                              )}
-
-                              {/* Wyświetlanie przypisania: Osoba vs Rola vs Wszyscy */}
-                              {todo.assigned_user_id ? (
-                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                                  👤 {getStaffMemberName(todo.assigned_user_id)}
-                                </span>
-                              ) : todo.assigned_role ? (
-                                <span 
-                                  className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold text-white"
-                                  style={{ backgroundColor: roleColor || "#71717a" }}
-                                >
-                                  {todo.assigned_role}
-                                </span>
-                              ) : (
-                                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-zinc-100 text-zinc-600">
-                                  Wszyscy
-                                </span>
-                              )}
-
-                              <select
-                                value={priority}
-                                onChange={(e) => handleUpdateTodoPriority(todo.id, e.target.value as PriorityLevel)}
-                                className="h-7 rounded border border-zinc-200 bg-white px-1.5 text-xs text-zinc-700"
-                                title="Zmień priorytet"
-                              >
-                                <option value="high">Wysoki</option>
-                                <option value="normal">Normalny</option>
-                                <option value="low">Niski</option>
-                              </select>
-
-                              <Button 
-                                variant="destructive" 
-                                size="sm"
-                                className="h-7 px-2.5 text-xs"
-                                onClick={() => handleDeleteTodo(todo.id)}
-                              >
-                                Usuń
-                              </Button>
-                            </div>
-                          </div>
-                        )
-                      })}
+                    <div className="space-y-2.5">
+                      {dayTodos.map((todo) => (
+                        <TodoItemRow
+                          key={todo.id}
+                          todo={todo}
+                          roleColor={todo.assigned_role ? getRoleColor(todo.assigned_role) : null}
+                          staffMemberName={todo.assigned_user_id ? getStaffMemberName(todo.assigned_user_id) : null}
+                          onToggle={handleToggleTodo}
+                          onUpdatePriority={handleUpdateTodoPriority}
+                          onSaveNote={handleSaveTodoNote}
+                          onDelete={handleDeleteTodo}
+                        />
+                      ))}
                     </div>
                   )}
                 </CardContent>
@@ -1348,13 +1654,72 @@ export default function ManagerDashboard() {
         </div>
       </div>
 
-      {/* WYDZIELONY KOMPONENT POP-UPU */}
+      {/* POP-UP PODGLĄDU OGŁOSZENIA */}
+      {selectedAnnouncementModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setSelectedAnnouncementModal(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-xl border w-full max-w-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 px-6 py-4 border-b bg-zinc-50">
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  {selectedAnnouncementModal.is_pinned && (
+                    <span className="px-2.5 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-800 rounded-full">
+                      📌 Przypięte
+                    </span>
+                  )}
+                  <span
+                    className={`px-2.5 py-0.5 text-[11px] font-medium border rounded-full ${
+                      getAnnouncementVisibilityBadge(selectedAnnouncementModal).className
+                    }`}
+                  >
+                    {getAnnouncementVisibilityBadge(selectedAnnouncementModal).label}
+                  </span>
+                </div>
+                <h2 className="text-xl font-bold text-zinc-900 pt-1">
+                  {selectedAnnouncementModal.title}
+                </h2>
+                <p className="text-xs text-zinc-400">
+                  Opublikowano:{" "}
+                  {new Date(selectedAnnouncementModal.created_at).toLocaleString("pl-PL", {
+                    dateStyle: "long",
+                    timeStyle: "short",
+                  })}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedAnnouncementModal(null)}
+                className="text-zinc-400 hover:text-zinc-700 text-2xl font-bold leading-none px-2"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="p-6 max-h-[65vh] overflow-y-auto">
+              <p className="text-sm text-zinc-800 whitespace-pre-wrap leading-relaxed">
+                {selectedAnnouncementModal.content}
+              </p>
+            </div>
+
+            <div className="px-6 py-4 bg-zinc-50 border-t flex items-center justify-end">
+              <Button onClick={() => setSelectedAnnouncementModal(null)}>Zamknij</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* POP-UP DODAWANIA ZADAŃ */}
       <TodoBatchModal
         isOpen={isTodoModalOpen}
         onClose={() => setIsTodoModalOpen(false)}
         roles={roles}
         staff={staff}
-        defaultDate={todayStr}
+        defaultDate={selectedTodoDate || todayStr}
         onSaveBatch={handleSaveBatchTodos}
       />
     </div>
