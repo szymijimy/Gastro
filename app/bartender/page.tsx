@@ -8,8 +8,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { FeedbackHost, showToast } from "@/components/ui/feedback"
 import { ShiftCalendar } from "@/components/ShiftCalendar"
 import { StaffScheduleModule } from "@/components/StaffScheduleModule"
+import { StaffAttendanceModule } from "@/components/StaffAttendanceModule"
+import {
+  calculateUserMonthlyPayroll,
+  AttendanceLog,
+  BonusRule,
+  DailyRevenue,
+  ManualBonus,
+} from "@/components/AttendanceManagerModule"
 
 type PriorityLevel = "high" | "normal" | "low"
 
@@ -75,6 +84,13 @@ const getUnitRank = (unit: string) => {
   return idx === -1 ? 999 : idx
 }
 
+type StaffMembership = {
+  restaurant_id: string
+  restaurant_name: string
+  role: string
+  hourly_rate: number
+}
+
 type RestaurantRole = {
   id: string
   name: string
@@ -126,13 +142,6 @@ type Product = {
   image_url: string | null
 }
 
-type SchedulePeriod = {
-  id: string
-  start_date: string
-  end_date: string
-  status: string
-}
-
 const isProductShortage = (prod: Product) => {
   const qty = Number(prod.quantity) || 0
   const minQty = Number(prod.min_quantity) || 0
@@ -162,7 +171,9 @@ function StaffTodoRow({
   const [savingNote, setSavingNote] = useState(false)
 
   const priority = todo.priority || "normal"
-  const isAssignedToMeDirectly = Boolean(todo.assigned_user_id && todo.assigned_user_id === currentUserId)
+  const isAssignedToMeDirectly = Boolean(
+    todo.assigned_user_id && todo.assigned_user_id === currentUserId
+  )
 
   const handleSave = async () => {
     setSavingNote(true)
@@ -204,7 +215,6 @@ function StaffTodoRow({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {/* POPRAWIONE OZNACZENIE PRZYPISANIA: Dla Ciebie vs Konkretna osoba vs Rola vs Wszyscy */}
           {isAssignedToMeDirectly ? (
             <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-600 text-white">
               👤 Dla Ciebie
@@ -267,11 +277,11 @@ function StaffTodoRow({
       {isEditingNote && (
         <div className="mt-3 ml-8 p-3 rounded-lg bg-zinc-50 border border-zinc-200 space-y-2">
           <Label className="text-xs text-zinc-700">
-            Opisz problem lub powód częściowego wykonania zadania:
+            Dodatkowa informacja lub powód częściowego wykonania zadania:
           </Label>
           <div className="flex flex-col sm:flex-row gap-2">
             <Input
-              placeholder="np. Tylko pół butelki soku z cytryny, bo skończyły się owoce..."
+              placeholder="Wpisz powód częściowego wykonania lub dodatkowe informacje..."
               value={noteDraft}
               onChange={(e) => setNoteDraft(e.target.value)}
               onKeyDown={(e) => {
@@ -284,7 +294,13 @@ function StaffTodoRow({
               autoFocus
             />
             <div className="flex items-center gap-1.5 shrink-0">
-              <Button type="button" size="sm" className="h-8 text-xs" onClick={handleSave} disabled={savingNote}>
+              <Button
+                type="button"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={handleSave}
+                disabled={savingNote}
+              >
                 {savingNote ? "Zapis..." : "Zapisz uwagę"}
               </Button>
               {todo.note && (
@@ -303,7 +319,13 @@ function StaffTodoRow({
                   Usuń
                 </Button>
               )}
-              <Button type="button" variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setIsEditingNote(false)}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => setIsEditingNote(false)}
+              >
                 Anuluj
               </Button>
             </div>
@@ -323,19 +345,30 @@ export default function BartenderDashboard() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [userEmail, setUserEmail] = useState<string>("")
   const [userName, setUserName] = useState<string>("")
-  const [userRole, setUserRole] = useState<string>("")
-  const [hourlyRate, setHourlyRate] = useState<number>(0)
+
+  const [memberships, setMemberships] = useState<StaffMembership[]>([])
   const [restaurantId, setRestaurantId] = useState<string | null>(null)
   const [restaurantName, setRestaurantName] = useState<string>("")
+  const [userRole, setUserRole] = useState<string>("")
+  const [hourlyRate, setHourlyRate] = useState<number>(0)
 
-  // Stany dla weryfikacji hasła przy odkrywaniu stawki
   const [showRate, setShowRate] = useState<boolean>(false)
   const [isRateModalOpen, setIsRateModalOpen] = useState<boolean>(false)
   const [ratePassword, setRatePassword] = useState<string>("")
   const [ratePasswordError, setRatePasswordError] = useState<string>("")
   const [verifyingPassword, setVerifyingPassword] = useState<boolean>(false)
 
-  // Dane z bazy
+  const [monthlyEarnings, setMonthlyEarnings] = useState({
+    totalPay: 0,
+    bonusPay: 0,
+    totalHours: 0,
+    monthLabel: "",
+  })
+  const [allVenuesCombinedEarnings, setAllVenuesCombinedEarnings] = useState({
+    totalPay: 0,
+    totalHours: 0,
+  })
+
   const [roles, setRoles] = useState<RestaurantRole[]>([])
   const [teammates, setTeammates] = useState<Teammate[]>([])
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
@@ -343,20 +376,180 @@ export default function BartenderDashboard() {
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [products, setProducts] = useState<Product[]>([])
-  const [periods, setPeriods] = useState<SchedulePeriod[]>([])
 
-  // Stany dla Check-listy
   const [todayStr, setTodayStr] = useState<string>("")
   const [selectedTodoDate, setSelectedTodoDate] = useState<string>("")
   const [showOnlyMyTasks, setShowOnlyMyTasks] = useState<boolean>(true)
 
-  // Stany dla Magazynu
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null)
   const [showShortagesOnly, setShowShortagesOnly] = useState<boolean>(false)
   const [productSearch, setProductSearch] = useState<string>("")
   const [sortBy, setSortBy] = useState<"smart_asc" | "smart_desc" | "name_asc">("smart_asc")
 
   const [loading, setLoading] = useState<boolean>(true)
+
+  const loadVenueModules = async (
+    venue: StaffMembership,
+    uid: string,
+    localToday: string,
+    allUserMemberships: StaffMembership[]
+  ) => {
+    const restId = venue.restaurant_id
+    setRestaurantId(restId)
+    setRestaurantName(venue.restaurant_name)
+    setUserRole(venue.role)
+    setHourlyRate(venue.hourly_rate)
+    setSelectedCategory(null)
+    setShowShortagesOnly(false)
+
+    const currentMonthPrefix = localToday.slice(0, 7)
+
+    const [
+      rolesRes,
+      teammatesRes,
+      annRes,
+      todosRes,
+      catRes,
+      prodRes,
+      attRes,
+      rulesRes,
+      revRes,
+      manRes,
+    ] = await Promise.all([
+      supabase
+        .from("restaurant_roles")
+        .select("id, name, color")
+        .eq("restaurant_id", restId),
+      supabase.rpc("get_restaurant_teammates", { p_restaurant_id: restId }),
+      supabase
+        .from("restaurant_announcements")
+        .select("*")
+        .eq("restaurant_id", restId)
+        .order("is_pinned", { ascending: false })
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("restaurant_todos")
+        .select("*")
+        .eq("restaurant_id", restId)
+        .order("is_completed", { ascending: true })
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("product_categories")
+        .select("id, name, description")
+        .eq("restaurant_id", restId)
+        .order("name", { ascending: true }),
+      supabase
+        .from("restaurant_products")
+        .select("id, category_id, name, unit, quantity, min_quantity, image_url")
+        .eq("restaurant_id", restId)
+        .order("name", { ascending: true }),
+      supabase.from("attendance_logs").select("*").eq("restaurant_id", restId),
+      supabase
+        .from("bonus_rules")
+        .select("*")
+        .eq("restaurant_id", restId)
+        .eq("is_active", true),
+      supabase.from("daily_revenues").select("*").eq("restaurant_id", restId),
+      supabase
+        .from("manual_bonuses")
+        .select("*")
+        .eq("restaurant_id", restId)
+        .eq("user_id", uid),
+    ])
+
+    if (rolesRes.data) setRoles(rolesRes.data)
+    if (teammatesRes.data) setTeammates(teammatesRes.data as Teammate[])
+    if (annRes.data) setAnnouncements(annRes.data as Announcement[])
+    if (todosRes.data) setTodos(todosRes.data as TodoItem[])
+    if (catRes.data) setCategories(catRes.data)
+    if (prodRes.data) {
+      setProducts(
+        prodRes.data.map((p: any) => ({
+          ...p,
+          quantity: Number(p.quantity) || 0,
+          min_quantity: Number(p.min_quantity) || 0,
+        }))
+      )
+    }
+
+    const initialPayroll = calculateUserMonthlyPayroll({
+      userId: uid,
+      userRole: venue.role,
+      hourlyRate: venue.hourly_rate,
+      monthAllLogs: ((attRes.data || []) as AttendanceLog[]).filter((l) =>
+        l.work_date.startsWith(currentMonthPrefix)
+      ),
+      rules: (rulesRes.data || []) as BonusRule[],
+      revenues: ((revRes.data || []) as DailyRevenue[]).filter((r) =>
+        r.work_date.startsWith(currentMonthPrefix)
+      ),
+      manualBonuses: ((manRes.data || []) as ManualBonus[]).filter((mb) =>
+        mb.bonus_date.startsWith(currentMonthPrefix)
+      ),
+    })
+
+    setMonthlyEarnings({
+      totalPay: initialPayroll.totalPay,
+      bonusPay: initialPayroll.bonusPay,
+      totalHours: initialPayroll.totalHours,
+      monthLabel: currentMonthPrefix,
+    })
+
+    if (allUserMemberships.length > 1) {
+      const allVenueIds = allUserMemberships.map((m) => m.restaurant_id)
+      const [allAttRes, allRulesRes, allRevRes, allManRes] = await Promise.all([
+        supabase.from("attendance_logs").select("*").in("restaurant_id", allVenueIds),
+        supabase
+          .from("bonus_rules")
+          .select("*")
+          .in("restaurant_id", allVenueIds)
+          .eq("is_active", true),
+        supabase.from("daily_revenues").select("*").in("restaurant_id", allVenueIds),
+        supabase
+          .from("manual_bonuses")
+          .select("*")
+          .in("restaurant_id", allVenueIds)
+          .eq("user_id", uid),
+      ])
+
+      let combinedPay = 0
+      let combinedHours = 0
+
+      allUserMemberships.forEach((memb) => {
+        const vId = memb.restaurant_id
+        const vLogs = ((allAttRes.data || []) as AttendanceLog[]).filter(
+          (l) => l.restaurant_id === vId && l.work_date.startsWith(currentMonthPrefix)
+        )
+        const vRules = ((allRulesRes.data || []) as BonusRule[]).filter(
+          (r) => r.restaurant_id === vId
+        )
+        const vRevs = ((allRevRes.data || []) as DailyRevenue[]).filter(
+          (r) => r.restaurant_id === vId && r.work_date.startsWith(currentMonthPrefix)
+        )
+        const vMan = ((allManRes.data || []) as ManualBonus[]).filter(
+          (mb) => mb.restaurant_id === vId && mb.bonus_date.startsWith(currentMonthPrefix)
+        )
+
+        const pay = calculateUserMonthlyPayroll({
+          userId: uid,
+          userRole: memb.role,
+          hourlyRate: memb.hourly_rate,
+          monthAllLogs: vLogs,
+          rules: vRules,
+          revenues: vRevs,
+          manualBonuses: vMan,
+        })
+
+        combinedPay += pay.totalPay
+        combinedHours += pay.totalHours
+      })
+
+      setAllVenuesCombinedEarnings({
+        totalPay: Math.round(combinedPay * 100) / 100,
+        totalHours: Math.round(combinedHours * 100) / 100,
+      })
+    }
+  }
 
   useEffect(() => {
     const localToday = formatLocalDate(new Date())
@@ -366,7 +559,7 @@ export default function BartenderDashboard() {
     const fetchStaffData = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) {
-        router.push("/")
+        router.replace("/")
         return
       }
 
@@ -374,106 +567,67 @@ export default function BartenderDashboard() {
       setCurrentUserId(uid)
       setUserEmail(session.user.email || "")
 
-      // Pobieramy imię nadane przez managera w tabeli users
       const { data: profileData } = await supabase
         .from("users")
         .select("full_name, email")
         .eq("id", uid)
         .single()
 
-      setUserName(profileData?.full_name || session.user.email?.split("@")[0] || "Pracownik")
+      setUserName(
+        profileData?.full_name || session.user.email?.split("@")[0] || "Pracownik"
+      )
 
-      // Pobieramy przypisanie do lokalu
-      const { data: membershipData } = await supabase
+      const { data: membershipsData } = await supabase
         .from("restaurant_users")
         .select("restaurant_id, role, hourly_rate, restaurants (name)")
         .eq("user_id", uid)
-        .limit(1)
-        .single()
 
-      if (!membershipData) {
-        alert("Twoje konto nie jest jeszcze przypisane do żadnego lokalu.")
-        await supabase.auth.signOut()
-        router.push("/")
+      if (!membershipsData || membershipsData.length === 0) {
+        router.replace("/")
         return
       }
 
-      const restId = membershipData.restaurant_id
-      setRestaurantId(restId)
-      setUserRole(membershipData.role)
-      setHourlyRate(membershipData.hourly_rate ?? 0)
+      const formattedMemberships: StaffMembership[] = membershipsData.map((m: any) => {
+        const restObj = Array.isArray(m.restaurants) ? m.restaurants[0] : m.restaurants
+        return {
+          restaurant_id: m.restaurant_id,
+          restaurant_name: restObj?.name || "Lokal",
+          role: m.role,
+          hourly_rate: Number(m.hourly_rate) || 0,
+        }
+      })
 
-      const restObj = Array.isArray(membershipData.restaurants)
-        ? membershipData.restaurants[0]
-        : membershipData.restaurants
-      setRestaurantName(restObj?.name || "Twój Lokal")
+      setMemberships(formattedMemberships)
 
-      // Równoległe pobranie wszystkich modułów lokalu + bezpiecznej listy imion zespołu
-      const [rolesRes, teammatesRes, annRes, todosRes, catRes, prodRes, periodsRes] = await Promise.all([
-        supabase
-          .from("restaurant_roles")
-          .select("id, name, color")
-          .eq("restaurant_id", restId),
-        supabase.rpc("get_restaurant_teammates", { p_restaurant_id: restId }),
-        supabase
-          .from("restaurant_announcements")
-          .select("*")
-          .eq("restaurant_id", restId)
-          .order("is_pinned", { ascending: false })
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("restaurant_todos")
-          .select("*")
-          .eq("restaurant_id", restId)
-          .order("is_completed", { ascending: true })
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("product_categories")
-          .select("id, name, description")
-          .eq("restaurant_id", restId)
-          .order("name", { ascending: true }),
-        supabase
-          .from("restaurant_products")
-          .select("id, category_id, name, unit, quantity, min_quantity, image_url")
-          .eq("restaurant_id", restId)
-          .order("name", { ascending: true }),
-        supabase
-          .from("schedule_periods")
-          .select("*")
-          .eq("restaurant_id", restId)
-          .order("start_date", { ascending: false }),
-      ])
-
-      if (rolesRes.data) setRoles(rolesRes.data)
-      if (teammatesRes.data) setTeammates(teammatesRes.data as Teammate[])
-      if (annRes.data) setAnnouncements(annRes.data as Announcement[])
-      if (todosRes.data) setTodos(todosRes.data as TodoItem[])
-      if (catRes.data) setCategories(catRes.data)
-      if (prodRes.data) {
-        setProducts(
-          prodRes.data.map((p: any) => ({
-            ...p,
-            quantity: Number(p.quantity) || 0,
-            min_quantity: Number(p.min_quantity) || 0,
-          }))
-        )
-      }
-      if (periodsRes.data) setPeriods(periodsRes.data)
-
+      await loadVenueModules(
+        formattedMemberships[0],
+        uid,
+        localToday,
+        formattedMemberships
+      )
       setLoading(false)
     }
 
     fetchStaffData()
   }, [router])
 
+  const handleSwitchVenue = async (targetVenueId: string) => {
+    if (!currentUserId || targetVenueId === restaurantId) return
+    const found = memberships.find((m) => m.restaurant_id === targetVenueId)
+    if (!found) return
+
+    await loadVenueModules(found, currentUserId, todayStr, memberships)
+    showToast(`Przełączono na lokal: ${found.restaurant_name}`, "info")
+  }
+
   const getRoleColor = (roleName: string) => {
     if (roleName === "manager") return "#18181b"
-    const found = roles.find(r => r.name.toLowerCase() === roleName.toLowerCase())
+    const found = roles.find((r) => r.name.toLowerCase() === roleName.toLowerCase())
     return found?.color || "#2563eb"
   }
 
   const getTeammateName = (userId: string) => {
-    const found = teammates.find(t => t.user_id === userId)
+    const found = teammates.find((t) => t.user_id === userId)
     if (!found) return "Pracownik"
     return found.full_name || found.email?.split("@")[0] || "Pracownik"
   }
@@ -484,7 +638,6 @@ export default function BartenderDashboard() {
     return 1
   }
 
-  // --- WERYFIKACJA HASŁA DO ODKRYCIA STAWKI ---
   const handleRateButtonClick = () => {
     if (showRate) {
       setShowRate(false)
@@ -517,12 +670,15 @@ export default function BartenderDashboard() {
     setShowRate(true)
     setRatePassword("")
     setIsRateModalOpen(false)
+    showToast("Odblokowano podgląd zarobków i stawki", "success")
   }
 
   // --- AKCJE TO-DO LIST ---
   const handleToggleTodo = async (todo: TodoItem) => {
     const updatedStatus = !todo.is_completed
-    setTodos(prev => prev.map(t => (t.id === todo.id ? { ...t, is_completed: updatedStatus } : t)))
+    setTodos((prev) =>
+      prev.map((t) => (t.id === todo.id ? { ...t, is_completed: updatedStatus } : t))
+    )
 
     const { error } = await supabase
       .from("restaurant_todos")
@@ -530,8 +686,10 @@ export default function BartenderDashboard() {
       .eq("id", todo.id)
 
     if (error) {
-      alert("Nie udało się zaktualizować zadania: " + error.message)
-      setTodos(prev => prev.map(t => (t.id === todo.id ? { ...t, is_completed: todo.is_completed } : t)))
+      showToast("Nie udało się zaktualizować zadania: " + error.message, "error")
+      setTodos((prev) =>
+        prev.map((t) => (t.id === todo.id ? { ...t, is_completed: todo.is_completed } : t))
+      )
     }
   }
 
@@ -542,24 +700,29 @@ export default function BartenderDashboard() {
       .eq("id", todoId)
 
     if (error) {
-      alert("Błąd zapisywania uwagi: " + error.message)
+      showToast("Błąd zapisywania uwagi: " + error.message, "error")
       return
     }
 
-    setTodos(prev => prev.map(t => (t.id === todoId ? { ...t, note: noteText } : t)))
+    setTodos((prev) => prev.map((t) => (t.id === todoId ? { ...t, note: noteText } : t)))
+    showToast(noteText ? "Zapisano uwagę do zadania" : "Usunięto uwagę", "success")
   }
 
   // --- AKCJE MAGAZYNU ---
   const handleQuantityChangeLocal = (productId: string, val: string) => {
     const parsed = parseFloat(val)
-    setProducts(prev =>
-      prev.map(p => (p.id === productId ? { ...p, quantity: isNaN(parsed) ? 0 : Math.max(0, parsed) } : p))
+    setProducts((prev) =>
+      prev.map((p) =>
+        p.id === productId ? { ...p, quantity: isNaN(parsed) ? 0 : Math.max(0, parsed) } : p
+      )
     )
   }
 
   const handleSaveQuantityToDb = async (productId: string, newQty: number) => {
     const safeQty = Math.max(0, newQty)
-    setProducts(prev => prev.map(p => (p.id === productId ? { ...p, quantity: safeQty } : p)))
+    setProducts((prev) =>
+      prev.map((p) => (p.id === productId ? { ...p, quantity: safeQty } : p))
+    )
 
     const { error } = await supabase
       .from("restaurant_products")
@@ -567,12 +730,12 @@ export default function BartenderDashboard() {
       .eq("id", productId)
 
     if (error) {
-      alert("Błąd zapisu stanu magazynowego: " + error.message)
+      showToast("Błąd zapisu stanu magazynowego: " + error.message, "error")
     }
   }
 
   const getCategoryName = (catId: string) => {
-    return categories.find(c => c.id === catId)?.name || "Bez kategorii"
+    return categories.find((c) => c.id === catId)?.name || "Bez kategorii"
   }
 
   const sortProductsList = (list: Product[]) => {
@@ -603,14 +766,17 @@ export default function BartenderDashboard() {
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
-    router.push("/")
+    window.location.href = "/"
   }
 
   if (loading) {
-    return <div className="p-8 text-center text-sm text-zinc-500">Wczytywanie panelu pracownika...</div>
+    return (
+      <div className="p-8 text-center text-sm text-zinc-500">
+        Wczytywanie panelu pracownika...
+      </div>
+    )
   }
 
-  // Sprawdza, czy zadanie dotyczy zalogowanego pracownika
   const isTaskForMe = (t: TodoItem) => {
     if (t.assigned_user_id) {
       return t.assigned_user_id === currentUserId
@@ -622,8 +788,8 @@ export default function BartenderDashboard() {
   }
 
   const dayTodos = todos
-    .filter(t => t.target_date === selectedTodoDate)
-    .filter(t => (showOnlyMyTasks ? isTaskForMe(t) : true))
+    .filter((t) => t.target_date === selectedTodoDate)
+    .filter((t) => (showOnlyMyTasks ? isTaskForMe(t) : true))
     .sort((a, b) => {
       if (a.is_completed !== b.is_completed) {
         return Number(a.is_completed) - Number(b.is_completed)
@@ -631,36 +797,39 @@ export default function BartenderDashboard() {
       return priorityWeight(b.priority || "normal") - priorityWeight(a.priority || "normal")
     })
 
-  // Filtrowanie ogłoszeń według dat widoczności ustawionych przez managera
-  const visibleAnnouncements = announcements.filter(a => {
+  const visibleAnnouncements = announcements.filter((a) => {
     if (a.visible_from && todayStr && todayStr < a.visible_from) return false
     if (a.visible_until && todayStr && todayStr > a.visible_until) return false
     return true
   })
 
-  const todayMyTodos = todos.filter(t => t.target_date === todayStr && isTaskForMe(t))
-  const todayRemainingCount = todayMyTodos.filter(t => !t.is_completed).length
-  const completedDayTodosCount = dayTodos.filter(t => t.is_completed).length
-  const progressPercent = dayTodos.length > 0 ? Math.round((completedDayTodosCount / dayTodos.length) * 100) : 0
+  const todayMyTodos = todos.filter((t) => t.target_date === todayStr && isTaskForMe(t))
+  const todayRemainingCount = todayMyTodos.filter((t) => !t.is_completed).length
+  const completedDayTodosCount = dayTodos.filter((t) => t.is_completed).length
+  const progressPercent =
+    dayTodos.length > 0 ? Math.round((completedDayTodosCount / dayTodos.length) * 100) : 0
 
-  const pinnedAnnouncementsCount = visibleAnnouncements.filter(a => a.is_pinned).length
+  const pinnedAnnouncementsCount = visibleAnnouncements.filter((a) => a.is_pinned).length
   const shortageProducts = sortProductsList(products.filter(isProductShortage))
 
   const searchedProducts = productSearch.trim()
     ? sortProductsList(
-        products.filter(p => p.name.toLowerCase().includes(productSearch.trim().toLowerCase()))
+        products.filter((p) =>
+          p.name.toLowerCase().includes(productSearch.trim().toLowerCase())
+        )
       )
     : []
 
   const categoryProducts = selectedCategory
-    ? sortProductsList(products.filter(p => p.category_id === selectedCategory.id))
+    ? sortProductsList(products.filter((p) => p.category_id === selectedCategory.id))
     : []
 
   const myRoleColor = getRoleColor(userRole)
 
   const renderStaffProductCard = (prod: Product, showCategoryBadge = false) => {
     const isZero = Number(prod.quantity) <= 0
-    const isBelowThreshold = !isZero && Number(prod.quantity) < Number(prod.min_quantity)
+    const isBelowThreshold =
+      !isZero && Number(prod.quantity) < Number(prod.min_quantity)
 
     return (
       <div
@@ -676,7 +845,11 @@ export default function BartenderDashboard() {
         <div>
           <div className="relative h-36 w-full bg-zinc-100 flex items-center justify-center overflow-hidden">
             {prod.image_url ? (
-              <img src={prod.image_url} alt={prod.name} className="w-full h-full object-cover" />
+              <img
+                src={prod.image_url}
+                alt={prod.name}
+                className="w-full h-full object-cover"
+              />
             ) : (
               <div className="text-zinc-400 text-xs flex flex-col items-center gap-1">
                 <span className="text-2xl">🍾</span>
@@ -707,7 +880,9 @@ export default function BartenderDashboard() {
             <div className="flex items-center justify-between text-xs text-zinc-400 mt-1">
               <span>Jednostka: {prod.unit}</span>
               {prod.min_quantity > 0 && (
-                <span>Minimum: {prod.min_quantity} {prod.unit}</span>
+                <span>
+                  Minimum: {prod.min_quantity} {prod.unit}
+                </span>
               )}
             </div>
           </div>
@@ -735,7 +910,9 @@ export default function BartenderDashboard() {
           <div className="flex items-center gap-1">
             <button
               type="button"
-              onClick={() => handleSaveQuantityToDb(prod.id, Number((prod.quantity - 1).toFixed(2)))}
+              onClick={() =>
+                handleSaveQuantityToDb(prod.id, Number((prod.quantity - 1).toFixed(2)))
+              }
               className="w-7 h-7 rounded border bg-white hover:bg-zinc-100 text-sm font-bold shrink-0"
             >
               -
@@ -746,7 +923,9 @@ export default function BartenderDashboard() {
               min="0"
               value={prod.quantity}
               onChange={(e) => handleQuantityChangeLocal(prod.id, e.target.value)}
-              onBlur={(e) => handleSaveQuantityToDb(prod.id, parseFloat(e.target.value) || 0)}
+              onBlur={(e) =>
+                handleSaveQuantityToDb(prod.id, parseFloat(e.target.value) || 0)
+              }
               onKeyDown={(e) => {
                 if (e.key === "Enter") e.currentTarget.blur()
               }}
@@ -757,7 +936,9 @@ export default function BartenderDashboard() {
             </span>
             <button
               type="button"
-              onClick={() => handleSaveQuantityToDb(prod.id, Number((prod.quantity + 1).toFixed(2)))}
+              onClick={() =>
+                handleSaveQuantityToDb(prod.id, Number((prod.quantity + 1).toFixed(2)))
+              }
               className="w-7 h-7 rounded border bg-white hover:bg-zinc-100 text-sm font-bold shrink-0"
             >
               +
@@ -770,14 +951,16 @@ export default function BartenderDashboard() {
 
   return (
     <div className="min-h-screen bg-zinc-100 p-4 sm:p-8">
+      <FeedbackHost />
+
       <div className="mx-auto max-w-5xl space-y-6">
-        
-        {/* NAGŁÓWEK PRACOWNIKA */}
         <div className="bg-white p-6 rounded-xl shadow-xs border border-zinc-200/80 space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="space-y-1">
+            <div className="space-y-2">
               <div className="flex flex-wrap items-center gap-2.5">
-                <h1 className="text-2xl font-bold text-zinc-900">Cześć, {userName}! 👋</h1>
+                <h1 className="text-2xl font-bold text-zinc-900">
+                  Cześć, {userName}! 👋
+                </h1>
                 <span
                   className="px-3 py-0.5 rounded-full text-xs font-semibold text-white shadow-xs"
                   style={{ backgroundColor: myRoleColor }}
@@ -785,23 +968,82 @@ export default function BartenderDashboard() {
                   {userRole}
                 </span>
               </div>
-              <p className="text-sm text-zinc-500">
-                Lokal: <strong className="text-zinc-800">{restaurantName}</strong>
-              </p>
+
+              {memberships.length > 1 ? (
+                <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                  <span className="text-xs font-semibold text-zinc-500">
+                    Aktywny lokal:
+                  </span>
+                  <div className="inline-flex flex-wrap gap-1.5">
+                    {memberships.map((m) => {
+                      const isActive = m.restaurant_id === restaurantId
+                      return (
+                        <button
+                          key={m.restaurant_id}
+                          type="button"
+                          onClick={() => handleSwitchVenue(m.restaurant_id)}
+                          className={`px-3 py-1 rounded-lg text-xs font-bold border transition-all ${
+                            isActive
+                              ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
+                              : "bg-zinc-50 text-zinc-700 border-zinc-200 hover:border-zinc-400"
+                          }`}
+                        >
+                          🏠 {m.restaurant_name}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-zinc-500">
+                  Lokal: <strong className="text-zinc-800">{restaurantName}</strong>
+                </p>
+              )}
             </div>
 
-            <div className="flex items-center gap-2.5 self-start sm:self-auto">
-              {/* Przycisk stawki chroniony hasłem */}
+            <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
               <button
                 type="button"
                 onClick={handleRateButtonClick}
-                className="h-9 px-3 rounded-lg border border-zinc-200 bg-zinc-50 hover:bg-zinc-100 text-xs font-medium text-zinc-700 flex items-center gap-1.5 transition-colors"
-                title={showRate ? "Kliknij, aby ukryć stawkę" : "Kliknij i podaj hasło, aby wyświetlić stawkę"}
+                className="min-h-9 px-3.5 py-1.5 rounded-lg border border-zinc-200 bg-zinc-50 hover:bg-zinc-100 text-xs font-medium text-zinc-700 flex flex-wrap items-center gap-2 transition-colors"
+                title={
+                  showRate
+                    ? "Kliknij, aby ukryć zarobki i stawkę"
+                    : "Kliknij i podaj hasło, aby wyświetlić zarobki w tym miesiącu oraz stawkę"
+                }
               >
-                <span>{showRate ? "🔓 Stawka:" : "🔒 Stawka:"}</span>
-                <strong className="text-zinc-900">
-                  {showRate ? `${hourlyRate} zł/h` : "••• zł/h"}
-                </strong>
+                <span>
+                  {showRate ? `🔓 ${restaurantName}:` : "🔒 Zarobki i Stawka:"}
+                </span>
+                {showRate ? (
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <strong className="text-emerald-700 font-extrabold">
+                      {monthlyEarnings.totalPay.toFixed(2)} zł
+                    </strong>
+                    {monthlyEarnings.bonusPay > 0 && (
+                      <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                        premie: +{monthlyEarnings.bonusPay.toFixed(2)} zł
+                      </span>
+                    )}
+                    <span className="text-zinc-300">|</span>
+                    <span className="text-zinc-600">
+                      Stawka: <strong className="text-zinc-900">{hourlyRate} zł/h</strong> (
+                      {monthlyEarnings.totalHours}h)
+                    </span>
+                    {memberships.length > 1 && (
+                      <>
+                        <span className="text-zinc-300">|</span>
+                        <span className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-900 font-bold text-[11px]">
+                          Razem ({memberships.length} lokale):{" "}
+                          {allVenuesCombinedEarnings.totalPay.toFixed(2)} zł (
+                          {allVenuesCombinedEarnings.totalHours}h)
+                        </span>
+                      </>
+                    )}
+                  </span>
+                ) : (
+                  <strong className="text-zinc-900">••• zł (Podaj hasło)</strong>
+                )}
               </button>
 
               <Button variant="outline" size="sm" className="h-9" onClick={handleLogout}>
@@ -810,11 +1052,12 @@ export default function BartenderDashboard() {
             </div>
           </div>
 
-          {/* Kafelki statusu na dziś */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t">
             <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200/70 flex items-center justify-between">
               <div>
-                <p className="text-xs text-zinc-500">Moje zadania na dziś</p>
+                <p className="text-xs text-zinc-500">
+                  Zadania na dziś ({restaurantName})
+                </p>
                 <p className="text-lg font-bold text-zinc-900">
                   {todayRemainingCount === 0 && todayMyTodos.length > 0
                     ? "Wszystko zrobione! 🎉"
@@ -826,9 +1069,14 @@ export default function BartenderDashboard() {
 
             <div className="p-3 rounded-lg bg-amber-50/60 border border-amber-200/70 flex items-center justify-between">
               <div>
-                <p className="text-xs text-amber-800/80">Aktualne ogłoszenia</p>
+                <p className="text-xs text-amber-800/80">
+                  Ogłoszenia ({restaurantName})
+                </p>
                 <p className="text-lg font-bold text-amber-950">
-                  {visibleAnnouncements.length} {pinnedAnnouncementsCount > 0 ? `(📌 ${pinnedAnnouncementsCount} ważne)` : ""}
+                  {visibleAnnouncements.length}{" "}
+                  {pinnedAnnouncementsCount > 0
+                    ? `(📌 ${pinnedAnnouncementsCount} ważne)`
+                    : ""}
                 </p>
               </div>
               <span className="text-2xl">📢</span>
@@ -836,39 +1084,33 @@ export default function BartenderDashboard() {
 
             <div className="p-3 rounded-lg bg-red-50/60 border border-red-200/70 flex items-center justify-between">
               <div>
-                <p className="text-xs text-red-800/80">Braki na magazynie</p>
+                <p className="text-xs text-red-800/80">
+                  Braki na magazynie ({restaurantName})
+                </p>
                 <p className="text-lg font-bold text-red-950">
-                  {shortageProducts.length} {shortageProducts.length === 1 ? "produkt" : "produktów"}
+                  {shortageProducts.length}{" "}
+                  {shortageProducts.length === 1 ? "produkt" : "produktów"}
                 </p>
               </div>
               <span className="text-2xl">🚨</span>
             </div>
           </div>
 
-          {/* GŁÓWNE ZAKŁADKI */}
           <Tabs defaultValue="todos" className="w-full pt-2">
             <TabsList className="flex flex-wrap h-auto gap-1 w-full justify-start bg-zinc-100 p-1">
-              <TabsTrigger value="todos">
-                Check-lista {todayRemainingCount > 0 ? `(${todayRemainingCount})` : ""}
-              </TabsTrigger>
-              <TabsTrigger value="announcements">
-                Ogłoszenia {pinnedAnnouncementsCount > 0 ? `📌` : ""}
-              </TabsTrigger>
-              <TabsTrigger value="inventory">
-                Magazyn i Braki {shortageProducts.length > 0 ? `(${shortageProducts.length})` : ""}
-              </TabsTrigger>
-              <TabsTrigger value="schedule">
-                Grafik i Kalendarz
-              </TabsTrigger>
+              <TabsTrigger value="todos">Check-lista</TabsTrigger>
+              <TabsTrigger value="announcements">Ogłoszenia</TabsTrigger>
+              <TabsTrigger value="inventory">Magazyn i Braki</TabsTrigger>
+              <TabsTrigger value="schedule">Grafik i Kalendarz</TabsTrigger>
+              <TabsTrigger value="attendance">Czas pracy</TabsTrigger>
             </TabsList>
 
-            {/* 1. ZAKŁADKA: CHECK-LISTA ZADAŃ */}
             <TabsContent value="todos" className="mt-6">
               <Card>
                 <CardHeader>
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div>
-                      <CardTitle>Zadania na zmianę</CardTitle>
+                      <CardTitle>Zadania na zmianę — {restaurantName}</CardTitle>
                       <CardDescription>
                         Odhaczaj wykonane obowiązki. Jeśli czegoś nie da się zrobić w pełni, kliknij „Zgłoś uwagę”.
                       </CardDescription>
@@ -879,7 +1121,9 @@ export default function BartenderDashboard() {
                         type="button"
                         onClick={() => setShowOnlyMyTasks(true)}
                         className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
-                          showOnlyMyTasks ? "bg-white text-zinc-900 shadow-xs" : "text-zinc-600 hover:text-zinc-900"
+                          showOnlyMyTasks
+                            ? "bg-white text-zinc-900 shadow-xs"
+                            : "text-zinc-600 hover:text-zinc-900"
                         }`}
                       >
                         Moje i ogólne
@@ -888,7 +1132,9 @@ export default function BartenderDashboard() {
                         type="button"
                         onClick={() => setShowOnlyMyTasks(false)}
                         className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
-                          !showOnlyMyTasks ? "bg-white text-zinc-900 shadow-xs" : "text-zinc-600 hover:text-zinc-900"
+                          !showOnlyMyTasks
+                            ? "bg-white text-zinc-900 shadow-xs"
+                            : "text-zinc-600 hover:text-zinc-900"
                         }`}
                       >
                         Cały lokal
@@ -902,7 +1148,9 @@ export default function BartenderDashboard() {
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={() => setSelectedTodoDate(prev => shiftDateByDays(prev, -1))}
+                        onClick={() =>
+                          setSelectedTodoDate((prev) => shiftDateByDays(prev, -1))
+                        }
                         className="h-9 px-3 font-bold"
                       >
                         ←
@@ -926,7 +1174,9 @@ export default function BartenderDashboard() {
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={() => setSelectedTodoDate(prev => shiftDateByDays(prev, 1))}
+                        onClick={() =>
+                          setSelectedTodoDate((prev) => shiftDateByDays(prev, 1))
+                        }
                         className="h-9 px-3 font-bold"
                       >
                         →
@@ -965,7 +1215,8 @@ export default function BartenderDashboard() {
                   {dayTodos.length === 0 ? (
                     <div className="text-center py-12 space-y-2 border-2 border-dashed rounded-xl">
                       <p className="text-sm text-zinc-500">
-                        Brak zadań zaplanowanych na dzień <strong className="text-zinc-800">{selectedTodoDate}</strong>.
+                        Brak zadań w lokalu <strong>{restaurantName}</strong> na dzień{" "}
+                        <strong className="text-zinc-800">{selectedTodoDate}</strong>.
                       </p>
                     </div>
                   ) : (
@@ -975,8 +1226,14 @@ export default function BartenderDashboard() {
                           key={todo.id}
                           todo={todo}
                           currentUserId={currentUserId}
-                          assignedUserName={todo.assigned_user_id ? getTeammateName(todo.assigned_user_id) : null}
-                          roleColor={todo.assigned_role ? getRoleColor(todo.assigned_role) : null}
+                          assignedUserName={
+                            todo.assigned_user_id
+                              ? getTeammateName(todo.assigned_user_id)
+                              : null
+                          }
+                          roleColor={
+                            todo.assigned_role ? getRoleColor(todo.assigned_role) : null
+                          }
                           onToggle={handleToggleTodo}
                           onSaveNote={handleSaveTodoNote}
                         />
@@ -987,11 +1244,10 @@ export default function BartenderDashboard() {
               </Card>
             </TabsContent>
 
-            {/* 2. ZAKŁADKA: TABLICA OGŁOSZEŃ (Z POP-UPEM PO KLIKNIĘCIU) */}
             <TabsContent value="announcements" className="mt-6">
               <Card>
                 <CardHeader>
-                  <CardTitle>Tablica Ogłoszeń</CardTitle>
+                  <CardTitle>Tablica Ogłoszeń — {restaurantName}</CardTitle>
                   <CardDescription>
                     Kliknij w wybrane ogłoszenie, aby otworzyć jego pełną treść w osobnym oknie.
                   </CardDescription>
@@ -999,7 +1255,7 @@ export default function BartenderDashboard() {
                 <CardContent>
                   {visibleAnnouncements.length === 0 ? (
                     <div className="text-center py-12 border-2 border-dashed rounded-xl text-sm text-zinc-500">
-                      Brak aktualnych ogłoszeń na tablicy.
+                      Brak aktualnych ogłoszeń w lokalu {restaurantName}.
                     </div>
                   ) : (
                     <div className="space-y-3">
@@ -1050,7 +1306,6 @@ export default function BartenderDashboard() {
               </Card>
             </TabsContent>
 
-            {/* 3. ZAKŁADKA: MAGAZYN I BRAKI */}
             <TabsContent value="inventory" className="mt-6">
               <Card>
                 <CardHeader>
@@ -1065,7 +1320,9 @@ export default function BartenderDashboard() {
                           >
                             ← Wróć do kategorii
                           </button>
-                          <CardTitle className="text-xl">📁 {selectedCategory.name}</CardTitle>
+                          <CardTitle className="text-xl">
+                            📁 {selectedCategory.name} ({restaurantName})
+                          </CardTitle>
                         </div>
                       ) : showShortagesOnly ? (
                         <div className="space-y-1">
@@ -1077,12 +1334,12 @@ export default function BartenderDashboard() {
                             ← Wróć do kategorii
                           </button>
                           <CardTitle className="text-xl text-red-600">
-                            🚨 Braki ({shortageProducts.length})
+                            🚨 Braki — {restaurantName} ({shortageProducts.length})
                           </CardTitle>
                         </div>
                       ) : (
                         <div>
-                          <CardTitle>Magazyn i Stany Barowe</CardTitle>
+                          <CardTitle>Magazyn i Stany Barowe — {restaurantName}</CardTitle>
                           <CardDescription>
                             Sprawdzaj i aktualizuj na bieżąco ilości produktów na swojej zmianie.
                           </CardDescription>
@@ -1092,15 +1349,21 @@ export default function BartenderDashboard() {
 
                     <div className="flex flex-wrap items-center gap-2">
                       <Input
-                        placeholder="🔍 Szukaj produktu..."
+                        placeholder="Wyszukaj produkt po nazwie..."
                         value={productSearch}
                         onChange={(e) => setProductSearch(e.target.value)}
-                        className="h-9 w-48 text-xs"
+                        className="h-9 w-52 text-xs"
                       />
 
                       <Button
                         type="button"
-                        variant={showShortagesOnly ? "default" : shortageProducts.length > 0 ? "destructive" : "outline"}
+                        variant={
+                          showShortagesOnly
+                            ? "default"
+                            : shortageProducts.length > 0
+                            ? "destructive"
+                            : "outline"
+                        }
                         size="sm"
                         className="h-9"
                         onClick={() => {
@@ -1114,7 +1377,9 @@ export default function BartenderDashboard() {
                     </div>
                   </div>
 
-                  {(selectedCategory || showShortagesOnly || productSearch.trim() !== "") && (
+                  {(selectedCategory ||
+                    showShortagesOnly ||
+                    productSearch.trim() !== "") && (
                     <div className="mt-4 pt-3 border-t flex items-center justify-end gap-2">
                       <span className="text-xs text-zinc-500">Sortuj:</span>
                       <select
@@ -1122,8 +1387,12 @@ export default function BartenderDashboard() {
                         onChange={(e) => setSortBy(e.target.value as any)}
                         className="h-8 rounded-md border border-zinc-200 bg-white px-2 text-xs font-medium text-zinc-800"
                       >
-                        <option value="smart_asc">Braki → Jednostka → Ilość rosnąco → A-Z</option>
-                        <option value="smart_desc">Braki → Jednostka → Ilość malejąco → A-Z</option>
+                        <option value="smart_asc">
+                          Braki → Jednostka → Ilość rosnąco → A-Z
+                        </option>
+                        <option value="smart_desc">
+                          Braki → Jednostka → Ilość malejąco → A-Z
+                        </option>
                         <option value="name_asc">Tylko alfabetycznie (A–Z)</option>
                       </select>
                     </div>
@@ -1138,19 +1407,23 @@ export default function BartenderDashboard() {
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                        {searchedProducts.map(prod => renderStaffProductCard(prod, true))}
+                        {searchedProducts.map((prod) =>
+                          renderStaffProductCard(prod, true)
+                        )}
                       </div>
                     )
                   ) : showShortagesOnly ? (
                     shortageProducts.length === 0 ? (
                       <div className="text-center py-12 border-2 border-dashed rounded-xl bg-green-50/40 border-green-200">
                         <p className="text-sm font-semibold text-green-800">
-                          Wszystkie produkty są powyżej progów minimalnych! 🎉
+                          Wszystkie produkty w lokalu {restaurantName} są powyżej progów minimalnych! 🎉
                         </p>
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                        {shortageProducts.map(prod => renderStaffProductCard(prod, true))}
+                        {shortageProducts.map((prod) =>
+                          renderStaffProductCard(prod, true)
+                        )}
                       </div>
                     )
                   ) : selectedCategory ? (
@@ -1160,14 +1433,19 @@ export default function BartenderDashboard() {
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                        {categoryProducts.map(prod => renderStaffProductCard(prod, false))}
+                        {categoryProducts.map((prod) =>
+                          renderStaffProductCard(prod, false)
+                        )}
                       </div>
                     )
                   ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                       {categories.map((cat) => {
-                        const catProds = products.filter(p => p.category_id === cat.id)
-                        const catShortages = catProds.filter(isProductShortage).length
+                        const catProds = products.filter(
+                          (p) => p.category_id === cat.id
+                        )
+                        const catShortages =
+                          catProds.filter(isProductShortage).length
 
                         return (
                           <div
@@ -1180,13 +1458,20 @@ export default function BartenderDashboard() {
                                 📁 {cat.name}
                               </h3>
                               {cat.description && (
-                                <p className="text-xs text-zinc-500 mt-1 line-clamp-2">{cat.description}</p>
+                                <p className="text-xs text-zinc-500 mt-1 line-clamp-2">
+                                  {cat.description}
+                                </p>
                               )}
                             </div>
 
                             <div className="mt-4 flex items-center justify-between text-xs text-zinc-500 pt-3 border-t">
                               <div className="flex items-center gap-2">
-                                <span>Pozycji: <strong className="text-zinc-800">{catProds.length}</strong></span>
+                                <span>
+                                  Pozycji:{" "}
+                                  <strong className="text-zinc-800">
+                                    {catProds.length}
+                                  </strong>
+                                </span>
                                 {catShortages > 0 && (
                                   <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-semibold text-[11px]">
                                     Braki: {catShortages}
@@ -1206,7 +1491,6 @@ export default function BartenderDashboard() {
               </Card>
             </TabsContent>
 
-            {/* 4. ZAKŁADKA: GRAFIK I KALENDARZ */}
             <TabsContent value="schedule" className="mt-6 space-y-6">
               <StaffScheduleModule
                 restaurantId={restaurantId}
@@ -1214,11 +1498,47 @@ export default function BartenderDashboard() {
               />
               <ShiftCalendar />
             </TabsContent>
+
+            <TabsContent value="attendance" className="mt-6 space-y-4">
+              {memberships.length > 1 && (
+                <div className="p-3.5 rounded-xl bg-indigo-50/70 border border-indigo-200 flex flex-wrap items-center justify-between gap-3">
+                  <span className="text-xs font-semibold text-indigo-950">
+                    🏠 Wpisujesz godziny i sprawdzasz rozliczenie dla lokalu:{" "}
+                    <strong className="underline">{restaurantName}</strong>
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {memberships.map((m) => (
+                      <button
+                        key={m.restaurant_id}
+                        type="button"
+                        onClick={() => handleSwitchVenue(m.restaurant_id)}
+                        className={`px-2.5 py-1 rounded-md text-xs font-bold border transition-all ${
+                          m.restaurant_id === restaurantId
+                            ? "bg-indigo-600 text-white border-indigo-600"
+                            : "bg-white text-zinc-700 border-zinc-200 hover:border-indigo-300"
+                        }`}
+                      >
+                        {m.restaurant_name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <StaffAttendanceModule
+                restaurantId={restaurantId}
+                currentUserId={currentUserId}
+                userRole={userRole}
+                hourlyRate={hourlyRate}
+                isRateUnlocked={showRate}
+                onRequestUnlock={handleRateButtonClick}
+                onEarningsCalculated={setMonthlyEarnings}
+              />
+            </TabsContent>
           </Tabs>
         </div>
       </div>
 
-      {/* POP-UP WERYFIKACJI HASŁA DO ODKRYCIA STAWKI GODZINOWEJ */}
       {isRateModalOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
@@ -1229,7 +1549,9 @@ export default function BartenderDashboard() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-5 py-4 border-b bg-zinc-50">
-              <h2 className="text-base font-bold text-zinc-900">🔒 Potwierdź tożsamość</h2>
+              <h2 className="text-base font-bold text-zinc-900">
+                🔒 Potwierdź tożsamość
+              </h2>
               <button
                 type="button"
                 onClick={() => setIsRateModalOpen(false)}
@@ -1241,18 +1563,20 @@ export default function BartenderDashboard() {
             <form onSubmit={handleVerifyRatePassword} className="p-5 space-y-4">
               <div className="space-y-2">
                 <Label className="text-xs text-zinc-600">
-                  Wpisz swoje hasło, aby wyświetlić stawkę godzinową:
+                  Wpisz swoje hasło, aby wyświetlić zarobki i stawkę godzinową:
                 </Label>
                 <Input
                   type="password"
-                  placeholder="Twoje hasło..."
+                  placeholder="Wprowadź hasło do konta"
                   value={ratePassword}
                   onChange={(e) => setRatePassword(e.target.value)}
                   autoFocus
                   required
                 />
                 {ratePasswordError && (
-                  <p className="text-xs font-medium text-red-600">{ratePasswordError}</p>
+                  <p className="text-xs font-medium text-red-600">
+                    {ratePasswordError}
+                  </p>
                 )}
               </div>
               <div className="flex justify-end gap-2 pt-1">
@@ -1266,7 +1590,7 @@ export default function BartenderDashboard() {
                   Anuluj
                 </Button>
                 <Button type="submit" size="sm" disabled={verifyingPassword}>
-                  {verifyingPassword ? "Sprawdzanie..." : "Pokaż stawkę"}
+                  {verifyingPassword ? "Sprawdzanie..." : "Pokaż zarobki"}
                 </Button>
               </div>
             </form>
@@ -1274,7 +1598,6 @@ export default function BartenderDashboard() {
         </div>
       )}
 
-      {/* POP-UP PEŁNEGO WIDOKU OGŁOSZENIA */}
       {selectedAnnouncementModal && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
@@ -1303,10 +1626,13 @@ export default function BartenderDashboard() {
                 </h2>
                 <p className="text-xs text-zinc-400">
                   Opublikowano:{" "}
-                  {new Date(selectedAnnouncementModal.created_at).toLocaleString("pl-PL", {
-                    dateStyle: "long",
-                    timeStyle: "short",
-                  })}
+                  {new Date(selectedAnnouncementModal.created_at).toLocaleString(
+                    "pl-PL",
+                    {
+                      dateStyle: "long",
+                      timeStyle: "short",
+                    }
+                  )}
                 </p>
               </div>
               <button
@@ -1325,7 +1651,9 @@ export default function BartenderDashboard() {
             </div>
 
             <div className="px-6 py-4 bg-zinc-50 border-t flex items-center justify-end">
-              <Button onClick={() => setSelectedAnnouncementModal(null)}>Zamknij</Button>
+              <Button onClick={() => setSelectedAnnouncementModal(null)}>
+                Zamknij
+              </Button>
             </div>
           </div>
         </div>
