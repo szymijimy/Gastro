@@ -557,6 +557,7 @@ export default function ManagerDashboard() {
   const [newRoleColor, setNewRoleColor] = useState(ROLE_COLORS[0].value)
 
   const [staff, setStaff] = useState<StaffMember[]>([])
+  const [staffVenuesMap, setStaffVenuesMap] = useState<Record<string, string[]>>({})
   const [newStaffName, setNewStaffName] = useState("")
   const [newStaffEmail, setNewStaffEmail] = useState("")
   const [newStaffRole, setNewStaffRole] = useState("")
@@ -576,7 +577,16 @@ export default function ManagerDashboard() {
 
   const [loading, setLoading] = useState(true)
 
-  const loadVenueData = async (venueId: string) => {
+  const loadVenueData = async (
+    venueId: string,
+    managedVenuesList?: { restaurant_id: string; name: string }[]
+  ) => {
+    const activeVenuesList = managedVenuesList || restaurants
+    const allVenueIds =
+      activeVenuesList.length > 0
+        ? activeVenuesList.map((r) => r.restaurant_id)
+        : [venueId]
+
     const [rolesRes, staffRes, annRes, todosRes] = await Promise.all([
       supabase
         .from("restaurant_roles")
@@ -586,12 +596,13 @@ export default function ManagerDashboard() {
       supabase
         .from("restaurant_users")
         .select(`
+          restaurant_id,
           user_id,
           role,
           hourly_rate,
           users ( full_name, email )
         `)
-        .eq("restaurant_id", venueId),
+        .in("restaurant_id", allVenueIds),
       supabase
         .from("restaurant_announcements")
         .select("*")
@@ -617,19 +628,33 @@ export default function ManagerDashboard() {
     }
 
     if (staffRes.data) {
-      const formattedStaff: StaffMember[] = staffRes.data.map((item: any) => {
+      const venuesByUser: Record<string, string[]> = {}
+      const staffMap = new Map<string, StaffMember>()
+
+      staffRes.data.forEach((item: any) => {
+        const uid = item.user_id
+        if (!venuesByUser[uid]) venuesByUser[uid] = []
+        if (!venuesByUser[uid].includes(item.restaurant_id)) {
+          venuesByUser[uid].push(item.restaurant_id)
+        }
+
         const userObj = Array.isArray(item.users) ? item.users[0] : item.users
-        return {
-          user_id: item.user_id,
-          role: item.role,
-          hourly_rate: item.hourly_rate ?? 0,
-          users: {
-            full_name: userObj?.full_name || null,
-            email: userObj?.email || null,
-          },
+        // Preferujemy dane (rolę i stawkę) z aktualnie wybranego lokalu, a jeśli tam go nie ma – z drugiego lokalu
+        if (!staffMap.has(uid) || item.restaurant_id === venueId) {
+          staffMap.set(uid, {
+            user_id: uid,
+            role: item.role,
+            hourly_rate: item.hourly_rate ?? 0,
+            users: {
+              full_name: userObj?.full_name || null,
+              email: userObj?.email || null,
+            },
+          })
         }
       })
-      setStaff(formattedStaff)
+
+      setStaffVenuesMap(venuesByUser)
+      setStaff(Array.from(staffMap.values()))
     }
 
     if (annRes.data) setAnnouncements(annRes.data)
@@ -677,7 +702,7 @@ export default function ManagerDashboard() {
         setRestaurants(sortedVenues)
         setActiveRestaurantId(validDefaultId)
 
-        await loadVenueData(validDefaultId)
+        await loadVenueData(validDefaultId, sortedVenues)
       } else {
         router.replace("/bartender")
         return
@@ -873,6 +898,74 @@ export default function ManagerDashboard() {
     } else {
       showToast("Zaktualizowano stawkę godzinową", "success")
     }
+  }
+
+  const handleToggleStaffVenue = async (member: StaffMember, targetVenueId: string) => {
+    const currentVenues = staffVenuesMap[member.user_id] || []
+    const isAssigned = currentVenues.includes(targetVenueId)
+    const venueName =
+      restaurants.find((r) => r.restaurant_id === targetVenueId)?.name || "Lokal"
+    const memberName =
+      member.users?.full_name || member.users?.email || "Pracownik"
+
+    // 1. ODPISANIE Z BARU (jeśli kafelek był już aktywny)
+    if (isAssigned) {
+      if (member.user_id === currentUserId) {
+        showToast("Nie możesz odpisać własnego konta managera z lokalu.", "error")
+        return
+      }
+
+      if (currentVenues.length <= 1) {
+        showToast(
+          "Pracownik musi być przypisany do przynajmniej jednego lokalu. Aby usunąć go całkowicie, użyj przycisku Usuń.",
+          "error"
+        )
+        return
+      }
+
+      const { error } = await supabase
+        .from("restaurant_users")
+        .delete()
+        .eq("restaurant_id", targetVenueId)
+        .eq("user_id", member.user_id)
+
+      if (error) {
+        showToast("Błąd podczas odpisywania z lokalu: " + error.message, "error")
+        return
+      }
+
+      setStaffVenuesMap((prev) => ({
+        ...prev,
+        [member.user_id]: (prev[member.user_id] || []).filter(
+          (id) => id !== targetVenueId
+        ),
+      }))
+      showToast(`Odpisano pracownika ${memberName} z lokalu ${venueName}.`, "info")
+      return
+    }
+
+    // 2. PRZYPISANIE DO BARU (jeśli kafelek był nieaktywny)
+    const { error } = await supabase
+      .from("restaurant_users")
+      .insert([
+        {
+          restaurant_id: targetVenueId,
+          user_id: member.user_id,
+          role: member.role,
+          hourly_rate: member.hourly_rate,
+        },
+      ])
+
+    if (error) {
+      showToast("Błąd podczas przypisywania do lokalu: " + error.message, "error")
+      return
+    }
+
+    setStaffVenuesMap((prev) => ({
+      ...prev,
+      [member.user_id]: [...(prev[member.user_id] || []), targetVenueId],
+    }))
+    showToast(`Przypisano pracownika ${memberName} do lokalu ${venueName}.`, "success")
   }
 
   const handleRemoveStaff = async (userId: string, memberName: string) => {
@@ -1322,6 +1415,7 @@ export default function ManagerDashboard() {
                         <TableRow>
                           <TableHead>Imię i inicjał / Adres e-mail</TableHead>
                           <TableHead>Rola</TableHead>
+                          <TableHead>Przypisane lokale</TableHead>
                           <TableHead className="text-right">Stawka (zł/h)</TableHead>
                           <TableHead className="text-right">Akcje</TableHead>
                         </TableRow>
@@ -1376,6 +1470,44 @@ export default function ManagerDashboard() {
                                     ))}
                                     <option value="manager">Manager</option>
                                   </select>
+                                </div>
+                              </TableCell>
+                              {/* KLIKALNE KAFELKI PRZYPISANIA DO BARÓW */}
+                              <TableCell>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  {restaurants.map((venue) => {
+                                    const userVenues = staffVenuesMap[member.user_id] || []
+                                    const isAssignedToVenue = userVenues.includes(
+                                      venue.restaurant_id
+                                    )
+
+                                    return (
+                                      <button
+                                        key={venue.restaurant_id}
+                                        type="button"
+                                        disabled={isMe}
+                                        onClick={() =>
+                                          handleToggleStaffVenue(
+                                            member,
+                                            venue.restaurant_id
+                                          )
+                                        }
+                                        title={
+                                          isAssignedToVenue
+                                            ? `Kliknij, aby odpisać z lokalu: ${venue.name}`
+                                            : `Kliknij, aby przypisać do lokalu: ${venue.name}`
+                                        }
+                                        className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all flex items-center gap-1 ${
+                                          isAssignedToVenue
+                                            ? "bg-zinc-900 text-white border-zinc-900 shadow-2xs hover:bg-zinc-800"
+                                            : "bg-zinc-50 text-zinc-400 border-dashed border-zinc-300 hover:border-zinc-500 hover:text-zinc-700"
+                                        } disabled:opacity-60 disabled:cursor-not-allowed`}
+                                      >
+                                        <span>{isAssignedToVenue ? "✓" : "+"}</span>
+                                        <span>{venue.name}</span>
+                                      </button>
+                                    )
+                                  })}
                                 </div>
                               </TableCell>
                               <TableCell className="text-right">
