@@ -9,9 +9,11 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { FeedbackHost, showToast, askConfirm } from "@/components/ui/feedback"
 import { ShiftCalendar } from "@/components/ShiftCalendar"
 import { InventoryModule } from "@/components/InventoryModule"
 import { ManagerScheduleModule } from "@/components/ManagerScheduleModule"
+import { AttendanceManagerModule } from "@/components/AttendanceManagerModule"
 
 const ROLE_COLORS = [
   { name: "Niebieski", value: "#2563eb" },
@@ -82,20 +84,13 @@ const getFriendlyDateLabel = (dateStr: string, todayStr: string): string => {
   return capitalizedWeekday
 }
 
-type SchedulePeriod = {
-  id: string
-  start_date: string
-  end_date: string
-  status: string
-}
-
 type StaffMember = {
   user_id: string
   role: string
   hourly_rate: number
-  users: { 
+  users: {
     full_name: string | null
-    email: string | null 
+    email: string | null
   }
 }
 
@@ -274,11 +269,11 @@ function TodoItemRow({
       {isEditingNote && (
         <div className="mt-3 ml-7 p-3 rounded-lg bg-zinc-50 border border-zinc-200 space-y-2">
           <Label className="text-xs text-zinc-700">
-            Uwaga / komentarz (np. dlaczego wykonano tylko częściowo):
+            Uwaga / komentarz (np. powód częściowego wykonania):
           </Label>
           <div className="flex flex-col sm:flex-row gap-2">
             <Input
-              placeholder="np. Tylko pół butelki soku z cytryny, bo skończyły się owoce..."
+              placeholder="Wpisz uwagę lub komentarz..."
               value={noteDraft}
               onChange={(e) => setNoteDraft(e.target.value)}
               onKeyDown={(e) => {
@@ -403,7 +398,7 @@ function TodoBatchModal({
     e.preventDefault()
     const valid = draftTasks.filter(t => t.text.trim() !== "")
     if (valid.length === 0) {
-      alert("Wpisz przynajmniej jedno zadanie przed zapisaniem.")
+      showToast("Wpisz przynajmniej jedno zadanie przed zapisaniem.", "error")
       return
     }
     setSaving(true)
@@ -418,7 +413,7 @@ function TodoBatchModal({
           <div>
             <h2 className="text-lg font-bold text-zinc-900">Dodaj listę zadań</h2>
             <p className="text-xs text-zinc-500">
-              Wpisz zadanie, wybierz dla kogo (rola lub osoba) i naciśnij <kbd className="px-1.5 py-0.5 bg-white border rounded text-[11px] font-semibold">Enter</kbd>, aby przejść do kolejnego punktu.
+              Wpisz zadanie, wybierz dla kogo i naciśnij <kbd className="px-1.5 py-0.5 bg-white border rounded text-[11px] font-semibold">Enter</kbd>, aby przejść do kolejnego punktu.
             </p>
           </div>
           <button type="button" onClick={onClose} className="text-zinc-400 hover:text-zinc-700 text-xl font-bold leading-none px-2">
@@ -436,7 +431,7 @@ function TodoBatchModal({
                 
                 <Input
                   ref={(el) => { taskInputRefs.current[index] = el }}
-                  placeholder={index === 0 ? "np. Pokroić cytryny i limonki przed otwarciem..." : "Kolejne zadanie..."}
+                  placeholder="Wpisz treść zadania..."
                   value={item.text}
                   onChange={(e) => updateRow(index, { text: e.target.value })}
                   onKeyDown={(e) => handleKeyDown(e, index)}
@@ -546,34 +541,28 @@ function TodoBatchModal({
 }
 
 // ============================================================================
-//GŁÓWNY PANEL MANAGERA
+// GŁÓWNY PANEL MANAGERA
 // ============================================================================
 export default function ManagerDashboard() {
   const router = useRouter()
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
-  const [restaurants, setRestaurants] = useState<any[]>([])
+  const [restaurants, setRestaurants] = useState<{ restaurant_id: string; name: string }[]>([])
   const [activeRestaurantId, setActiveRestaurantId] = useState<string | null>(null)
+  const [defaultRestaurantId, setDefaultRestaurantId] = useState<string | null>(null)
   
   const [todayStr, setTodayStr] = useState<string>("")
 
-  // Stany dla grafików
-  const [periods, setPeriods] = useState<SchedulePeriod[]>([])
-  const [newStartDate, setNewStartDate] = useState("")
-  const [newEndDate, setNewEndDate] = useState("")
-  
-  // Stany dla ról (stanowisk)
   const [roles, setRoles] = useState<RestaurantRole[]>([])
   const [newRoleName, setNewRoleName] = useState("")
   const [newRoleColor, setNewRoleColor] = useState(ROLE_COLORS[0].value)
 
-  // Stany dla pracowników
   const [staff, setStaff] = useState<StaffMember[]>([])
+  const [staffVenuesMap, setStaffVenuesMap] = useState<Record<string, string[]>>({})
   const [newStaffName, setNewStaffName] = useState("")
   const [newStaffEmail, setNewStaffEmail] = useState("")
   const [newStaffRole, setNewStaffRole] = useState("")
   const [newStaffRate, setNewStaffRate] = useState("")
 
-  // Stany dla Tablicy Ogłoszeń
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [newAnnouncementTitle, setNewAnnouncementTitle] = useState("")
   const [newAnnouncementContent, setNewAnnouncementContent] = useState("")
@@ -582,12 +571,95 @@ export default function ManagerDashboard() {
   const [newAnnouncementUntil, setNewAnnouncementUntil] = useState("")
   const [selectedAnnouncementModal, setSelectedAnnouncementModal] = useState<Announcement | null>(null)
 
-  // Stany dla To-do list
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [selectedTodoDate, setSelectedTodoDate] = useState<string>("")
   const [isTodoModalOpen, setIsTodoModalOpen] = useState(false)
 
   const [loading, setLoading] = useState(true)
+
+  const loadVenueData = async (
+    venueId: string,
+    managedVenuesList?: { restaurant_id: string; name: string }[]
+  ) => {
+    const activeVenuesList = managedVenuesList || restaurants
+    const allVenueIds =
+      activeVenuesList.length > 0
+        ? activeVenuesList.map((r) => r.restaurant_id)
+        : [venueId]
+
+    const [rolesRes, staffRes, annRes, todosRes] = await Promise.all([
+      supabase
+        .from("restaurant_roles")
+        .select("id, name, color")
+        .eq("restaurant_id", venueId)
+        .order("name", { ascending: true }),
+      supabase
+        .from("restaurant_users")
+        .select(`
+          restaurant_id,
+          user_id,
+          role,
+          hourly_rate,
+          users ( full_name, email )
+        `)
+        .in("restaurant_id", allVenueIds),
+      supabase
+        .from("restaurant_announcements")
+        .select("*")
+        .eq("restaurant_id", venueId)
+        .order("is_pinned", { ascending: false })
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("restaurant_todos")
+        .select("*")
+        .eq("restaurant_id", venueId)
+        .order("is_completed", { ascending: true })
+        .order("target_date", { ascending: false })
+        .order("created_at", { ascending: false }),
+    ])
+
+    if (rolesRes.data) {
+      setRoles(rolesRes.data)
+      if (rolesRes.data.length > 0) {
+        setNewStaffRole(rolesRes.data[0].name)
+      } else {
+        setNewStaffRole("manager")
+      }
+    }
+
+    if (staffRes.data) {
+      const venuesByUser: Record<string, string[]> = {}
+      const staffMap = new Map<string, StaffMember>()
+
+      staffRes.data.forEach((item: any) => {
+        const uid = item.user_id
+        if (!venuesByUser[uid]) venuesByUser[uid] = []
+        if (!venuesByUser[uid].includes(item.restaurant_id)) {
+          venuesByUser[uid].push(item.restaurant_id)
+        }
+
+        const userObj = Array.isArray(item.users) ? item.users[0] : item.users
+        // Preferujemy dane (rolę i stawkę) z aktualnie wybranego lokalu, a jeśli tam go nie ma – z drugiego lokalu
+        if (!staffMap.has(uid) || item.restaurant_id === venueId) {
+          staffMap.set(uid, {
+            user_id: uid,
+            role: item.role,
+            hourly_rate: item.hourly_rate ?? 0,
+            users: {
+              full_name: userObj?.full_name || null,
+              email: userObj?.email || null,
+            },
+          })
+        }
+      })
+
+      setStaffVenuesMap(venuesByUser)
+      setStaff(Array.from(staffMap.values()))
+    }
+
+    if (annRes.data) setAnnouncements(annRes.data)
+    if (todosRes.data) setTodos(todosRes.data as TodoItem[])
+  }
 
   useEffect(() => {
     const localToday = formatLocalDate(new Date())
@@ -597,93 +669,42 @@ export default function ManagerDashboard() {
     const fetchDashboardData = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) {
-        router.push("/")
+        router.replace("/")
         return
       }
       setCurrentUserId(session.user.id)
 
       const { data: userRestaurants } = await supabase
-        .from('restaurant_users')
-        .select('restaurant_id, role, restaurants (name)')
-        .eq('user_id', session.user.id)
-        .eq('role', 'manager')
+        .from("restaurant_users")
+        .select("restaurant_id, role, restaurants (name)")
+        .eq("user_id", session.user.id)
+        .eq("role", "manager")
 
       if (userRestaurants && userRestaurants.length > 0) {
-        setRestaurants(userRestaurants)
-        const firstRestaurantId = userRestaurants[0].restaurant_id
-        setActiveRestaurantId(firstRestaurantId)
-        
-        const { data: periodsData } = await supabase
-          .from('schedule_periods')
-          .select('*')
-          .eq('restaurant_id', firstRestaurantId)
-          .order('start_date', { ascending: false })
-        if (periodsData) setPeriods(periodsData)
-
-        const { data: rolesData } = await supabase
-          .from('restaurant_roles')
-          .select('id, name, color')
-          .eq('restaurant_id', firstRestaurantId)
-          .order('name', { ascending: true })
-        
-        if (rolesData) {
-          setRoles(rolesData)
-          if (rolesData.length > 0) {
-            setNewStaffRole(rolesData[0].name)
-          } else {
-            setNewStaffRole("manager")
+        const formattedVenues = userRestaurants.map((ur: any) => {
+          const rObj = Array.isArray(ur.restaurants) ? ur.restaurants[0] : ur.restaurants
+          return {
+            restaurant_id: ur.restaurant_id,
+            name: rObj?.name || "Lokal",
           }
-        }
+        })
 
-        const { data: staffData, error: staffError } = await supabase
-          .from('restaurant_users')
-          .select(`
-            user_id,
-            role,
-            hourly_rate,
-            users ( full_name, email )
-          `)
-          .eq('restaurant_id', firstRestaurantId)
+        const savedDefault = localStorage.getItem(`default_venue_${session.user.id}`)
+        const validDefaultId = formattedVenues.some((v) => v.restaurant_id === savedDefault)
+          ? savedDefault!
+          : formattedVenues[0].restaurant_id
 
-        if (staffError) {
-          console.error("Błąd pobierania pracowników:", staffError)
-        }
+        const sortedVenues = [...formattedVenues].sort((a, b) =>
+          a.restaurant_id === validDefaultId ? -1 : b.restaurant_id === validDefaultId ? 1 : 0
+        )
 
-        if (staffData) {
-          const formattedStaff: StaffMember[] = staffData.map((item: any) => {
-            const userObj = Array.isArray(item.users) ? item.users[0] : item.users
-            return {
-              user_id: item.user_id,
-              role: item.role,
-              hourly_rate: item.hourly_rate ?? 0,
-              users: {
-                full_name: userObj?.full_name || null,
-                email: userObj?.email || null,
-              }
-            }
-          })
-          setStaff(formattedStaff)
-        }
+        setDefaultRestaurantId(validDefaultId)
+        setRestaurants(sortedVenues)
+        setActiveRestaurantId(validDefaultId)
 
-        const { data: announcementsData } = await supabase
-          .from('restaurant_announcements')
-          .select('*')
-          .eq('restaurant_id', firstRestaurantId)
-          .order('is_pinned', { ascending: false })
-          .order('created_at', { ascending: false })
-        if (announcementsData) setAnnouncements(announcementsData)
-
-        const { data: todosData } = await supabase
-          .from('restaurant_todos')
-          .select('*')
-          .eq('restaurant_id', firstRestaurantId)
-          .order('is_completed', { ascending: true })
-          .order('target_date', { ascending: false })
-          .order('created_at', { ascending: false })
-        if (todosData) setTodos(todosData as TodoItem[])
-
+        await loadVenueData(validDefaultId, sortedVenues)
       } else {
-        router.push("/bartender")
+        router.replace("/bartender")
         return
       }
       setLoading(false)
@@ -691,6 +712,29 @@ export default function ManagerDashboard() {
 
     fetchDashboardData()
   }, [router])
+
+  const handleSwitchVenue = async (newVenueId: string) => {
+    setActiveRestaurantId(newVenueId)
+    await loadVenueData(newVenueId)
+    showToast("Przełączono aktywny lokal", "info")
+  }
+
+  const handleSetDefaultVenue = (venueId: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!currentUserId) return
+
+    localStorage.setItem(`default_venue_${currentUserId}`, venueId)
+    setDefaultRestaurantId(venueId)
+
+    setRestaurants((prev) =>
+      [...prev].sort((a, b) =>
+        a.restaurant_id === venueId ? -1 : b.restaurant_id === venueId ? 1 : 0
+      )
+    )
+
+    const venueName = restaurants.find((r) => r.restaurant_id === venueId)?.name || "Lokal"
+    showToast(`Ustawiono "${venueName}" jako domyślny lokal.`, "success")
+  }
 
   const getRoleColor = (roleName: string) => {
     if (roleName === "manager") return "#18181b"
@@ -710,22 +754,6 @@ export default function ManagerDashboard() {
     return 1
   }
 
-  const handleCreatePeriod = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!activeRestaurantId || !newStartDate || !newEndDate) return
-
-    const { data, error } = await supabase
-      .from('schedule_periods')
-      .insert([{ restaurant_id: activeRestaurantId, start_date: newStartDate, end_date: newEndDate, status: 'open' }])
-      .select()
-
-    if (!error && data) {
-      setPeriods([data[0], ...periods])
-      setNewStartDate("")
-      setNewEndDate("")
-    }
-  }
-
   // --- ROLE ---
   const handleCreateRole = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -733,16 +761,16 @@ export default function ManagerDashboard() {
     if (!activeRestaurantId || !trimmedName) return
 
     const { data, error } = await supabase
-      .from('restaurant_roles')
+      .from("restaurant_roles")
       .insert([{ 
         restaurant_id: activeRestaurantId, 
         name: trimmedName,
         color: newRoleColor 
       }])
-      .select('id, name, color')
+      .select("id, name, color")
 
     if (error) {
-      alert("Nie udało się dodać roli (być może taka już istnieje): " + error.message)
+      showToast("Nie udało się dodać roli: " + error.message, "error")
       return
     }
 
@@ -753,29 +781,34 @@ export default function ManagerDashboard() {
       if (!newStaffRole || newStaffRole === "manager") {
         setNewStaffRole(data[0].name)
       }
+      showToast("Dodano nową rolę", "success")
     }
   }
 
   const handleDeleteRole = async (roleId: string) => {
+    const confirmed = await askConfirm("Czy na pewno chcesz usunąć tę rolę?", "Usuwanie roli")
+    if (!confirmed) return
+
     const { error } = await supabase
-      .from('restaurant_roles')
+      .from("restaurant_roles")
       .delete()
-      .eq('id', roleId)
+      .eq("id", roleId)
 
     if (error) {
-      alert("Błąd podczas usuwania roli: " + error.message)
+      showToast("Błąd podczas usuwania roli: " + error.message, "error")
       return
     }
 
     setRoles(roles.filter(r => r.id !== roleId))
+    showToast("Rola została usunięta", "info")
   }
 
-  // --- PRACOWNICY (DODAWANIE Z IMIENIEM + EDYCJA IMIENIA W TABELI) ---
+  // --- PRACOWNICY ---
   const handleAddStaff = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!activeRestaurantId || !newStaffEmail || !newStaffRole || !newStaffName.trim()) return
 
-    const { data, error } = await supabase.rpc('add_staff_member', {
+    const { data, error } = await supabase.rpc("add_staff_member", {
       p_restaurant_id: activeRestaurantId,
       p_email: newStaffEmail.trim(),
       p_role: newStaffRole,
@@ -784,15 +817,15 @@ export default function ManagerDashboard() {
     })
 
     if (error) {
-      alert("Błąd serwera: " + error.message)
-    } else if (data !== 'OK') {
-      alert(data)
+      showToast("Błąd serwera: " + error.message, "error")
+    } else if (data !== "OK") {
+      showToast(data, "error")
     } else {
-      alert("Pracownik pomyślnie dodany do lokalu!")
+      showToast("Pracownik pomyślnie dodany do lokalu.", "success")
       setNewStaffName("")
       setNewStaffEmail("")
       setNewStaffRate("")
-      window.location.reload()
+      await loadVenueData(activeRestaurantId)
     }
   }
 
@@ -811,14 +844,16 @@ export default function ManagerDashboard() {
     const trimmed = fullName.trim()
     if (!trimmed) return
 
-    const { error } = await supabase.rpc('update_staff_member_name', {
+    const { error } = await supabase.rpc("update_staff_member_name", {
       p_restaurant_id: activeRestaurantId,
       p_user_id: userId,
       p_full_name: trimmed,
     })
 
     if (error) {
-      alert("Błąd podczas zapisywania imienia: " + error.message)
+      showToast("Błąd podczas zapisywania imienia: " + error.message, "error")
+    } else {
+      showToast("Zapisano imię i inicjał", "success")
     }
   }
 
@@ -826,19 +861,20 @@ export default function ManagerDashboard() {
     if (!activeRestaurantId) return
 
     const { error } = await supabase
-      .from('restaurant_users')
+      .from("restaurant_users")
       .update({ role: updatedRole })
-      .eq('restaurant_id', activeRestaurantId)
-      .eq('user_id', userId)
+      .eq("restaurant_id", activeRestaurantId)
+      .eq("user_id", userId)
 
     if (error) {
-      alert("Błąd podczas zmiany roli: " + error.message)
+      showToast("Błąd podczas zmiany roli: " + error.message, "error")
       return
     }
 
     setStaff(staff.map(member => 
       member.user_id === userId ? { ...member, role: updatedRole } : member
     ))
+    showToast("Zmieniono rolę pracownika", "success")
   }
 
   const handleRateChangeLocal = (userId: string, value: string) => {
@@ -852,52 +888,126 @@ export default function ManagerDashboard() {
     if (!activeRestaurantId) return
 
     const { error } = await supabase
-      .from('restaurant_users')
+      .from("restaurant_users")
       .update({ hourly_rate: newRate })
-      .eq('restaurant_id', activeRestaurantId)
-      .eq('user_id', userId)
+      .eq("restaurant_id", activeRestaurantId)
+      .eq("user_id", userId)
 
     if (error) {
-      alert("Błąd podczas zapisywania stawki: " + error.message)
+      showToast("Błąd podczas zapisywania stawki: " + error.message, "error")
+    } else {
+      showToast("Zaktualizowano stawkę godzinową", "success")
     }
+  }
+
+  const handleToggleStaffVenue = async (member: StaffMember, targetVenueId: string) => {
+    const currentVenues = staffVenuesMap[member.user_id] || []
+    const isAssigned = currentVenues.includes(targetVenueId)
+    const venueName =
+      restaurants.find((r) => r.restaurant_id === targetVenueId)?.name || "Lokal"
+    const memberName =
+      member.users?.full_name || member.users?.email || "Pracownik"
+
+    // 1. ODPISANIE Z BARU (jeśli kafelek był już aktywny)
+    if (isAssigned) {
+      if (member.user_id === currentUserId) {
+        showToast("Nie możesz odpisać własnego konta managera z lokalu.", "error")
+        return
+      }
+
+      if (currentVenues.length <= 1) {
+        showToast(
+          "Pracownik musi być przypisany do przynajmniej jednego lokalu. Aby usunąć go całkowicie, użyj przycisku Usuń.",
+          "error"
+        )
+        return
+      }
+
+      const { error } = await supabase
+        .from("restaurant_users")
+        .delete()
+        .eq("restaurant_id", targetVenueId)
+        .eq("user_id", member.user_id)
+
+      if (error) {
+        showToast("Błąd podczas odpisywania z lokalu: " + error.message, "error")
+        return
+      }
+
+      setStaffVenuesMap((prev) => ({
+        ...prev,
+        [member.user_id]: (prev[member.user_id] || []).filter(
+          (id) => id !== targetVenueId
+        ),
+      }))
+      showToast(`Odpisano pracownika ${memberName} z lokalu ${venueName}.`, "info")
+      return
+    }
+
+    // 2. PRZYPISANIE DO BARU (jeśli kafelek był nieaktywny)
+    const { error } = await supabase
+      .from("restaurant_users")
+      .insert([
+        {
+          restaurant_id: targetVenueId,
+          user_id: member.user_id,
+          role: member.role,
+          hourly_rate: member.hourly_rate,
+        },
+      ])
+
+    if (error) {
+      showToast("Błąd podczas przypisywania do lokalu: " + error.message, "error")
+      return
+    }
+
+    setStaffVenuesMap((prev) => ({
+      ...prev,
+      [member.user_id]: [...(prev[member.user_id] || []), targetVenueId],
+    }))
+    showToast(`Przypisano pracownika ${memberName} do lokalu ${venueName}.`, "success")
   }
 
   const handleRemoveStaff = async (userId: string, memberName: string) => {
     if (!activeRestaurantId) return
     if (userId === currentUserId) {
-      alert("Nie możesz usunąć własnego konta managera!")
+      showToast("Nie możesz usunąć własnego konta managera.", "error")
       return
     }
 
-    const confirmed = window.confirm(`Czy na pewno chcesz usunąć pracownika "${memberName}" ze swojego lokalu?`)
+    const confirmed = await askConfirm(
+      `Czy na pewno chcesz usunąć pracownika "${memberName}" ze swojego lokalu?`,
+      "Usuwanie pracownika"
+    )
     if (!confirmed) return
 
     const { error } = await supabase
-      .from('restaurant_users')
+      .from("restaurant_users")
       .delete()
-      .eq('restaurant_id', activeRestaurantId)
-      .eq('user_id', userId)
+      .eq("restaurant_id", activeRestaurantId)
+      .eq("user_id", userId)
 
     if (error) {
-      alert("Błąd podczas usuwania pracownika: " + error.message)
+      showToast("Błąd podczas usuwania pracownika: " + error.message, "error")
       return
     }
 
     setStaff(staff.filter(member => member.user_id !== userId))
+    showToast("Pracownik został usunięty z zespołu", "info")
   }
 
-  // --- TABLICA OGŁOSZEŃ (Z ZAKRESEM DAT I POP-UPEM) ---
+  // --- TABLICA OGŁOSZEŃ ---
   const handleCreateAnnouncement = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!activeRestaurantId || !newAnnouncementTitle.trim() || !newAnnouncementContent.trim()) return
 
     if (newAnnouncementFrom && newAnnouncementUntil && newAnnouncementFrom > newAnnouncementUntil) {
-      alert("Data 'Widoczne od' nie może być późniejsza niż data 'Widoczne do'.")
+      showToast("Data początkowa nie może być późniejsza niż końcowa.", "error")
       return
     }
 
     const { data, error } = await supabase
-      .from('restaurant_announcements')
+      .from("restaurant_announcements")
       .insert([{
         restaurant_id: activeRestaurantId,
         title: newAnnouncementTitle.trim(),
@@ -909,7 +1019,7 @@ export default function ManagerDashboard() {
       .select()
 
     if (error) {
-      alert("Błąd dodawania ogłoszenia: " + error.message)
+      showToast("Błąd dodawania ogłoszenia: " + error.message, "error")
       return
     }
 
@@ -921,6 +1031,7 @@ export default function ManagerDashboard() {
       setNewAnnouncementPinned(false)
       setNewAnnouncementFrom("")
       setNewAnnouncementUntil("")
+      showToast("Opublikowano nowe ogłoszenie", "success")
     }
   }
 
@@ -928,9 +1039,9 @@ export default function ManagerDashboard() {
     e.stopPropagation()
     const newPinned = !item.is_pinned
     const { error } = await supabase
-      .from('restaurant_announcements')
+      .from("restaurant_announcements")
       .update({ is_pinned: newPinned })
-      .eq('id', item.id)
+      .eq("id", item.id)
 
     if (!error) {
       const updated = announcements
@@ -940,25 +1051,29 @@ export default function ManagerDashboard() {
       if (selectedAnnouncementModal?.id === item.id) {
         setSelectedAnnouncementModal({ ...item, is_pinned: newPinned })
       }
+      showToast(newPinned ? "Przypięto ogłoszenie" : "Odepnięto ogłoszenie", "info")
     }
   }
 
   const handleDeleteAnnouncement = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
+    const confirmed = await askConfirm("Czy na pewno chcesz usunąć to ogłoszenie?", "Usuwanie ogłoszenia")
+    if (!confirmed) return
+
     const { error } = await supabase
-      .from('restaurant_announcements')
+      .from("restaurant_announcements")
       .delete()
-      .eq('id', id)
+      .eq("id", id)
 
     if (!error) {
       setAnnouncements(announcements.filter(a => a.id !== id))
       if (selectedAnnouncementModal?.id === id) {
         setSelectedAnnouncementModal(null)
       }
+      showToast("Ogłoszenie zostało usunięte", "info")
     }
   }
 
-  // Pomocnicza funkcja określająca status widoczności ogłoszenia
   const getAnnouncementVisibilityBadge = (item: Announcement) => {
     const from = item.visible_from
     const until = item.visible_until
@@ -1016,12 +1131,12 @@ export default function ManagerDashboard() {
     })
 
     const { data, error } = await supabase
-      .from('restaurant_todos')
+      .from("restaurant_todos")
       .insert(rowsToInsert)
       .select()
 
     if (error) {
-      alert("Błąd zapisywania zadań: " + error.message)
+      showToast("Błąd zapisywania zadań: " + error.message, "error")
       return
     }
 
@@ -1029,15 +1144,16 @@ export default function ManagerDashboard() {
       setTodos(prev => [...(data as TodoItem[]), ...prev])
       if (targetDate) setSelectedTodoDate(targetDate)
       setIsTodoModalOpen(false)
+      showToast(`Dodano pomyślnie ${data.length} zadań`, "success")
     }
   }
 
   const handleToggleTodo = async (todo: TodoItem) => {
     const updatedStatus = !todo.is_completed
     const { error } = await supabase
-      .from('restaurant_todos')
+      .from("restaurant_todos")
       .update({ is_completed: updatedStatus })
-      .eq('id', todo.id)
+      .eq("id", todo.id)
 
     if (!error) {
       setTodos(prev => prev.map(t => t.id === todo.id ? { ...t, is_completed: updatedStatus } : t))
@@ -1046,48 +1162,54 @@ export default function ManagerDashboard() {
 
   const handleUpdateTodoPriority = async (todoId: string, newPriority: PriorityLevel) => {
     const { error } = await supabase
-      .from('restaurant_todos')
+      .from("restaurant_todos")
       .update({ priority: newPriority })
-      .eq('id', todoId)
+      .eq("id", todoId)
 
     if (!error) {
       setTodos(prev => prev.map(t => t.id === todoId ? { ...t, priority: newPriority } : t))
+      showToast("Zmieniono priorytet zadania", "info")
     }
   }
 
   const handleSaveTodoNote = async (todoId: string, noteText: string | null) => {
     const { error } = await supabase
-      .from('restaurant_todos')
+      .from("restaurant_todos")
       .update({ note: noteText })
-      .eq('id', todoId)
+      .eq("id", todoId)
 
     if (error) {
-      alert("Błąd zapisywania uwagi: " + error.message)
+      showToast("Błąd zapisywania uwagi: " + error.message, "error")
       return
     }
 
     setTodos(prev => prev.map(t => t.id === todoId ? { ...t, note: noteText } : t))
+    showToast(noteText ? "Zapisano uwagę" : "Usunięto uwagę", "success")
   }
 
   const handleDeleteTodo = async (id: string) => {
+    const confirmed = await askConfirm("Czy na pewno chcesz usunąć to zadanie?", "Usuwanie zadania")
+    if (!confirmed) return
+
     const { error } = await supabase
-      .from('restaurant_todos')
+      .from("restaurant_todos")
       .delete()
-      .eq('id', id)
+      .eq("id", id)
 
     if (!error) {
       setTodos(prev => prev.filter(t => t.id !== id))
+      showToast("Zadanie zostało usunięte", "info")
     }
   }
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
-    router.push("/")
+    window.location.href = "/"
   }
 
   if (loading) return <div className="p-8 text-center">Wczytywanie panelu...</div>
 
-  const activeRestaurantName = restaurants.find(r => r.restaurant_id === activeRestaurantId)?.restaurants?.name
+  const activeRestaurantName = restaurants.find(r => r.restaurant_id === activeRestaurantId)?.name
 
   const dayTodos = todos
     .filter(t => t.target_date === selectedTodoDate)
@@ -1102,21 +1224,101 @@ export default function ManagerDashboard() {
 
   return (
     <div className="min-h-screen bg-zinc-100 p-8">
+      <FeedbackHost />
+
       <div className="mx-auto max-w-5xl space-y-6">
         
         <div className="bg-white p-6 rounded-lg shadow-sm">
-          <div className="flex justify-between items-center mb-6">
-            <div>
-              <h1 className="text-2xl font-bold text-zinc-900">Panel Managera</h1>
-              <p className="text-zinc-500">Lokal: {activeRestaurantName || "Brak aktywnego lokalu"}</p>
+          <div className="flex flex-col gap-4 mb-6">
+            <div className="flex flex-wrap justify-between items-center gap-4">
+              <div>
+                <h1 className="text-2xl font-bold text-zinc-900">Panel Managera</h1>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  Aktywny lokal: <strong className="text-zinc-900">{activeRestaurantName || "Brak aktywnego lokalu"}</strong>
+                </p>
+              </div>
+              <Button variant="outline" onClick={handleLogout}>Wyloguj się</Button>
             </div>
-            <Button variant="outline" onClick={handleLogout}>Wyloguj się</Button>
-          </div>
+
+            {/* KAFELKI WYBORU LOKALU (Domyślny zawsze po lewej z gwiazdką) */}
+            {restaurants.length > 1 && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 pt-2 border-t border-zinc-100">
+                {restaurants.map((r) => {
+                  const isSelected = r.restaurant_id === activeRestaurantId
+                  const isDefault = r.restaurant_id === defaultRestaurantId
+
+                  return (
+                    <div
+                      key={r.restaurant_id}
+                      onClick={() => handleSwitchVenue(r.restaurant_id)}
+                      className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                        isSelected
+                          ? "bg-zinc-900 text-white border-zinc-900 shadow-sm"
+                          : "bg-zinc-50/80 text-zinc-800 border-zinc-200 hover:border-zinc-400 hover:bg-white"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <button
+                          type="button"
+                          onClick={(e) => handleSetDefaultVenue(r.restaurant_id, e)}
+                          title={
+                            isDefault
+                              ? "Domyślny lokal (otwiera się automatycznie po zalogowaniu)"
+                              : "Kliknij gwiazdkę, aby ustawić ten lokal jako domyślny"
+                          }
+                          className={`text-xl leading-none transition-transform hover:scale-125 shrink-0 ${
+                            isDefault
+                              ? "text-amber-400"
+                              : isSelected
+                              ? "text-zinc-500 hover:text-amber-300"
+                              : "text-zinc-300 hover:text-amber-400"
+                          }`}
+                        >
+                          {isDefault ? "★" : "☆"}
+                        </button>
+
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-sm font-bold truncate">{r.name}</p>
+                            {isDefault && (
+                              <span
+                                className={`text-[10px] font-semibold px-1.5 py-0.2 rounded ${
+                                  isSelected
+                                    ? "bg-amber-400/20 text-amber-300"
+                                    : "bg-amber-100 text-amber-800"
+                                }`}
+                              >
+                                Domyślny
+                              </span>
+                            )}
+                          </div>
+                          <p
+                            className={`text-[11px] ${
+                              isSelected ? "text-zinc-300" : "text-zinc-500"
+                            }`}
+                          >
+                            {isSelected ? "Aktualnie otwarty" : "Kliknij, aby przełączyć"}
+                          </p>
+                        </div>
+                      </div>
+
+                      {isSelected && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-400 text-zinc-950 shrink-0">
+                          Aktywny
+                        </span>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            </div>
           
           <Tabs defaultValue="schedule" className="w-full">
             <TabsList className="flex flex-wrap h-auto gap-1 w-full justify-start bg-zinc-100 p-1">
               <TabsTrigger value="schedule">Grafik</TabsTrigger>
               <TabsTrigger value="calendar">Kalendarz</TabsTrigger>
+              <TabsTrigger value="attendance">Obecność i Premie</TabsTrigger>
               <TabsTrigger value="staff">Pracownicy</TabsTrigger>
               <TabsTrigger value="roles">Role</TabsTrigger>
               <TabsTrigger value="announcements">Ogłoszenia</TabsTrigger>
@@ -1128,36 +1330,51 @@ export default function ManagerDashboard() {
             <TabsContent value="schedule" className="mt-6">
               <ManagerScheduleModule
                 restaurantId={activeRestaurantId}
+                managedRestaurants={restaurants.map((r) => ({
+                  id: r.restaurant_id,
+                  name: r.name,
+                }))}
                 staff={staff}
                 roles={roles}
               />
             </TabsContent>
 
             {/* 2. ZAKŁADKA KALENDARZA */}
-            <TabsContent value="calendar" className="mt-6"><ShiftCalendar /></TabsContent>
+            <TabsContent value="calendar" className="mt-6">
+              <ShiftCalendar restaurantId={activeRestaurantId} />
+            </TabsContent>
 
-            {/* 3. ZAKŁADKA PRACOWNICY */}
+            {/* 3. ZAKŁADKA OBECNOŚCI I PREMII */}
+            <TabsContent value="attendance" className="mt-6">
+              <AttendanceManagerModule
+                restaurantId={activeRestaurantId}
+                staff={staff}
+                roles={roles}
+              />
+            </TabsContent>
+
+            {/* 4. ZAKŁADKA PRACOWNICY */}
             <TabsContent value="staff" className="mt-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <Card className="col-span-1 h-fit">
                   <CardHeader>
                     <CardTitle>Dodaj Pracownika</CardTitle>
-                    <CardDescription>Nadaj pracownikowi wyświetlane imię i przypisz go do roli w lokalu.</CardDescription>
+                    <CardDescription>Wpisz imię i inicjał nazwiska oraz przypisz go do roli w lokalu.</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <form onSubmit={handleAddStaff} className="space-y-4">
                       <div className="space-y-2">
-                        <Label>Imię / podpis pracownika</Label>
+                        <Label>Imię i inicjał nazwiska</Label>
                         <Input
-                          placeholder="np. Szymon lub Magda O."
+                          placeholder="np. Anna K."
                           value={newStaffName}
                           onChange={e => setNewStaffName(e.target.value)}
                           required
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label>Email konta pracownika</Label>
-                        <Input type="email" placeholder="pracownik@email.com" value={newStaffEmail} onChange={e => setNewStaffEmail(e.target.value)} required />
+                        <Label>Adres e-mail konta</Label>
+                        <Input type="email" placeholder="pracownik@email.pl" value={newStaffEmail} onChange={e => setNewStaffEmail(e.target.value)} required />
                       </div>
                       <div className="space-y-2">
                         <Label>Rola w lokalu</Label>
@@ -1168,7 +1385,7 @@ export default function ManagerDashboard() {
                           required
                         >
                           {roles.length === 0 && (
-                            <option value="" disabled>Najpierw dodaj role w zakładce "Role"</option>
+                            <option value="" disabled>Najpierw dodaj role w zakładce &quot;Role&quot;</option>
                           )}
                           {roles.map(r => (
                             <option key={r.id} value={r.name}>{r.name}</option>
@@ -1178,7 +1395,7 @@ export default function ManagerDashboard() {
                       </div>
                       <div className="space-y-2">
                         <Label>Stawka godzinowa (PLN)</Label>
-                        <Input type="number" step="0.5" placeholder="np. 28.50" value={newStaffRate} onChange={e => setNewStaffRate(e.target.value)} required />
+                        <Input type="number" step="0.5" placeholder="np. 30" value={newStaffRate} onChange={e => setNewStaffRate(e.target.value)} required />
                       </div>
                       <Button type="submit" className="w-full">Dodaj do zespołu</Button>
                     </form>
@@ -1189,15 +1406,16 @@ export default function ManagerDashboard() {
                   <CardHeader>
                     <CardTitle>Twój Zespół</CardTitle>
                     <CardDescription>
-                      Możesz bezpośrednio zmienić podpis pracownika (np. „Magda O.”), jego rolę oraz stawkę godzinową.
+                      Możesz bezpośrednio edytować wyświetlane imię i inicjał, rolę oraz stawkę godzinową.
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          <TableHead>Imię / Podpis i Email</TableHead>
+                          <TableHead>Imię i inicjał / Adres e-mail</TableHead>
                           <TableHead>Rola</TableHead>
+                          <TableHead>Przypisane lokale</TableHead>
                           <TableHead className="text-right">Stawka (zł/h)</TableHead>
                           <TableHead className="text-right">Akcje</TableHead>
                         </TableRow>
@@ -1213,7 +1431,7 @@ export default function ManagerDashboard() {
                                 <div className="flex items-center gap-1.5">
                                   <Input
                                     value={member.users?.full_name || ""}
-                                    placeholder="Wpisz imię..."
+                                    placeholder="Wpisz imię i inicjał..."
                                     onChange={(e) => handleNameChangeLocal(member.user_id, e.target.value)}
                                     onBlur={(e) => handleSaveStaffName(member.user_id, e.target.value)}
                                     onKeyDown={(e) => {
@@ -1222,7 +1440,7 @@ export default function ManagerDashboard() {
                                       }
                                     }}
                                     className="h-8 max-w-[180px] text-xs font-semibold px-2 bg-white"
-                                    title="Kliknij, aby zmienić wyświetlane imię pracownika"
+                                    title="Kliknij, aby edytować"
                                   />
                                   {isMe && <span className="text-xs text-zinc-400 font-normal">(Ty)</span>}
                                 </div>
@@ -1252,6 +1470,44 @@ export default function ManagerDashboard() {
                                     ))}
                                     <option value="manager">Manager</option>
                                   </select>
+                                </div>
+                              </TableCell>
+                              {/* KLIKALNE KAFELKI PRZYPISANIA DO BARÓW */}
+                              <TableCell>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  {restaurants.map((venue) => {
+                                    const userVenues = staffVenuesMap[member.user_id] || []
+                                    const isAssignedToVenue = userVenues.includes(
+                                      venue.restaurant_id
+                                    )
+
+                                    return (
+                                      <button
+                                        key={venue.restaurant_id}
+                                        type="button"
+                                        disabled={isMe}
+                                        onClick={() =>
+                                          handleToggleStaffVenue(
+                                            member,
+                                            venue.restaurant_id
+                                          )
+                                        }
+                                        title={
+                                          isAssignedToVenue
+                                            ? `Kliknij, aby odpisać z lokalu: ${venue.name}`
+                                            : `Kliknij, aby przypisać do lokalu: ${venue.name}`
+                                        }
+                                        className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all flex items-center gap-1 ${
+                                          isAssignedToVenue
+                                            ? "bg-zinc-900 text-white border-zinc-900 shadow-2xs hover:bg-zinc-800"
+                                            : "bg-zinc-50 text-zinc-400 border-dashed border-zinc-300 hover:border-zinc-500 hover:text-zinc-700"
+                                        } disabled:opacity-60 disabled:cursor-not-allowed`}
+                                      >
+                                        <span>{isAssignedToVenue ? "✓" : "+"}</span>
+                                        <span>{venue.name}</span>
+                                      </button>
+                                    )
+                                  })}
                                 </div>
                               </TableCell>
                               <TableCell className="text-right">
@@ -1293,7 +1549,7 @@ export default function ManagerDashboard() {
               </div>
             </TabsContent>
 
-            {/* 4. ZAKŁADKA: ROLE W LOKALU */}
+            {/* 5. ZAKŁADKA: ROLE W LOKALU */}
             <TabsContent value="roles" className="mt-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <Card className="col-span-1 h-fit">
@@ -1306,7 +1562,7 @@ export default function ManagerDashboard() {
                       <div className="space-y-2">
                         <Label>Nazwa roli / stanowiska</Label>
                         <Input 
-                          placeholder="np. Barman" 
+                          placeholder="np. Obsługa sali" 
                           value={newRoleName} 
                           onChange={e => setNewRoleName(e.target.value)} 
                           required 
@@ -1342,12 +1598,12 @@ export default function ManagerDashboard() {
                 <Card className="col-span-1 md:col-span-2">
                   <CardHeader>
                     <CardTitle>Dostępne Role</CardTitle>
-                    <CardDescription>Lista ról i przypisanych im kolorów w Twoim lokalu.</CardDescription>
+                    <CardDescription>Lista ról i przypisanych im kolorów.</CardDescription>
                   </CardHeader>
                   <CardContent>
                     {roles.length === 0 ? (
                       <p className="text-sm text-zinc-500 py-4">
-                        Nie zdefiniowano jeszcze żadnych ról. Dodaj pierwszą rolę w formularzu obok.
+                        Brak zdefiniowanych ról. Dodaj pierwszą rolę w formularzu obok.
                       </p>
                     ) : (
                       <Table>
@@ -1389,20 +1645,20 @@ export default function ManagerDashboard() {
               </div>
             </TabsContent>
 
-            {/* 5. ZAKŁADKA: TABLICA OGŁOSZEŃ Z ZAKRESEM DAT I POP-UPEM */}
+            {/* 6. ZAKŁADKA: TABLICA OGŁOSZEŃ */}
             <TabsContent value="announcements" className="mt-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <Card className="col-span-1 h-fit">
                   <CardHeader>
                     <CardTitle>Nowe Ogłoszenie</CardTitle>
-                    <CardDescription>Opublikuj informację i opcjonalnie ustaw dni jej widoczności.</CardDescription>
+                    <CardDescription>Opublikuj komunikat dla zespołu.</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <form onSubmit={handleCreateAnnouncement} className="space-y-4">
                       <div className="space-y-2">
                         <Label>Tytuł ogłoszenia</Label>
                         <Input 
-                          placeholder="np. Nowa karta drinków od piątku!" 
+                          placeholder="Wpisz tytuł..." 
                           value={newAnnouncementTitle} 
                           onChange={e => setNewAnnouncementTitle(e.target.value)} 
                           required 
@@ -1412,7 +1668,7 @@ export default function ManagerDashboard() {
                         <Label>Treść</Label>
                         <textarea 
                           rows={4}
-                          placeholder="Wpisz szczegóły ogłoszenia..."
+                          placeholder="Wpisz treść ogłoszenia..."
                           value={newAnnouncementContent}
                           onChange={e => setNewAnnouncementContent(e.target.value)}
                           required
@@ -1420,7 +1676,6 @@ export default function ManagerDashboard() {
                         />
                       </div>
 
-                      {/* Zakres dat widoczności ogłoszenia */}
                       <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 space-y-3">
                         <div className="space-y-1">
                           <Label className="text-xs font-semibold text-zinc-700">Widoczne od dnia (opcjonalnie)</Label>
@@ -1440,9 +1695,6 @@ export default function ManagerDashboard() {
                             className="h-8 text-xs bg-white"
                           />
                         </div>
-                        <p className="text-[11px] text-zinc-500 leading-tight">
-                          Zostaw oba pola puste, aby ogłoszenie było widoczne na stałe.
-                        </p>
                       </div>
 
                       <label className="flex items-center gap-2 text-sm text-zinc-700 cursor-pointer select-none">
@@ -1463,13 +1715,13 @@ export default function ManagerDashboard() {
                   <CardHeader>
                     <CardTitle>Tablica Ogłoszeń</CardTitle>
                     <CardDescription>
-                      Kliknij w dowolne ogłoszenie, aby otworzyć pełny podgląd w oknie pop-up.
+                      Kliknij w ogłoszenie, aby otworzyć pełną treść.
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
                     {announcements.length === 0 ? (
                       <p className="text-sm text-zinc-500 py-4">
-                        Brak ogłoszeń na tablicy. Dodaj pierwsze ogłoszenie w formularzu obok.
+                        Brak ogłoszeń na tablicy.
                       </p>
                     ) : (
                       <div className="space-y-3">
@@ -1496,9 +1748,6 @@ export default function ManagerDashboard() {
                                     </span>
                                   </div>
                                   <h3 className="font-bold text-zinc-900 pt-0.5">{item.title}</h3>
-                                  <span className="block text-xs text-zinc-400">
-                                    Utworzono: {new Date(item.created_at).toLocaleString("pl-PL", { dateStyle: "medium", timeStyle: "short" })}
-                                  </span>
                                 </div>
                                 <div className="flex items-center gap-2 shrink-0">
                                   <Button 
@@ -1520,9 +1769,6 @@ export default function ManagerDashboard() {
                               <p className="mt-2.5 text-sm text-zinc-700 whitespace-pre-wrap line-clamp-3">
                                 {item.content}
                               </p>
-                              <span className="inline-block mt-2 text-xs font-semibold text-blue-600">
-                                Otwórz pełny widok →
-                              </span>
                             </div>
                           )
                         })}
@@ -1533,7 +1779,7 @@ export default function ManagerDashboard() {
               </div>
             </TabsContent>
 
-            {/* 6. ZAKŁADKA: TO-DO LIST */}
+            {/* 7. ZAKŁADKA: TO-DO LIST */}
             <TabsContent value="todos" className="mt-6">
               <Card>
                 <CardHeader>
@@ -1541,7 +1787,7 @@ export default function ManagerDashboard() {
                     <div>
                       <CardTitle>Lista Zadań (To-do)</CardTitle>
                       <CardDescription>
-                        Przełączaj się między dniami, sprawdzaj postępy oraz uwagi zgłoszone przez zespół.
+                        Zarządzaj zadaniami i sprawdzaj uwagi zgłoszone przez załogę.
                       </CardDescription>
                     </div>
                     <Button onClick={() => setIsTodoModalOpen(true)} className="h-9">
@@ -1556,7 +1802,6 @@ export default function ManagerDashboard() {
                         variant="outline"
                         size="sm"
                         onClick={() => setSelectedTodoDate(prev => shiftDateByDays(prev, -1))}
-                        title="Poprzedni dzień"
                         className="h-9 px-3 font-bold"
                       >
                         ←
@@ -1573,7 +1818,6 @@ export default function ManagerDashboard() {
                             if (e.target.value) setSelectedTodoDate(e.target.value)
                           }}
                           className="h-7 w-36 border-0 bg-transparent p-0 text-xs font-bold text-zinc-900 focus-visible:ring-0 cursor-pointer"
-                          title="Kliknij, aby wybrać datę z kalendarza"
                         />
                       </div>
 
@@ -1582,7 +1826,6 @@ export default function ManagerDashboard() {
                         variant="outline"
                         size="sm"
                         onClick={() => setSelectedTodoDate(prev => shiftDateByDays(prev, 1))}
-                        title="Następny dzień"
                         className="h-9 px-3 font-bold"
                       >
                         →
@@ -1610,12 +1853,6 @@ export default function ManagerDashboard() {
                 </CardHeader>
 
                 <CardContent>
-                  <div className="flex flex-wrap items-center gap-4 pb-4 mb-4 border-b text-xs text-zinc-500">
-                    <span className="flex items-center gap-1"><PriorityIcon priority="high" /> Wysoki</span>
-                    <span className="flex items-center gap-1"><PriorityIcon priority="normal" /> Normalny</span>
-                    <span className="flex items-center gap-1"><PriorityIcon priority="low" /> Niski</span>
-                  </div>
-
                   {dayTodos.length === 0 ? (
                     <div className="text-center py-12 space-y-3 border-2 border-dashed rounded-xl">
                       <p className="text-sm text-zinc-500">
@@ -1645,7 +1882,7 @@ export default function ManagerDashboard() {
               </Card>
             </TabsContent>
 
-            {/* 7. ZAKŁADKA MAGAZYNU (PRODUKTY) */}
+            {/* 8. ZAKŁADKA MAGAZYNU */}
             <TabsContent value="inventory" className="mt-6">
               <InventoryModule restaurantId={activeRestaurantId} />
             </TabsContent>
@@ -1666,30 +1903,9 @@ export default function ManagerDashboard() {
           >
             <div className="flex items-start justify-between gap-4 px-6 py-4 border-b bg-zinc-50">
               <div className="space-y-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  {selectedAnnouncementModal.is_pinned && (
-                    <span className="px-2.5 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-800 rounded-full">
-                      📌 Przypięte
-                    </span>
-                  )}
-                  <span
-                    className={`px-2.5 py-0.5 text-[11px] font-medium border rounded-full ${
-                      getAnnouncementVisibilityBadge(selectedAnnouncementModal).className
-                    }`}
-                  >
-                    {getAnnouncementVisibilityBadge(selectedAnnouncementModal).label}
-                  </span>
-                </div>
-                <h2 className="text-xl font-bold text-zinc-900 pt-1">
+                <h2 className="text-xl font-bold text-zinc-900">
                   {selectedAnnouncementModal.title}
                 </h2>
-                <p className="text-xs text-zinc-400">
-                  Opublikowano:{" "}
-                  {new Date(selectedAnnouncementModal.created_at).toLocaleString("pl-PL", {
-                    dateStyle: "long",
-                    timeStyle: "short",
-                  })}
-                </p>
               </div>
               <button
                 type="button"

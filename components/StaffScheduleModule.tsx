@@ -6,9 +6,12 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { showToast } from "@/components/ui/feedback"
 
 type SchedulePeriod = {
   id: string
+  restaurant_id: string
+  linked_restaurant_ids?: string[]
   title: string | null
   start_date: string
   end_date: string
@@ -26,13 +29,16 @@ type AvailabilityDraft = {
   note: string
 }
 
-type ShiftRecord = {
+type GlobalShiftRecord = {
   id: string
   period_id: string
+  restaurant_id: string
+  restaurant_name: string
   user_id: string
   work_date: string
   start_time: string
   end_time: string | null
+  is_published: boolean
 }
 
 const getDatesInRange = (startStr: string, endStr: string): string[] => {
@@ -66,6 +72,14 @@ const formatDayReadable = (dateStr: string) => {
   }
 }
 
+const canSubmitToPeriod = (period: SchedulePeriod): boolean => {
+  if (period.status !== "open") return false
+  const now = new Date()
+  if (period.submissions_open_at && new Date(period.submissions_open_at) > now) return false
+  if (period.submissions_close_at && new Date(period.submissions_close_at) < now) return false
+  return true
+}
+
 export function StaffScheduleModule({
   restaurantId,
   currentUserId,
@@ -73,44 +87,129 @@ export function StaffScheduleModule({
   restaurantId: string | null
   currentUserId: string | null
 }) {
+  const [myRestaurants, setMyRestaurants] = useState<{ id: string; name: string }[]>([])
   const [periods, setPeriods] = useState<SchedulePeriod[]>([])
   const [activePeriod, setActivePeriod] = useState<SchedulePeriod | null>(null)
   const [drafts, setDrafts] = useState<Record<string, AvailabilityDraft>>({})
-  const [myShifts, setMyShifts] = useState<ShiftRecord[]>([])
+  const [myShifts, setMyShifts] = useState<GlobalShiftRecord[]>([])
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    if (!restaurantId || !currentUserId) return
-    const fetchPeriodsAndShifts = async () => {
+    if (!currentUserId) return
+    const fetchAllMyVenuesAndSchedules = async () => {
       setLoading(true)
+
+      const { data: memberships } = await supabase
+        .from("restaurant_users")
+        .select("restaurant_id, restaurants (id, name)")
+        .eq("user_id", currentUserId)
+
+      const venues = (memberships || []).map((m: any) => {
+        const r = Array.isArray(m.restaurants) ? m.restaurants[0] : m.restaurants
+        return { id: m.restaurant_id, name: r?.name || "Lokal" }
+      })
+      setMyRestaurants(venues)
+      const myVenueIds = venues.map((v) => v.id)
+
+      if (myVenueIds.length === 0) {
+        setLoading(false)
+        return
+      }
+
       const [perRes, shiftRes] = await Promise.all([
         supabase
           .from("schedule_periods")
           .select("*")
-          .eq("restaurant_id", restaurantId)
           .order("start_date", { ascending: false }),
-        supabase
-          .from("schedule_shifts")
-          .select("*")
-          .eq("restaurant_id", restaurantId)
-          .eq("user_id", currentUserId),
+        supabase.rpc("get_users_shifts_in_range", {
+          p_user_ids: [currentUserId],
+          p_start_date: "2020-01-01",
+          p_end_date: "2035-12-31",
+        }),
       ])
 
-      if (perRes.data) setPeriods(perRes.data as SchedulePeriod[])
-      if (shiftRes.data) setMyShifts(shiftRes.data as ShiftRecord[])
+      if (perRes.data) {
+        const rawRelevant = (perRes.data as SchedulePeriod[]).filter((p) => {
+          const linked = Array.isArray(p.linked_restaurant_ids)
+            ? p.linked_restaurant_ids
+            : [p.restaurant_id]
+          return (
+            myVenueIds.includes(p.restaurant_id) ||
+            linked.some((id) => myVenueIds.includes(id))
+          )
+        })
+
+        const groupedByDates = new Map<string, SchedulePeriod>()
+
+        rawRelevant.forEach((p) => {
+          const dateKey = `${p.start_date}_${p.end_date}`
+          const existing = groupedByDates.get(dateKey)
+
+          const currentLinked =
+            Array.isArray(p.linked_restaurant_ids) && p.linked_restaurant_ids.length > 0
+              ? p.linked_restaurant_ids
+              : [p.restaurant_id]
+
+          if (!existing) {
+            groupedByDates.set(dateKey, {
+              ...p,
+              linked_restaurant_ids: Array.from(new Set([p.restaurant_id, ...currentLinked])),
+            })
+          } else {
+            const mergedLinked = Array.from(
+              new Set([
+                ...(existing.linked_restaurant_ids || [existing.restaurant_id]),
+                p.restaurant_id,
+                ...currentLinked,
+              ])
+            )
+
+            const existingIsOpen = canSubmitToPeriod(existing)
+            const currentIsOpen = canSubmitToPeriod(p)
+            const preferCurrent = !existingIsOpen && currentIsOpen
+
+            groupedByDates.set(dateKey, {
+              ...existing,
+              id: preferCurrent ? p.id : existing.id,
+              restaurant_id: preferCurrent ? p.restaurant_id : existing.restaurant_id,
+              title: existing.title || p.title,
+              status: existing.status === "open" || p.status === "open" ? "open" : existing.status,
+              submissions_open_at: preferCurrent
+                ? p.submissions_open_at
+                : existing.submissions_open_at,
+              submissions_close_at: preferCurrent
+                ? p.submissions_close_at
+                : existing.submissions_close_at,
+              is_published: Boolean(existing.is_published || p.is_published),
+              linked_restaurant_ids: mergedLinked,
+            })
+          }
+        })
+
+        setPeriods(Array.from(groupedByDates.values()))
+      }
+
+      if (shiftRes.data) {
+        setMyShifts(shiftRes.data as GlobalShiftRecord[])
+      }
       setLoading(false)
     }
-    fetchPeriodsAndShifts()
+
+    fetchAllMyVenuesAndSchedules()
   }, [restaurantId, currentUserId])
 
-  // Sprawdza, czy pracownik może w tej minucie składać/edytować dyspozycyjność
-  const canSubmitToPeriod = (period: SchedulePeriod): boolean => {
-    if (period.status !== "open") return false
-    const now = new Date()
-    if (period.submissions_open_at && new Date(period.submissions_open_at) > now) return false
-    if (period.submissions_close_at && new Date(period.submissions_close_at) < now) return false
-    return true
+  const getVenueNamesForPeriod = (period: SchedulePeriod) => {
+    const linked =
+      Array.isArray(period.linked_restaurant_ids) && period.linked_restaurant_ids.length > 0
+        ? period.linked_restaurant_ids
+        : [period.restaurant_id]
+
+    const myMatchingVenues = myRestaurants.filter((r) => linked.includes(r.id))
+    if (myMatchingVenues.length > 0) {
+      return myMatchingVenues.map((r) => r.name).join(" + ")
+    }
+    return myRestaurants.find((r) => r.id === period.restaurant_id)?.name || "Lokal"
   }
 
   const openAvailabilityForm = async (period: SchedulePeriod) => {
@@ -120,8 +219,9 @@ export function StaffScheduleModule({
     const { data } = await supabase
       .from("schedule_availabilities")
       .select("*")
-      .eq("period_id", period.id)
       .eq("user_id", currentUserId)
+      .gte("work_date", period.start_date)
+      .lte("work_date", period.end_date)
 
     const days = getDatesInRange(period.start_date, period.end_date)
     const nextDrafts: Record<string, AvailabilityDraft> = {}
@@ -169,35 +269,28 @@ export function StaffScheduleModule({
 
   const handleSaveAvailability = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!activePeriod || !restaurantId || !currentUserId) return
+    if (!activePeriod || !currentUserId) return
 
     if (!canSubmitToPeriod(activePeriod)) {
-      alert("Czas na składanie dyspozycyjności dla tego okresu już minął lub został zamknięty.")
+      showToast("Czas na składanie dyspozycyjności dla tego okresu już minął.", "error")
       return
     }
 
     setSaving(true)
 
-    // 1. Czyścimy poprzedni zapis tego pracownika w tym okresie
-    const { error: delError } = await supabase
+    await supabase
       .from("schedule_availabilities")
       .delete()
-      .eq("period_id", activePeriod.id)
       .eq("user_id", currentUserId)
+      .gte("work_date", activePeriod.start_date)
+      .lte("work_date", activePeriod.end_date)
 
-    if (delError) {
-      setSaving(false)
-      alert("Błąd podczas zapisu: " + delError.message)
-      return
-    }
-
-    // 2. Zapisujemy wszystkie zaznaczone dni wraz z opcjami zaawansowanymi
     const selectedDays = Object.entries(drafts).filter(([, d]) => d.is_available)
 
     if (selectedDays.length > 0) {
       const rowsToInsert = selectedDays.map(([workDate, d]) => ({
         period_id: activePeriod.id,
-        restaurant_id: restaurantId,
+        restaurant_id: activePeriod.restaurant_id,
         user_id: currentUserId,
         work_date: workDate,
         is_available: true,
@@ -208,17 +301,17 @@ export function StaffScheduleModule({
 
       const { error: insError } = await supabase
         .from("schedule_availabilities")
-        .insert(rowsToInsert)
+        .upsert(rowsToInsert, { onConflict: "user_id,work_date" })
 
       if (insError) {
         setSaving(false)
-        alert("Błąd zapisywania dyspozycyjności: " + insError.message)
+        showToast("Błąd zapisywania dyspozycyjności: " + insError.message, "error")
         return
       }
     }
 
     setSaving(false)
-    alert("Twoja dyspozycyjność została zapisana! Możesz ją edytować do momentu zamknięcia zapisów.")
+    showToast("Twoja dyspozycyjność została zapisana.", "success")
     setActivePeriod(null)
   }
 
@@ -227,16 +320,16 @@ export function StaffScheduleModule({
   }
 
   // ==========================================================================
-  // WIDOK 1: LISTA OKRESÓW GRAFIKOWYCH I TWOICH ZMIAN
+  // WIDOK 1: LISTA OKRESÓW GRAFIKOWYCH
   // ==========================================================================
   if (!activePeriod) {
     return (
       <div className="space-y-6">
         <Card>
           <CardHeader>
-            <CardTitle>Okresy Grafikowe i Zgłoszenia Dyspozycyjności</CardTitle>
+            <CardTitle>Okresy Grafikowe i Dyspozycyjność</CardTitle>
             <CardDescription>
-              Kliknij w otwarty okres, aby zaznaczyć dni, w które możesz pracować, lub sprawdzić przypisane zmiany.
+              Kliknij w otwarty okres, aby zaznaczyć dni, w które możesz pracować.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -248,15 +341,20 @@ export function StaffScheduleModule({
               <div className="space-y-3">
                 {periods.map((period) => {
                   const isOpenForSubmissions = canSubmitToPeriod(period)
-                  const periodShifts = period.is_published
-                    ? myShifts
-                        .filter((s) => s.period_id === period.id)
-                        .sort((a, b) => a.work_date.localeCompare(b.work_date))
-                    : []
+                  const venueLabel = getVenueNamesForPeriod(period)
+
+                  const periodShifts = myShifts
+                    .filter(
+                      (s) =>
+                        s.is_published &&
+                        s.work_date >= period.start_date &&
+                        s.work_date <= period.end_date
+                    )
+                    .sort((a, b) => a.work_date.localeCompare(b.work_date))
 
                   return (
                     <div
-                      key={period.id}
+                      key={`${period.start_date}_${period.end_date}`}
                       onClick={() => openAvailabilityForm(period)}
                       className="group p-5 rounded-xl border bg-white hover:border-zinc-900 hover:shadow-md transition-all cursor-pointer space-y-4"
                     >
@@ -272,8 +370,15 @@ export function StaffScheduleModule({
                                 🔒 Zapisy zamknięte
                               </span>
                             )}
+
+                            <span className="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+                              🏠 {venueLabel}
+                            </span>
+
                             {period.title && (
-                              <span className="text-sm font-bold text-zinc-900">{period.title}</span>
+                              <span className="text-sm font-bold text-zinc-900">
+                                {period.title}
+                              </span>
                             )}
                           </div>
 
@@ -305,7 +410,6 @@ export function StaffScheduleModule({
                         </Button>
                       </div>
 
-                      {/* Podgląd przypisanych zmian pracownika w tym okresie */}
                       {periodShifts.length > 0 && (
                         <div className="pt-3 border-t">
                           <p className="text-xs font-bold text-zinc-700 mb-2">
@@ -315,10 +419,16 @@ export function StaffScheduleModule({
                             {periodShifts.map((s) => (
                               <span
                                 key={s.id}
-                                className="px-3 py-1 rounded-lg bg-zinc-900 text-white text-xs font-semibold"
+                                className="px-3 py-1 rounded-lg bg-zinc-900 text-white text-xs font-semibold flex items-center gap-1.5"
                               >
-                                📅 {s.work_date}: {s.start_time}
-                                {s.end_time ? ` – ${s.end_time}` : ""}
+                                <span>📅 {s.work_date}:</span>
+                                <span className="text-emerald-300 font-bold">
+                                  {s.start_time}
+                                  {s.end_time ? ` – ${s.end_time}` : ""}
+                                </span>
+                                <span className="px-1.5 py-0.2 rounded bg-white/15 text-[10px]">
+                                  🏠 {s.restaurant_name}
+                                </span>
                               </span>
                             ))}
                           </div>
@@ -336,7 +446,7 @@ export function StaffScheduleModule({
   }
 
   // ==========================================================================
-  // WIDOK 2: FORMULARZ DYSPOZYCYJNOŚCI Z KLIKALNYMI DNIAMI I ZAAWANSOWANYMI OPCJAMI
+  // WIDOK 2: FORMULARZ DYSPOZYCYJNOŚCI
   // ==========================================================================
   const periodDays = getDatesInRange(activePeriod.start_date, activePeriod.end_date)
   const isEditable = canSubmitToPeriod(activePeriod)
@@ -354,12 +464,17 @@ export function StaffScheduleModule({
             >
               ← Wróć do listy okresów
             </button>
-            <CardTitle className="text-xl">
-              Formularz dyspozycyjności: {activePeriod.start_date} — {activePeriod.end_date}
-            </CardTitle>
+            <div className="flex flex-wrap items-center gap-2">
+              <CardTitle className="text-xl">
+                Formularz dyspozycyjności: {activePeriod.start_date} — {activePeriod.end_date}
+              </CardTitle>
+              <span className="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+                🏠 {getVenueNamesForPeriod(activePeriod)}
+              </span>
+            </div>
             <CardDescription>
               {isEditable
-                ? "Zaznacz dni, które Cię interesują. Pod każdym dniem możesz rozwinąć Zaawansowane ustawienia, aby podać godziny graniczne lub notatkę."
+                ? "Zaznacz dni, które Cię interesują. Pod każdym dniem możesz rozwinąć Zaawansowane ustawienia."
                 : "Przyjmowanie zgłoszeń na ten okres jest obecnie zamknięte (tryb tylko do odczytu)."}
             </CardDescription>
           </div>
@@ -404,8 +519,9 @@ export function StaffScheduleModule({
               max_end_time: "",
               note: "",
             }
-            const assignedShift = myShifts.find(
-              (s) => s.period_id === activePeriod.id && s.work_date === dateStr
+
+            const assignedShiftsOnDay = myShifts.filter(
+              (s) => s.is_published && s.work_date === dateStr
             )
 
             return (
@@ -418,7 +534,6 @@ export function StaffScheduleModule({
                 }`}
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  {/* Klikalny dzień z checkboxem */}
                   <label className="flex items-center gap-3 cursor-pointer flex-1 select-none">
                     <input
                       type="checkbox"
@@ -437,15 +552,17 @@ export function StaffScheduleModule({
                     </div>
                   </label>
 
-                  <div className="flex items-center gap-2">
-                    {assignedShift && (
-                      <span className="px-2.5 py-1 rounded-full bg-zinc-900 text-white text-xs font-bold">
-                        ✓ Przypisana zmiana: {assignedShift.start_time}
-                        {assignedShift.end_time ? ` – ${assignedShift.end_time}` : ""}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {assignedShiftsOnDay.map((sh) => (
+                      <span
+                        key={sh.id}
+                        className="px-2.5 py-1 rounded-full bg-zinc-900 text-white text-xs font-bold"
+                      >
+                        ✓ Zmiana ({sh.restaurant_name}): {sh.start_time}
+                        {sh.end_time ? ` – ${sh.end_time}` : ""}
                       </span>
-                    )}
+                    ))}
 
-                    {/* Przycisk rozwijania Zaawansowanych ustawień pod zaznaczonym dniem */}
                     {d.is_available && (
                       <Button
                         type="button"
@@ -466,7 +583,6 @@ export function StaffScheduleModule({
                   </div>
                 </div>
 
-                {/* Sekcja Zaawansowanych ustawień pod wybranym dniem */}
                 {d.is_available && d.show_advanced && (
                   <div className="mt-3 pt-3 border-t border-emerald-200/80 grid grid-cols-1 sm:grid-cols-3 gap-3 bg-white/90 p-3 rounded-lg">
                     <div className="space-y-1">
@@ -504,7 +620,7 @@ export function StaffScheduleModule({
                         Notatka dla managera (opcjonalnie):
                       </Label>
                       <Input
-                        placeholder="np. Wolałbym nie, ale jak trzeba to będę..."
+                        placeholder="Dodatkowe informacje o dostępności..."
                         disabled={!isEditable}
                         value={d.note}
                         onChange={(e) =>

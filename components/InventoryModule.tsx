@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { askConfirm, showToast } from "@/components/ui/feedback"
 
 type Category = {
   id: string
@@ -101,7 +102,7 @@ function CategoryModal({
           <div className="space-y-2">
             <Label>Nazwa kategorii</Label>
             <Input
-              placeholder="np. Alkohole mocne, Syropy, Owoce..."
+              placeholder="Wpisz nazwę kategorii..."
               value={name}
               onChange={(e) => setName(e.target.value)}
               autoFocus
@@ -111,7 +112,7 @@ function CategoryModal({
           <div className="space-y-2">
             <Label>Krótki opis (opcjonalnie)</Label>
             <Input
-              placeholder="np. Wódki, giny, rumy i whisky na głównym barze"
+              placeholder="Dodatkowy opis kategorii..."
               value={desc}
               onChange={(e) => setDesc(e.target.value)}
             />
@@ -211,7 +212,7 @@ function ProductBatchModal({
     e.preventDefault()
     const valid = draftProducts.filter(p => p.name.trim() !== "")
     if (valid.length === 0) {
-      alert("Wpisz nazwę przynajmniej jednego produktu.")
+      showToast("Wpisz nazwę przynajmniej jednego produktu.", "error")
       return
     }
     setSaving(true)
@@ -278,7 +279,7 @@ function ProductBatchModal({
 
                 <Input
                   ref={(el) => { productInputRefs.current[index] = el }}
-                  placeholder={index === 0 ? "np. Gin Bombay Sapphire 0.7l..." : "Kolejny produkt..."}
+                  placeholder={index === 0 ? "Wpisz nazwę produktu..." : "Kolejny produkt..."}
                   value={item.name}
                   onChange={(e) => updateDraftProduct(index, { name: e.target.value })}
                   onKeyDown={(e) => handleProductKeyDown(e, index)}
@@ -404,6 +405,9 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
 
     const fetchInventory = async () => {
       setLoading(true)
+      setSelectedCategory(null)
+      setShowShortagesOnly(false)
+
       const [catRes, prodRes] = await Promise.all([
         supabase
           .from("product_categories")
@@ -532,20 +536,22 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
       .select("id, name, description")
 
     if (error) {
-      alert("Błąd tworzenia kategorii: " + error.message)
+      showToast("Błąd tworzenia kategorii: " + error.message, "error")
       return
     }
 
     if (data && data[0]) {
       setCategories(prev => [...prev, data[0]].sort((a, b) => a.name.localeCompare(b.name, "pl")))
       setIsCategoryModalOpen(false)
+      showToast("Utworzono nową kategorię produktów.", "success")
     }
   }
 
   const handleDeleteCategory = async (cat: Category, e: React.MouseEvent) => {
     e.stopPropagation()
-    const confirmed = window.confirm(
-      `Czy na pewno chcesz usunąć kategorię "${cat.name}" wraz ze wszystkimi przypisanymi do niej produktami?`
+    const confirmed = await askConfirm(
+      `Czy na pewno chcesz usunąć kategorię "${cat.name}" wraz ze wszystkimi przypisanymi do niej produktami?`,
+      "Usuwanie kategorii"
     )
     if (!confirmed) return
 
@@ -555,13 +561,14 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
       .eq("id", cat.id)
 
     if (error) {
-      alert("Błąd podczas usuwania kategorii: " + error.message)
+      showToast("Błąd podczas usuwania kategorii: " + error.message, "error")
       return
     }
 
     setCategories(prev => prev.filter(c => c.id !== cat.id))
     setProducts(prev => prev.filter(p => p.category_id !== cat.id))
     if (selectedCategory?.id === cat.id) setSelectedCategory(null)
+    showToast("Kategoria została usunięta.", "info")
   }
 
   // --- PRODUKTY ---
@@ -592,13 +599,14 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
       .select("id, category_id, name, unit, quantity, min_quantity, image_url")
 
     if (error) {
-      alert("Błąd zapisywania produktów: " + error.message)
+      showToast("Błąd zapisywania produktów: " + error.message, "error")
       return
     }
 
     if (data) {
       setProducts(prev => [...prev, ...(data as Product[])])
       setIsProductModalOpen(false)
+      showToast(`Dodano pomyślnie produkty (${data.length}).`, "success")
     }
   }
 
@@ -608,7 +616,7 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
 
     const url = await uploadProductImage(file)
     if (!url) {
-      alert("Nie udało się wgrać zdjęcia.")
+      showToast("Nie udało się wgrać zdjęcia.", "error")
       return
     }
 
@@ -622,6 +630,7 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
         await deleteFileFromStorage(existingProduct.image_url)
       }
       setProducts(prev => prev.map(p => (p.id === productId ? { ...p, image_url: url } : p)))
+      showToast("Zaktualizowano zdjęcie produktu.", "success")
     }
   }
 
@@ -637,10 +646,14 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
     const safeQty = Math.max(0, newQty)
     setProducts(prev => prev.map(p => (p.id === productId ? { ...p, quantity: safeQty } : p)))
 
-    await supabase
+    const { error } = await supabase
       .from("restaurant_products")
       .update({ quantity: safeQty })
       .eq("id", productId)
+
+    if (error) {
+      showToast("Błąd zapisu stanu: " + error.message, "error")
+    }
   }
 
   // Edycja progu minimalnego na kafelku
@@ -655,26 +668,39 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
     const safeMin = Math.max(0, newMinQty)
     setProducts(prev => prev.map(p => (p.id === productId ? { ...p, min_quantity: safeMin } : p)))
 
-    await supabase
+    const { error } = await supabase
       .from("restaurant_products")
       .update({ min_quantity: safeMin })
       .eq("id", productId)
+
+    if (error) {
+      showToast("Błąd zapisu progu minimalnego: " + error.message, "error")
+    }
   }
 
   const handleDeleteProduct = async (productId: string) => {
     const existingProduct = products.find(p => p.id === productId)
+    const confirmed = await askConfirm(
+      `Czy na pewno chcesz usunąć produkt "${existingProduct?.name || ""}"?`,
+      "Usuwanie produktu"
+    )
+    if (!confirmed) return
 
     const { error } = await supabase
       .from("restaurant_products")
       .delete()
       .eq("id", productId)
 
-    if (!error) {
-      if (existingProduct?.image_url) {
-        await deleteFileFromStorage(existingProduct.image_url)
-      }
-      setProducts(prev => prev.filter(p => p.id !== productId))
+    if (error) {
+      showToast("Błąd podczas usuwania produktu: " + error.message, "error")
+      return
     }
+
+    if (existingProduct?.image_url) {
+      await deleteFileFromStorage(existingProduct.image_url)
+    }
+    setProducts(prev => prev.filter(p => p.id !== productId))
+    showToast("Produkt został usunięty.", "info")
   }
 
   const getCategoryName = (catId: string) => {
@@ -736,7 +762,6 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
   const renderProductCard = (prod: Product, showCategoryBadge = false) => {
     const isZero = Number(prod.quantity) <= 0
     const isBelowThreshold = !isZero && Number(prod.quantity) < Number(prod.min_quantity)
-    const isShortage = isZero || isBelowThreshold
 
     return (
       <div
@@ -916,7 +941,7 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
             {categories.length === 0 ? (
               <div className="text-center py-12 space-y-3 border-2 border-dashed rounded-xl">
                 <p className="text-sm text-zinc-500">
-                  Nie masz jeszcze żadnych kategorii produktów (np. Alkohole, Syropy, Owoce).
+                  Nie utworzono jeszcze żadnych kategorii produktów.
                 </p>
                 <Button variant="outline" onClick={() => setIsCategoryModalOpen(true)}>
                   Utwórz pierwszą kategorię
