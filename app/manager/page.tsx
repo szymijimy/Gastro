@@ -43,6 +43,14 @@ const ROLE_COLORS = [
 
 
 
+const formatDisplayDate = (dateStr: string): string => {
+  if (!dateStr) return ""
+  const [y, m, d] = dateStr.split("-").map(Number)
+  const dateObj = new Date(y, m - 1, d)
+  const monthShort = dateObj.toLocaleDateString("pl-PL", { month: "short" }).replace(".", "")
+  return `${d} ${monthShort}`
+}
+
 type StaffMember = {
   user_id: string
   role: string
@@ -1062,26 +1070,28 @@ function ManagerDashboard() {
 
 
   return (
-    <div className="min-h-screen bg-zinc-100 p-8">
+    <div className="min-h-screen bg-zinc-100 p-2.5 sm:p-6 md:p-8">
       <FeedbackHost />
 
-      <div className="mx-auto max-w-5xl space-y-6">
+      <div className="mx-auto max-w-5xl space-y-4 sm:space-y-6">
         
-        <div className="bg-white p-6 rounded-lg shadow-sm">
-          <div className="flex flex-col gap-4 mb-6">
-            <div className="flex flex-wrap justify-between items-center gap-4">
+        <div className="bg-white p-3.5 sm:p-6 rounded-xl sm:rounded-2xl shadow-sm space-y-4 sm:space-y-5">
+          <div className="flex flex-col gap-3 sm:gap-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <h1 className="text-2xl font-bold text-zinc-900">Panel Managera</h1>
+                <h1 className="text-xl sm:text-2xl font-bold text-zinc-900 tracking-tight">Panel Managera</h1>
                 <p className="text-xs text-zinc-500 mt-0.5">
                   Aktywny lokal: <strong className="text-zinc-900">{activeRestaurantName || "Brak aktywnego lokalu"}</strong>
                 </p>
               </div>
-              <Button variant="outline" onClick={handleLogout}>Wyloguj się</Button>
+              <Button variant="outline" size="sm" className="h-9 shrink-0 text-xs px-3 self-start sm:self-auto" onClick={handleLogout}>
+                Wyloguj się
+              </Button>
             </div>
 
             {/* KAFELKI WYBORU LOKALU (Domyślny zawsze po lewej z gwiazdką) */}
             {restaurants.length > 1 && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 pt-2 border-t border-zinc-100">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 sm:gap-3 pt-2 border-t border-zinc-100">
                 {restaurants.map((r) => {
                   const isSelected = r.restaurant_id === activeRestaurantId
                   const isDefault = r.restaurant_id === defaultRestaurantId
@@ -1090,7 +1100,7 @@ function ManagerDashboard() {
                     <div
                       key={r.restaurant_id}
                       onClick={() => handleSwitchVenue(r.restaurant_id)}
-                      className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                      className={`p-3 sm:p-3.5 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between gap-2.5 ${
                         isSelected
                           ? "bg-zinc-900 text-white border-zinc-900 shadow-sm"
                           : "bg-zinc-50/80 text-zinc-800 border-zinc-200 hover:border-zinc-400 hover:bg-white"
@@ -1151,19 +1161,47 @@ function ManagerDashboard() {
                 })}
               </div>
             )}
-            </div>
+          </div>
           
-          <Tabs defaultValue="schedule" className="w-full">
-            <TabsList className="flex flex-wrap h-auto gap-1 w-full justify-start bg-zinc-100 p-1">
-              <TabsTrigger value="schedule">Grafik</TabsTrigger>
-              <TabsTrigger value="calendar">Kalendarz</TabsTrigger>
-              <TabsTrigger value="attendance">Obecność i Premie</TabsTrigger>
-              <TabsTrigger value="staff">Pracownicy</TabsTrigger>
-              <TabsTrigger value="roles">Role</TabsTrigger>
-              <TabsTrigger value="announcements">Ogłoszenia</TabsTrigger>
-              <TabsTrigger value="todos">To-do list</TabsTrigger>
-              <TabsTrigger value="inventory">Produkty</TabsTrigger>
-            </TabsList>
+          <Tabs defaultValue="schedule" className="w-full pt-1">
+            <div className="w-full overflow-x-auto no-scrollbar scroll-smooth -mx-1 px-1 sm:mx-0 sm:px-0 pb-1">
+              <TabsList className="inline-flex w-max min-w-full sm:w-auto h-auto items-center gap-1 bg-zinc-100/90 p-1 rounded-xl border border-zinc-200/50">
+                <TabsTrigger value="schedule" className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
+                  <span>📅 Grafik</span>
+                </TabsTrigger>
+                <TabsTrigger value="calendar" className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
+                  <span>🗓️ Kalendarz</span>
+                </TabsTrigger>
+                <TabsTrigger value="attendance" className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
+                  <span>⏱️ Obecność i Premie</span>
+                </TabsTrigger>
+                <TabsTrigger value="staff" className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
+                  <span>👥 Pracownicy</span>
+                  {staff.length > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-zinc-200 text-zinc-800">
+                      {staff.length}
+                    </span>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger value="roles" className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
+                  <span>🏷️ Role</span>
+                </TabsTrigger>
+                <TabsTrigger value="announcements" className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
+                  <span>📢 Ogłoszenia</span>
+                  {announcements.length > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                      {announcements.length}
+                    </span>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger value="todos" className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
+                  <span>📋 To-do list</span>
+                </TabsTrigger>
+                <TabsTrigger value="inventory" className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
+                  <span>📦 Magazyn</span>
+                </TabsTrigger>
+              </TabsList>
+            </div>
             
             {/* 1. ZAKŁADKA GRAFIKU */}
             <TabsContent value="schedule" keepMounted className="mt-6">
@@ -1245,8 +1283,8 @@ function ManagerDashboard() {
                       Możesz bezpośrednio edytować wyświetlane imię i inicjał, rolę oraz stawkę godzinową.
                     </CardDescription>
                   </CardHeader>
-                  <CardContent>
-                    <Table>
+                  <CardContent className="p-3 sm:p-6 pt-0">
+                    <Table className="min-w-[650px]">
                       <TableHeader>
                         <TableRow>
                           <TableHead>Imię i inicjał / Adres e-mail</TableHead>
@@ -1442,7 +1480,7 @@ function ManagerDashboard() {
                         Brak zdefiniowanych ról. Dodaj pierwszą rolę w formularzu obok.
                       </p>
                     ) : (
-                      <Table>
+                      <Table className="min-w-[420px]">
                         <TableHeader>
                           <TableRow>
                             <TableHead>Stanowisko</TableHead>
@@ -1631,29 +1669,31 @@ function ManagerDashboard() {
                     </Button>
                   </div>
 
-                  <div className="mt-4 pt-4 border-t flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
+                  <div className="mt-4 pt-4 border-t flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-1.5 w-full sm:w-auto min-w-0">
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
                         onClick={() => tasks.goToPrevDay()}
-                        className="h-9 px-3 font-bold"
+                        className="h-9 w-9 p-0 font-bold shrink-0 shadow-2xs"
+                        title="Poprzedni dzień"
                       >
                         ←
                       </Button>
 
-                      <div className="flex items-center gap-2 bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-1">
-                        <span className="text-xs font-semibold text-zinc-700 whitespace-nowrap">
-                          {getFriendlyDateLabel(tasks.selectedDate, todayStr)}:
+                      <div className="relative flex-1 sm:flex-initial min-w-0 flex items-center justify-center gap-1.5 bg-zinc-50 hover:bg-zinc-100/90 border border-zinc-200 rounded-lg px-2.5 py-1.5 transition-colors cursor-pointer text-center shadow-2xs">
+                        <span className="text-xs font-bold text-zinc-900 truncate">
+                          📅 {getFriendlyDateLabel(tasks.selectedDate, todayStr)} • {formatDisplayDate(tasks.selectedDate)}
                         </span>
-                        <Input
+                        <input
                           type="date"
                           value={tasks.selectedDate}
                           onChange={(e) => {
                             if (e.target.value) tasks.setSelectedDate(e.target.value)
                           }}
-                          className="h-7 w-36 border-0 bg-transparent p-0 text-xs font-bold text-zinc-900 focus-visible:ring-0 cursor-pointer"
+                          className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                          title="Kliknij, aby wybrać inną datę"
                         />
                       </div>
 
@@ -1662,7 +1702,8 @@ function ManagerDashboard() {
                         variant="outline"
                         size="sm"
                         onClick={() => tasks.goToNextDay()}
-                        className="h-9 px-3 font-bold"
+                        className="h-9 w-9 p-0 font-bold shrink-0 shadow-2xs"
+                        title="Następny dzień"
                       >
                         →
                       </Button>
@@ -1673,9 +1714,10 @@ function ManagerDashboard() {
                           variant="ghost"
                           size="sm"
                           onClick={() => tasks.goToToday()}
-                          className="h-9 text-xs text-blue-600 hover:text-blue-700"
+                          className="h-9 px-2 text-xs text-blue-600 hover:text-blue-700 font-bold shrink-0"
+                          title="Wróć do dzisiejszego dnia"
                         >
-                          Wróć do dzisiaj
+                          Dzisiaj
                         </Button>
                       )}
                     </div>

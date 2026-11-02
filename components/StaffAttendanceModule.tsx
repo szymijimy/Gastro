@@ -32,6 +32,16 @@ export const calculateShiftDurationHours = (startTime: string, endTime: string):
   return Math.round(diffHours * 100) / 100
 }
 
+export const formatLogDate = (dateStr: string): string => {
+  if (!dateStr) return ""
+  const [y, m, d] = dateStr.split("-").map(Number)
+  const dateObj = new Date(y, m - 1, d)
+  const weekday = dateObj.toLocaleDateString("pl-PL", { weekday: "short" }).replace(".", "")
+  const capitalizedWeekday = weekday.charAt(0).toUpperCase() + weekday.slice(1)
+  const monthShort = dateObj.toLocaleDateString("pl-PL", { month: "short" }).replace(".", "")
+  return `${capitalizedWeekday}, ${d} ${monthShort}`
+}
+
 export function StaffAttendanceModule({
   restaurantId,
   currentUserId,
@@ -70,6 +80,7 @@ export function StaffAttendanceModule({
   const [dailyRevenueInput, setDailyRevenueInput] = useState<string>("")
   const [note, setNote] = useState<string>("")
   const [saving, setSaving] = useState(false)
+  const [showRules, setShowRules] = useState(false)
 
   const [allLogs, setAllLogs] = useState<AttendanceLog[]>([])
   const [rules, setRules] = useState<BonusRule[]>([])
@@ -262,20 +273,20 @@ export function StaffAttendanceModule({
   )
 
   return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+    <div className="space-y-4 sm:space-y-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
         {/* LEWA KOLUMNA: WPISYWANIE GODZIN I UTARGU PO ZMIANIE */}
         <Card className="md:col-span-1 h-fit">
-          <CardHeader>
-            <CardTitle>Wpisz obecność i utarg</CardTitle>
-            <CardDescription>
+          <CardHeader className="p-3.5 sm:p-6 pb-2 sm:pb-3">
+            <CardTitle className="text-lg sm:text-xl font-bold">Wpisz obecność i utarg</CardTitle>
+            <CardDescription className="text-xs sm:text-sm">
               Po skończonej zmianie wpisz godziny pracy oraz utarg dzienny, aby system naliczył należne premie.
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSaveAttendance} className="space-y-4">
+          <CardContent className="p-3.5 sm:p-6 pt-0">
+            <form onSubmit={handleSaveAttendance} className="space-y-3 sm:space-y-4">
               <div className="space-y-1.5">
-                <Label className="text-xs">Dzień zmiany</Label>
+                <Label className="text-xs font-semibold">Dzień zmiany</Label>
                 <Input
                   type="date"
                   value={workDate}
@@ -285,67 +296,75 @@ export function StaffAttendanceModule({
                     const existingRev = revenues.find((r) => r.work_date === newDate)
                     setDailyRevenueInput(existingRev ? String(existingRev.amount) : "")
                   }}
+                  className="h-10 text-sm font-semibold bg-white cursor-pointer"
                   required
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2 sm:gap-3">
                 <div className="space-y-1.5">
-                  <Label className="text-xs">Od której (Przyjście)</Label>
+                  <Label className="text-xs font-semibold">Przyjście (od)</Label>
                   <Input
                     type="time"
                     value={startTime}
                     onChange={(e) => setStartTime(e.target.value)}
+                    className="h-10 text-sm font-bold bg-white"
                     required
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-xs">Do której (Wyjście)</Label>
+                  <Label className="text-xs font-semibold">Wyjście (do)</Label>
                   <Input
                     type="time"
                     value={endTime}
                     onChange={(e) => setEndTime(e.target.value)}
+                    className="h-10 text-sm font-bold bg-white"
                     required
                   />
                 </div>
               </div>
 
-              <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 flex items-center justify-between">
-                <span className="text-xs font-medium text-zinc-600">Wyliczony czas pracy:</span>
+              <div className="p-3 rounded-xl bg-zinc-50 border border-zinc-200 flex items-center justify-between">
+                <span className="text-xs font-medium text-zinc-600">Czas pracy:</span>
                 <span className="text-sm font-extrabold text-zinc-900">
                   {previewHours} godz.
                 </span>
               </div>
 
-              <div className="p-3 rounded-lg bg-emerald-50/60 border border-emerald-200 space-y-1.5">
+              <div className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-200 space-y-1.5">
                 <Label className="text-xs font-bold text-emerald-900">
-                  💰 Utarg lokalu z tego dnia (opcjonalnie, PLN)
+                  💰 Utarg lokalu z tego dnia (PLN)
                 </Label>
                 <Input
                   type="number"
                   step="any"
                   min="0"
-                  placeholder="Wprowadź kwotę utargu"
+                  inputMode="decimal"
+                  placeholder="Wprowadź kwotę utargu (opcjonalnie)"
                   value={dailyRevenueInput}
                   onChange={(e) => setDailyRevenueInput(e.target.value)}
-                  className="bg-white h-9 text-xs font-bold"
+                  className="bg-white h-10 text-sm font-bold placeholder:text-xs placeholder:font-normal"
                 />
                 <p className="text-[11px] text-emerald-800/80">
-                  Wpisanie utargu automatycznie przeliczy premie od obrotu dla osób pracujących tego dnia.
+                  Wpisanie utargu automatycznie przeliczy premie od obrotu dla zespołu pracującego w tym dniu.
                 </p>
               </div>
 
               <div className="space-y-1.5">
-                <Label className="text-xs">Notatka do zmiany (opcjonalnie)</Label>
+                <Label className="text-xs font-semibold">Notatka do zmiany (opcjonalnie)</Label>
                 <Input
                   placeholder="Dodatkowe informacje o zmianie..."
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
-                  className="text-xs"
+                  className="h-9 text-xs bg-white"
                 />
               </div>
 
-              <Button type="submit" className="w-full" disabled={saving}>
+              <Button
+                type="submit"
+                className="w-full h-11 text-sm font-bold shadow-xs active:scale-98 transition-all"
+                disabled={saving}
+              >
                 {saving ? "Zapisywanie..." : "✅ Zapisz zmianę"}
               </Button>
             </form>
@@ -354,31 +373,33 @@ export function StaffAttendanceModule({
 
         {/* PRAWA KOLUMNA: PODSUMOWANIE MIESIĄCA, ZASADY PREMIOWANIA I HISTORIA ZMIAN */}
         <Card className="md:col-span-2">
-          <CardHeader>
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <CardHeader className="p-3.5 sm:p-6 pb-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <CardTitle>Twoje godziny i premie w miesiącu</CardTitle>
-                <CardDescription>
+                <CardTitle className="text-lg sm:text-xl font-bold">
+                  Twoje godziny i premie w miesiącu
+                </CardTitle>
+                <CardDescription className="text-xs sm:text-sm">
                   Kwoty wynagrodzenia i premii są widoczne po odblokowaniu hasłem.
                 </CardDescription>
               </div>
 
-              <div className="flex items-center gap-2 bg-zinc-50 border rounded-lg px-3 py-1 self-start">
+              <div className="flex items-center gap-2 bg-zinc-50 border rounded-lg px-2.5 py-1 self-start sm:self-auto">
                 <Label className="text-xs font-semibold text-zinc-600">Miesiąc:</Label>
                 <Input
                   type="month"
                   value={selectedMonth}
                   onChange={(e) => setSelectedMonth(e.target.value)}
-                  className="h-7 w-36 border-0 bg-transparent p-0 text-xs font-bold focus-visible:ring-0"
+                  className="h-7 w-32 sm:w-36 border-0 bg-transparent p-0 text-xs font-bold focus-visible:ring-0 cursor-pointer"
                 />
               </div>
             </div>
 
-            <div className="mt-4 pt-4 border-t grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="p-3 rounded-lg bg-zinc-50 border">
-                <p className="text-xs text-zinc-500">Przepracowane godziny</p>
-                <p className="text-lg font-extrabold text-zinc-900">
-                  {payroll.totalHours} h ({payroll.shiftsCount} zmian)
+            <div className="mt-3.5 pt-3.5 border-t grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3">
+              <div className="p-3 rounded-xl bg-zinc-50 border border-zinc-200/70 shadow-2xs">
+                <p className="text-xs text-zinc-500 font-medium">Przepracowane godziny</p>
+                <p className="text-base sm:text-lg font-extrabold text-zinc-900">
+                  {payroll.totalHours} h ({payroll.shiftsCount} {payroll.shiftsCount === 1 ? "zmiana" : payroll.shiftsCount < 5 ? "zmiany" : "zmian"})
                 </p>
               </div>
 
@@ -386,13 +407,15 @@ export function StaffAttendanceModule({
                 onClick={() => {
                   if (!isRateUnlocked) onRequestUnlock()
                 }}
-                className={`p-3 rounded-lg bg-emerald-50/70 border border-emerald-200 ${
-                  !isRateUnlocked ? "cursor-pointer hover:bg-emerald-100/60" : ""
+                className={`p-3 rounded-xl border transition-all shadow-2xs ${
+                  !isRateUnlocked
+                    ? "bg-emerald-50/50 border-emerald-200 cursor-pointer hover:bg-emerald-100/60 active:scale-98"
+                    : "bg-emerald-50/70 border-emerald-200"
                 }`}
               >
-                <p className="text-xs text-emerald-800">Naliczone premie</p>
-                <p className="text-lg font-extrabold text-emerald-950">
-                  {isRateUnlocked ? `+${payroll.bonusPay.toFixed(2)} zł` : "🔒 ••• zł (Podaj hasło)"}
+                <p className="text-xs text-emerald-800 font-medium">Naliczone premie</p>
+                <p className="text-base sm:text-lg font-extrabold text-emerald-950">
+                  {isRateUnlocked ? `+${payroll.bonusPay.toFixed(2)} zł` : "🔒 ••• zł (hasło)"}
                 </p>
               </div>
 
@@ -400,27 +423,29 @@ export function StaffAttendanceModule({
                 onClick={() => {
                   if (!isRateUnlocked) onRequestUnlock()
                 }}
-                className={`p-3 rounded-lg bg-zinc-900 text-white ${
-                  !isRateUnlocked ? "cursor-pointer hover:bg-zinc-800" : ""
+                className={`p-3 rounded-xl transition-all shadow-2xs ${
+                  !isRateUnlocked
+                    ? "bg-zinc-900 text-white cursor-pointer hover:bg-zinc-800 active:scale-98"
+                    : "bg-zinc-900 text-white"
                 }`}
               >
-                <p className="text-xs text-zinc-300">Zarobiono łącznie w miesiącu</p>
-                <p className="text-lg font-extrabold">
-                  {isRateUnlocked ? `${payroll.totalPay.toFixed(2)} zł` : "🔒 ••• zł (Podaj hasło)"}
+                <p className="text-xs text-zinc-300 font-medium">Łączny zarobek</p>
+                <p className="text-base sm:text-lg font-extrabold">
+                  {isRateUnlocked ? `${payroll.totalPay.toFixed(2)} zł` : "🔒 ••• zł (hasło)"}
                 </p>
               </div>
             </div>
 
             {isRateUnlocked && payroll.triggeredBonuses.length > 0 && (
-              <div className="mt-3 p-3 rounded-lg bg-emerald-50/50 border border-emerald-200 space-y-1">
+              <div className="mt-3 p-3 rounded-xl bg-emerald-50/60 border border-emerald-200 space-y-1.5">
                 <p className="text-xs font-bold text-emerald-900">Szczegóły Twoich premii w tym miesiącu:</p>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-1.5">
                   {payroll.triggeredBonuses.map((tb, idx) => (
                     <span
                       key={idx}
-                      className="px-2.5 py-0.5 rounded-full bg-white border border-emerald-200 text-xs font-semibold text-emerald-800"
+                      className="px-2.5 py-1 rounded-lg bg-white border border-emerald-200 text-xs font-semibold text-emerald-800 shadow-2xs"
                     >
-                      {tb.name}: +{tb.amount.toFixed(2)} zł
+                      {tb.name}: <strong>+{tb.amount.toFixed(2)} zł</strong>
                     </span>
                   ))}
                 </div>
@@ -428,20 +453,39 @@ export function StaffAttendanceModule({
             )}
 
             {myActiveRules.length > 0 && (
-              <div className="mt-3 p-3 rounded-lg bg-zinc-50 border border-zinc-200 space-y-1">
-                <p className="text-xs font-bold text-zinc-700">🏆 Aktywne progi premiowe dla Twojej roli:</p>
-                <ul className="text-xs text-zinc-600 space-y-0.5 list-disc list-inside">
-                  {myActiveRules.map((r) => (
-                    <li key={r.id}>
-                      <strong>{r.name}:</strong> {formatBonusRuleSentence(r)}
-                    </li>
-                  ))}
-                </ul>
+              <div className="mt-3 rounded-xl bg-zinc-50 border border-zinc-200 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setShowRules(!showRules)}
+                  className="w-full flex items-center justify-between p-2.5 text-xs font-bold text-zinc-700 hover:text-zinc-900 hover:bg-zinc-100/70 transition-colors"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <span>🏆</span>
+                    <span>Zasady premiowania dla Twojej roli ({myActiveRules.length}):</span>
+                  </span>
+                  <span className="text-xs text-indigo-600 font-semibold">
+                    {showRules ? "Zwiń ▲" : "Rozwiń ▼"}
+                  </span>
+                </button>
+                {showRules && (
+                  <div className="p-3 pt-1 border-t border-zinc-200/60 space-y-1">
+                    <ul className="text-xs text-zinc-600 space-y-1 list-disc list-inside">
+                      {myActiveRules.map((r) => (
+                        <li key={r.id}>
+                          <strong>{r.name}:</strong> {formatBonusRuleSentence(r)}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             )}
           </CardHeader>
 
-          <CardContent className="space-y-2.5">
+          <CardContent className="p-3.5 sm:p-6 space-y-2.5">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-500 mb-2">
+              📋 Historia Twoich zmian ({myMonthLogs.length}):
+            </h4>
             {myMonthLogs.length === 0 ? (
               <div className="text-center py-10 border-2 border-dashed rounded-xl text-sm text-zinc-500">
                 Nie wpisałeś(aś) jeszcze żadnych godzin pracy w tym miesiącu.
@@ -452,36 +496,38 @@ export function StaffAttendanceModule({
                 return (
                   <div
                     key={log.id}
-                    className="p-3 rounded-xl border bg-white flex flex-wrap sm:flex-nowrap items-center justify-between gap-3"
+                    className="p-3 rounded-xl border bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shadow-2xs hover:border-zinc-300 transition-all"
                   >
-                    <div className="space-y-1">
-                      <div className="flex flex-wrap items-center gap-2">
+                    <div className="space-y-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                         <span className="font-bold text-sm text-zinc-900">
-                          📅 {log.work_date}
+                          📅 {formatLogDate(log.work_date)}
                         </span>
-                        <span className="px-2.5 py-0.5 rounded bg-zinc-100 text-zinc-800 text-xs font-bold font-mono">
+                        <span className="px-2 py-0.5 rounded-md bg-zinc-100 text-zinc-800 text-xs font-bold font-mono">
                           🕒 {log.start_time} – {log.end_time} ({log.hours_worked} h)
                         </span>
                         {dayRev && (
-                          <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 text-xs font-semibold">
+                          <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 text-xs font-semibold">
                             💰 Utarg: {Number(dayRev.amount).toFixed(2)} zł
                           </span>
                         )}
                       </div>
                       {log.note && (
-                        <p className="text-xs text-zinc-500 italic">💬 „{log.note}”</p>
+                        <p className="text-xs text-zinc-500 italic pl-1">💬 „{log.note}”</p>
                       )}
                     </div>
 
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 text-xs text-red-600 hover:text-red-700"
-                      onClick={() => handleDeleteLog(log.id)}
-                    >
-                      Usuń
-                    </Button>
+                    <div className="flex items-center justify-end border-t sm:border-0 pt-1.5 sm:pt-0 border-zinc-100">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 text-xs text-red-600 hover:text-red-700 hover:bg-red-50"
+                        onClick={() => handleDeleteLog(log.id)}
+                      >
+                        🗑️ Usuń wpis
+                      </Button>
+                    </div>
                   </div>
                 )
               })

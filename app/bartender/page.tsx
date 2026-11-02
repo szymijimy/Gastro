@@ -34,6 +34,14 @@ import { fetchAnnouncements } from "@/services/announcementsService"
 
 
 
+const formatDisplayDate = (dateStr: string): string => {
+  if (!dateStr) return ""
+  const [y, m, d] = dateStr.split("-").map(Number)
+  const dateObj = new Date(y, m - 1, d)
+  const monthShort = dateObj.toLocaleDateString("pl-PL", { month: "short" }).replace(".", "")
+  return `${d} ${monthShort}`
+}
+
 const UNITS_ORDER = ["but.", "keg", "l", "ml", "kg", "g", "szt.", "opak."]
 const getUnitRank = (unit: string) => {
   const idx = UNITS_ORDER.indexOf(unit)
@@ -85,7 +93,7 @@ function StaffTodoRow({
 
   return (
     <div
-      className={`p-3.5 rounded-xl border transition-all ${
+      className={`p-3 sm:p-3.5 rounded-xl border transition-all ${
         todo.is_completed
           ? "bg-zinc-50 border-zinc-200 opacity-70"
           : isAssignedToMeDirectly
@@ -93,20 +101,22 @@ function StaffTodoRow({
           : "bg-white border-zinc-200 hover:border-zinc-300"
       }`}
     >
-      <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3 flex-1 min-w-0">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+        <div className="flex items-start sm:items-center gap-2.5 flex-1 min-w-0">
           <input
             type="checkbox"
             checked={todo.is_completed}
             onChange={() => onToggle(todo)}
-            className="w-5 h-5 rounded border-zinc-300 cursor-pointer shrink-0 accent-zinc-900"
+            className="w-6 h-6 min-w-6 min-h-6 rounded-md border-zinc-300 cursor-pointer shrink-0 accent-zinc-900 mt-0.5 sm:mt-0"
           />
 
-          <PriorityIcon priority={priority} />
+          <div className="pt-0.5 sm:pt-0">
+            <PriorityIcon priority={priority} />
+          </div>
 
           <span
             onClick={() => onToggle(todo)}
-            className={`text-sm font-medium cursor-pointer select-none ${
+            className={`text-sm font-medium cursor-pointer select-none leading-snug break-words flex-1 ${
               todo.is_completed ? "line-through text-zinc-400" : "text-zinc-900"
             }`}
           >
@@ -114,24 +124,24 @@ function StaffTodoRow({
           </span>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0 pl-8.5 sm:pl-0">
           {isAssignedToMeDirectly ? (
-            <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-600 text-white">
+            <span className="px-2.5 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold bg-indigo-600 text-white shrink-0">
               👤 Dla Ciebie
             </span>
           ) : todo.assigned_user_id ? (
-            <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+            <span className="px-2.5 py-0.5 rounded-full text-[10px] sm:text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 truncate max-w-[140px]">
               👤 {assignedUserName || "Inny pracownik"}
             </span>
           ) : todo.assigned_role ? (
             <span
-              className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold text-white"
+              className="px-2.5 py-0.5 rounded-full text-[10px] sm:text-[11px] font-semibold text-white shrink-0"
               style={{ backgroundColor: roleColor || "#71717a" }}
             >
               🏷️ {todo.assigned_role}
             </span>
           ) : (
-            <span className="px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-zinc-100 text-zinc-600">
+            <span className="px-2.5 py-0.5 rounded-full text-[10px] sm:text-[11px] font-medium bg-zinc-100 text-zinc-600 shrink-0">
               👥 Wszyscy
             </span>
           )}
@@ -144,20 +154,20 @@ function StaffTodoRow({
               setNoteDraft(todo.note || "")
               setIsEditingNote(!isEditingNote)
             }}
-            className={`h-8 px-2.5 text-xs ${
+            className={`h-8 px-2.5 text-xs shrink-0 ${
               todo.note
                 ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
                 : "text-zinc-600"
             }`}
           >
-            {todo.note ? "✏️ Edytuj uwagę" : "💬 Zgłoś uwagę"}
+            {todo.note ? "✏️ Uwaga" : "💬 Uwaga"}
           </Button>
         </div>
       </div>
 
       {todo.note && !isEditingNote && (
-        <div className="mt-2.5 ml-8 p-2.5 rounded-lg bg-amber-50/90 border border-amber-200 text-xs text-amber-900 flex items-start justify-between gap-2">
-          <div>
+        <div className="mt-2.5 sm:ml-8.5 p-2.5 rounded-lg bg-amber-50/90 border border-amber-200 text-xs text-amber-900 flex items-start justify-between gap-2">
+          <div className="break-words min-w-0">
             <span className="font-semibold">⚠️ Zgłoszona uwaga: </span>
             <span>{todo.note}</span>
           </div>
@@ -175,13 +185,13 @@ function StaffTodoRow({
       )}
 
       {isEditingNote && (
-        <div className="mt-3 ml-8 p-3 rounded-lg bg-zinc-50 border border-zinc-200 space-y-2">
+        <div className="mt-2.5 sm:ml-8.5 p-3 rounded-lg bg-zinc-50 border border-zinc-200 space-y-2">
           <Label className="text-xs text-zinc-700">
             Dodatkowa informacja lub powód częściowego wykonania zadania:
           </Label>
           <div className="flex flex-col sm:flex-row gap-2">
             <Input
-              placeholder="Wpisz powód częściowego wykonania lub dodatkowe informacje..."
+              placeholder="Wpisz powód częściowego wykonania..."
               value={noteDraft}
               onChange={(e) => setNoteDraft(e.target.value)}
               onKeyDown={(e) => {
@@ -193,7 +203,7 @@ function StaffTodoRow({
               className="h-8 text-xs bg-white flex-1"
               autoFocus
             />
-            <div className="flex items-center gap-1.5 shrink-0">
+            <div className="flex items-center justify-end gap-1.5 shrink-0">
               <Button
                 type="button"
                 size="sm"
@@ -781,31 +791,31 @@ function BartenderDashboard() {
         </div>
 
         <div
-          className={`px-3.5 py-2.5 border-t flex items-center justify-between gap-2 ${
+          className={`px-3 py-2.5 border-t flex items-center justify-between gap-2 ${
             isZero ? "bg-red-50/60" : isBelowThreshold ? "bg-amber-50/60" : "bg-zinc-50"
           }`}
         >
           <div className="flex items-center gap-1.5">
-            <span className="text-xs font-medium text-zinc-600">Stan:</span>
+            <span className="text-xs font-semibold text-zinc-600">Stan:</span>
             {!isZero && (
               <button
                 type="button"
                 onClick={() => handleSaveQuantityToDb(prod.id, 0)}
-                title="Oznacz jako wyzerowane (0)"
-                className="text-[10px] px-1.5 py-0.5 rounded border border-zinc-200 bg-white text-zinc-500 hover:text-red-600 hover:border-red-200 font-semibold"
+                title="Wyzeruj stan (0)"
+                className="h-8 px-2 rounded-md border border-zinc-300 bg-white text-zinc-600 hover:text-red-600 hover:border-red-300 font-bold text-xs shadow-2xs active:scale-95 transition-all"
               >
                 0
               </button>
             )}
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={() =>
                 handleSaveQuantityToDb(prod.id, Number((prod.quantity - 1).toFixed(2)))
               }
-              className="w-7 h-7 rounded border bg-white hover:bg-zinc-100 text-sm font-bold shrink-0"
+              className="w-9 h-9 sm:w-8 sm:h-8 rounded-lg border border-zinc-300 bg-white hover:bg-zinc-100 active:scale-95 text-base font-black shrink-0 shadow-2xs flex items-center justify-center transition-all"
             >
               -
             </button>
@@ -821,9 +831,9 @@ function BartenderDashboard() {
               onKeyDown={(e) => {
                 if (e.key === "Enter") e.currentTarget.blur()
               }}
-              className="h-7 w-16 px-1.5 text-center text-xs font-bold bg-white"
+              className="h-9 sm:h-8 w-18 px-1.5 text-center text-sm font-extrabold bg-white"
             />
-            <span className="text-xs font-medium text-zinc-600 min-w-[26px]">
+            <span className="text-xs font-semibold text-zinc-600 min-w-[26px]">
               {prod.unit}
             </span>
             <button
@@ -831,7 +841,7 @@ function BartenderDashboard() {
               onClick={() =>
                 handleSaveQuantityToDb(prod.id, Number((prod.quantity + 1).toFixed(2)))
               }
-              className="w-7 h-7 rounded border bg-white hover:bg-zinc-100 text-sm font-bold shrink-0"
+              className="w-9 h-9 sm:w-8 sm:h-8 rounded-lg border border-zinc-300 bg-white hover:bg-zinc-100 active:scale-95 text-base font-black shrink-0 shadow-2xs flex items-center justify-center transition-all"
             >
               +
             </button>
@@ -842,19 +852,19 @@ function BartenderDashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-100 p-4 sm:p-8">
+    <div className="min-h-screen bg-zinc-100 p-2.5 sm:p-6 md:p-8">
       <FeedbackHost />
 
-      <div className="mx-auto max-w-5xl space-y-6">
-        <div className="bg-white p-6 rounded-xl shadow-xs border border-zinc-200/80 space-y-5">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="space-y-2">
-              <div className="flex flex-wrap items-center gap-2.5">
-                <h1 className="text-2xl font-bold text-zinc-900">
+      <div className="mx-auto max-w-5xl space-y-4 sm:space-y-6">
+        <div className="bg-white p-3.5 sm:p-6 rounded-xl sm:rounded-2xl shadow-xs border border-zinc-200/80 space-y-4 sm:space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
+            <div className="space-y-1.5 sm:space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-xl sm:text-2xl font-bold text-zinc-900 tracking-tight">
                   Cześć, {userName}! 👋
                 </h1>
                 <span
-                  className="px-3 py-0.5 rounded-full text-xs font-semibold text-white shadow-xs"
+                  className="px-2.5 py-0.5 rounded-full text-[11px] sm:text-xs font-semibold text-white shadow-xs"
                   style={{ backgroundColor: myRoleColor }}
                 >
                   {userRole}
@@ -862,11 +872,11 @@ function BartenderDashboard() {
               </div>
 
               {memberships.length > 1 ? (
-                <div className="flex flex-wrap items-center gap-2 pt-0.5">
-                  <span className="text-xs font-semibold text-zinc-500">
+                <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 pt-0.5">
+                  <span className="text-[11px] sm:text-xs font-semibold text-zinc-500">
                     Aktywny lokal:
                   </span>
-                  <div className="inline-flex flex-wrap gap-1.5">
+                  <div className="inline-flex flex-wrap gap-1">
                     {memberships.map((m) => {
                       const isActive = m.restaurant_id === restaurantId
                       return (
@@ -874,7 +884,7 @@ function BartenderDashboard() {
                           key={m.restaurant_id}
                           type="button"
                           onClick={() => handleSwitchVenue(m.restaurant_id)}
-                          className={`px-3 py-1 rounded-lg text-xs font-bold border transition-all ${
+                          className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all ${
                             isActive
                               ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
                               : "bg-zinc-50 text-zinc-700 border-zinc-200 hover:border-zinc-400"
@@ -887,17 +897,17 @@ function BartenderDashboard() {
                   </div>
                 </div>
               ) : (
-                <p className="text-sm text-zinc-500">
+                <p className="text-xs sm:text-sm text-zinc-500">
                   Lokal: <strong className="text-zinc-800">{restaurantName}</strong>
                 </p>
               )}
             </div>
 
-            <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
+            <div className="flex flex-wrap items-center gap-2 self-stretch sm:self-auto justify-between sm:justify-end">
               <button
                 type="button"
                 onClick={handleRateButtonClick}
-                className="min-h-9 px-3.5 py-1.5 rounded-lg border border-zinc-200 bg-zinc-50 hover:bg-zinc-100 text-xs font-medium text-zinc-700 flex flex-wrap items-center gap-2 transition-colors"
+                className="min-h-9 px-3 py-1.5 rounded-lg border border-zinc-200 bg-zinc-50 hover:bg-zinc-100 text-xs font-medium text-zinc-700 flex flex-wrap items-center gap-1.5 transition-colors flex-1 sm:flex-initial"
                 title={
                   showRate
                     ? "Kliknij, aby ukryć zarobki i stawkę"
@@ -925,7 +935,7 @@ function BartenderDashboard() {
                     {memberships.length > 1 && (
                       <>
                         <span className="text-zinc-300">|</span>
-                        <span className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-900 font-bold text-[11px]">
+                        <span className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-900 font-bold text-[10px] sm:text-[11px]">
                           Razem ({memberships.length} lokale):{" "}
                           {allVenuesCombinedEarnings.totalPay.toFixed(2)} zł (
                           {allVenuesCombinedEarnings.totalHours}h)
@@ -934,68 +944,110 @@ function BartenderDashboard() {
                     )}
                   </span>
                 ) : (
-                  <strong className="text-zinc-900">••• zł (Podaj hasło)</strong>
+                  <strong className="text-zinc-900">••• zł (hasło)</strong>
                 )}
               </button>
 
-              <Button variant="outline" size="sm" className="h-9" onClick={handleLogout}>
+              <Button variant="outline" size="sm" className="h-9 shrink-0 text-xs px-3" onClick={handleLogout}>
                 Wyloguj się
               </Button>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t">
-            <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200/70 flex items-center justify-between">
-              <div>
-                <p className="text-xs text-zinc-500">
-                  Zadania na dziś ({restaurantName})
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3 pt-2 border-t">
+            <div className="p-2.5 sm:p-3 rounded-lg bg-zinc-50 border border-zinc-200/70 flex items-center justify-between">
+              <div className="min-w-0 pr-2">
+                <p className="text-[11px] sm:text-xs text-zinc-500 font-medium truncate">
+                  Zadania na dziś
                 </p>
-                <p className="text-lg font-bold text-zinc-900">
+                <p className="text-base sm:text-lg font-bold text-zinc-900 truncate">
                   {todayRemainingCount === 0 && todayMyTodos.length > 0
                     ? "Wszystko zrobione! 🎉"
                     : `Do zrobienia: ${todayRemainingCount}`}
                 </p>
               </div>
-              <span className="text-2xl">✅</span>
+              <span className="text-xl sm:text-2xl shrink-0">✅</span>
             </div>
 
-            <div className="p-3 rounded-lg bg-amber-50/60 border border-amber-200/70 flex items-center justify-between">
-              <div>
-                <p className="text-xs text-amber-800/80">
-                  Ogłoszenia ({restaurantName})
+            <div className="p-2.5 sm:p-3 rounded-lg bg-amber-50/60 border border-amber-200/70 flex items-center justify-between">
+              <div className="min-w-0 pr-2">
+                <p className="text-[11px] sm:text-xs text-amber-800/80 font-medium truncate">
+                  Ogłoszenia
                 </p>
-                <p className="text-lg font-bold text-amber-950">
+                <p className="text-base sm:text-lg font-bold text-amber-950 truncate">
                   {visibleAnnouncements.length}{" "}
                   {pinnedAnnouncementsCount > 0
                     ? `(📌 ${pinnedAnnouncementsCount} ważne)`
                     : ""}
                 </p>
               </div>
-              <span className="text-2xl">📢</span>
+              <span className="text-xl sm:text-2xl shrink-0">📢</span>
             </div>
 
-            <div className="p-3 rounded-lg bg-red-50/60 border border-red-200/70 flex items-center justify-between">
-              <div>
-                <p className="text-xs text-red-800/80">
-                  Braki na magazynie ({restaurantName})
+            <div className="p-2.5 sm:p-3 rounded-lg bg-red-50/60 border border-red-200/70 flex items-center justify-between">
+              <div className="min-w-0 pr-2">
+                <p className="text-[11px] sm:text-xs text-red-800/80 font-medium truncate">
+                  Braki na magazynie
                 </p>
-                <p className="text-lg font-bold text-red-950">
+                <p className="text-base sm:text-lg font-bold text-red-950 truncate">
                   {shortageProducts.length}{" "}
                   {shortageProducts.length === 1 ? "produkt" : "produktów"}
                 </p>
               </div>
-              <span className="text-2xl">🚨</span>
+              <span className="text-xl sm:text-2xl shrink-0">🚨</span>
             </div>
           </div>
 
-          <Tabs defaultValue="todos" className="w-full pt-2">
-            <TabsList className="flex flex-wrap h-auto gap-1 w-full justify-start bg-zinc-100 p-1">
-              <TabsTrigger value="todos">Check-lista</TabsTrigger>
-              <TabsTrigger value="announcements">Ogłoszenia</TabsTrigger>
-              <TabsTrigger value="inventory">Magazyn i Braki</TabsTrigger>
-              <TabsTrigger value="schedule">Grafik i Kalendarz</TabsTrigger>
-              <TabsTrigger value="attendance">Czas pracy</TabsTrigger>
-            </TabsList>
+          <Tabs defaultValue="todos" className="w-full pt-1">
+            <div className="w-full overflow-x-auto no-scrollbar scroll-smooth -mx-1 px-1 sm:mx-0 sm:px-0 pb-1">
+              <TabsList className="inline-flex w-max min-w-full sm:w-auto h-auto items-center gap-1 bg-zinc-100/90 p-1 rounded-xl border border-zinc-200/50">
+                <TabsTrigger
+                  value="todos"
+                  className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"
+                >
+                  <span>📋 Check-lista</span>
+                  {todayRemainingCount > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-700">
+                      {todayRemainingCount}
+                    </span>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger
+                  value="announcements"
+                  className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"
+                >
+                  <span>📢 Ogłoszenia</span>
+                  {visibleAnnouncements.length > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                      {visibleAnnouncements.length}
+                    </span>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger
+                  value="inventory"
+                  className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"
+                >
+                  <span>📦 Magazyn</span>
+                  {shortageProducts.length > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-red-100 text-red-700">
+                      {shortageProducts.length}
+                    </span>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger
+                  value="schedule"
+                  className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"
+                >
+                  <span>📅 Grafik</span>
+                </TabsTrigger>
+                <TabsTrigger
+                  value="attendance"
+                  className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"
+                >
+                  <span>⏱️ Czas pracy</span>
+                </TabsTrigger>
+              </TabsList>
+            </div>
 
             <TabsContent value="todos" keepMounted className="mt-6">
               <Card>
@@ -1034,8 +1086,8 @@ function BartenderDashboard() {
                     </div>
                   </div>
 
-                  <div className="mt-4 pt-4 border-t flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
+                  <div className="mt-4 pt-4 border-t flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-1.5 w-full sm:w-auto min-w-0">
                       <Button
                         type="button"
                         variant="outline"
@@ -1043,22 +1095,25 @@ function BartenderDashboard() {
                         onClick={() =>
                           setSelectedTodoDate((prev) => shiftDateByDays(prev, -1))
                         }
-                        className="h-9 px-3 font-bold"
+                        className="h-9 w-9 p-0 font-bold shrink-0 shadow-2xs"
+                        title="Poprzedni dzień"
                       >
                         ←
                       </Button>
 
-                      <div className="flex items-center gap-2 bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-1">
-                        <span className="text-xs font-semibold text-zinc-700 whitespace-nowrap">
-                          {getFriendlyDateLabel(selectedTodoDate, todayStr)}:
+                      {/* Klikalny kafelek daty z ukrytym, natywnym datepickerem pod spodem */}
+                      <div className="relative flex-1 sm:flex-initial min-w-0 flex items-center justify-center gap-1.5 bg-zinc-50 hover:bg-zinc-100/90 border border-zinc-200 rounded-lg px-2.5 py-1.5 transition-colors cursor-pointer text-center shadow-2xs">
+                        <span className="text-xs font-bold text-zinc-900 truncate">
+                          📅 {getFriendlyDateLabel(selectedTodoDate, todayStr)} • {formatDisplayDate(selectedTodoDate)}
                         </span>
-                        <Input
+                        <input
                           type="date"
                           value={selectedTodoDate}
                           onChange={(e) => {
                             if (e.target.value) setSelectedTodoDate(e.target.value)
                           }}
-                          className="h-7 w-36 border-0 bg-transparent p-0 text-xs font-bold text-zinc-900 focus-visible:ring-0 cursor-pointer"
+                          className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                          title="Kliknij, aby wybrać inną datę z kalendarza"
                         />
                       </div>
 
@@ -1069,7 +1124,8 @@ function BartenderDashboard() {
                         onClick={() =>
                           setSelectedTodoDate((prev) => shiftDateByDays(prev, 1))
                         }
-                        className="h-9 px-3 font-bold"
+                        className="h-9 w-9 p-0 font-bold shrink-0 shadow-2xs"
+                        title="Następny dzień"
                       >
                         →
                       </Button>
@@ -1080,22 +1136,23 @@ function BartenderDashboard() {
                           variant="ghost"
                           size="sm"
                           onClick={() => setSelectedTodoDate(todayStr)}
-                          className="h-9 text-xs text-blue-600 hover:text-blue-700"
+                          className="h-9 px-2 text-xs text-blue-600 hover:text-blue-700 font-bold shrink-0"
+                          title="Wróć do dzisiejszego dnia"
                         >
-                          Wróć do dzisiaj
+                          Dzisiaj
                         </Button>
                       )}
                     </div>
 
                     {dayTodos.length > 0 && (
-                      <div className="flex items-center gap-3">
-                        <div className="w-28 h-2 rounded-full bg-zinc-200 overflow-hidden">
+                      <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto pt-1 sm:pt-0 border-t sm:border-0 border-zinc-100">
+                        <div className="w-28 sm:w-32 h-2 rounded-full bg-zinc-200 overflow-hidden flex-1 sm:flex-initial">
                           <div
                             className="h-full bg-emerald-500 transition-all duration-300"
                             style={{ width: `${progressPercent}%` }}
                           />
                         </div>
-                        <span className="text-xs font-semibold text-zinc-700">
+                        <span className="text-xs font-semibold text-zinc-700 shrink-0">
                           {completedDayTodosCount} / {dayTodos.length} ({progressPercent}%)
                         </span>
                       </div>
@@ -1239,12 +1296,12 @@ function BartenderDashboard() {
                       )}
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex items-center gap-2 w-full sm:w-auto">
                       <Input
                         placeholder="Wyszukaj produkt po nazwie..."
                         value={productSearch}
                         onChange={(e) => setProductSearch(e.target.value)}
-                        className="h-9 w-52 text-xs"
+                        className="h-9 flex-1 sm:w-52 text-xs"
                       />
 
                       <Button
@@ -1257,7 +1314,7 @@ function BartenderDashboard() {
                             : "outline"
                         }
                         size="sm"
-                        className="h-9"
+                        className="h-9 shrink-0 text-xs px-3"
                         onClick={() => {
                           setProductSearch("")
                           setSelectedCategory(null)
