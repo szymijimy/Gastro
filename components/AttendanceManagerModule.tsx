@@ -926,8 +926,8 @@ export function AttendanceManagerModule({
           </div>
         </CardHeader>
 
-        <CardContent>
-          <Table>
+        <CardContent className="p-3.5 sm:p-6 pt-0">
+          <Table className="min-w-[700px]">
             <TableHeader>
               <TableRow>
                 <TableHead>Pracownik</TableHead>

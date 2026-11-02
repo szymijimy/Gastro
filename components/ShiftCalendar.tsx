@@ -50,6 +50,8 @@ export function ShiftCalendar({ restaurantId: propRestaurantId }: { restaurantId
   const [viewYear, setViewYear] = useState<number>(2026)
   const [viewMonth, setViewMonth] = useState<number>(0)
   const [selectedDate, setSelectedDate] = useState<string>("")
+  const [todayStr, setTodayStr] = useState<string>("")
+  const [viewMode, setViewMode] = useState<"agenda" | "calendar">("agenda")
 
   useEffect(() => {
     const now = new Date()
@@ -58,7 +60,13 @@ export function ShiftCalendar({ restaurantId: propRestaurantId }: { restaurantId
     const yyyy = now.getFullYear()
     const mm = String(now.getMonth() + 1).padStart(2, "0")
     const dd = String(now.getDate()).padStart(2, "0")
-    setSelectedDate(`${yyyy}-${mm}-${dd}`)
+    const formattedToday = `${yyyy}-${mm}-${dd}`
+    setSelectedDate(formattedToday)
+    setTodayStr(formattedToday)
+
+    if (typeof window !== "undefined" && window.innerWidth >= 768) {
+      setViewMode("calendar")
+    }
   }, [])
 
   // Jeśli manager przełączy aktywny lokal u góry swojego panelu, aktualizujemy filtr
@@ -245,6 +253,37 @@ export function ShiftCalendar({ restaurantId: propRestaurantId }: { restaurantId
     calendarCells.push(null)
   }
 
+  // Zmiany w bieżącym miesiącu posortowane chronologicznie do Agendy
+  const currentMonthPrefix = `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}`
+  const monthShifts = filteredShifts
+    .filter((s) => s.work_date.startsWith(currentMonthPrefix))
+    .sort((a, b) => a.work_date.localeCompare(b.work_date) || a.start_time.localeCompare(b.start_time))
+
+  const datesWithShifts = Array.from(new Set(monthShifts.map((s) => s.work_date))).sort()
+
+  // Sprawdzenie czy przeglądamy bieżący miesiąc i przygotowanie kafelka "Dzisiaj" na samą górę
+  const isCurrentMonth = !!todayStr && todayStr.startsWith(currentMonthPrefix)
+
+  const todayShifts = isCurrentMonth
+    ? filteredShifts
+        .filter((s) => s.work_date === todayStr)
+        .sort((a, b) => a.start_time.localeCompare(b.start_time))
+    : []
+
+  const myTodayShift = currentUserId ? todayShifts.find((s) => s.user_id === currentUserId) : null
+
+  let todayWeekdayCapitalized = ""
+  let todayDayNum = ""
+  let todayMonthLong = ""
+  if (todayStr) {
+    const [ty, tm, td] = todayStr.split("-").map(Number)
+    const tObj = new Date(ty, tm - 1, td)
+    const tw = tObj.toLocaleDateString("pl-PL", { weekday: "long" })
+    todayWeekdayCapitalized = tw.charAt(0).toUpperCase() + tw.slice(1)
+    todayDayNum = String(td)
+    todayMonthLong = tObj.toLocaleDateString("pl-PL", { month: "long" })
+  }
+
   // Eksport wybranego widoku miesiąca do pliku .xlsx
   const handleExportMonthToExcel = () => {
     const uniquePeopleMap = new Map<string, Teammate>()
@@ -326,19 +365,92 @@ export function ShiftCalendar({ restaurantId: propRestaurantId }: { restaurantId
 
   return (
     <Card>
-      <CardHeader>
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div>
-            <CardTitle>Kalendarz Opublikowanych Grafików</CardTitle>
-            <CardDescription>
-              {venues.length > 1
-                ? "Przeglądaj połączony grafik ze wszystkich swoich barów lub filtruj wybrany lokal."
-                : "Wyświetla zatwierdzone i opublikowane przez managera zmiany."}
-            </CardDescription>
+      <CardHeader className="p-3.5 sm:p-6 pb-3">
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4">
+            <div>
+              <CardTitle className="text-lg sm:text-xl font-bold text-zinc-900">
+                Kalendarz Opublikowanych Grafików
+              </CardTitle>
+              <CardDescription className="text-xs sm:text-sm text-zinc-500 mt-0.5">
+                {venues.length > 1
+                  ? "Przeglądaj połączony grafik ze wszystkich swoich barów lub filtruj wybrany lokal."
+                  : "Wyświetla zatwierdzone i opublikowane przez managera zmiany."}
+              </CardDescription>
+            </div>
+
+            {/* Nawigacja miesiąca i Eksport */}
+            <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0">
+              <div className="flex items-center bg-zinc-100 p-0.5 sm:p-1 rounded-lg border border-zinc-200/60">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={handlePrevMonth}
+                  className="h-8 w-8 p-0 font-bold text-zinc-700"
+                  title="Poprzedni miesiąc"
+                >
+                  ←
+                </Button>
+                <span className="text-xs font-bold capitalize px-2 sm:px-3 min-w-[110px] sm:min-w-[130px] text-center text-zinc-900">
+                  {monthName}
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleNextMonth}
+                  className="h-8 w-8 p-0 font-bold text-zinc-700"
+                  title="Następny miesiąc"
+                >
+                  →
+                </Button>
+              </div>
+
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleExportMonthToExcel}
+                className="h-8 px-2.5 text-xs shrink-0"
+                title="Eksportuj grafik do pliku Excel (.xlsx)"
+              >
+                📥 <span className="hidden sm:inline ml-1">Eksportuj (.xlsx)</span>
+              </Button>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Przełącznik: Cała załoga vs Tylko moje zmiany */}
+          {/* Narzędzia: Przełącznik widoku (Lista / Siatka) + Filtr załogi */}
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-zinc-100">
+            {/* Tryb widoku: Agenda vs Kalendarz */}
+            <div className="inline-flex rounded-lg border border-zinc-200 bg-zinc-100 p-0.5">
+              <button
+                type="button"
+                onClick={() => setViewMode("agenda")}
+                className={`px-3 py-1 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                  viewMode === "agenda"
+                    ? "bg-white text-zinc-900 shadow-2xs"
+                    : "text-zinc-600 hover:text-zinc-900"
+                }`}
+              >
+                <span>📋</span>
+                <span>Lista zmian</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("calendar")}
+                className={`px-3 py-1 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                  viewMode === "calendar"
+                    ? "bg-white text-zinc-900 shadow-2xs"
+                    : "text-zinc-600 hover:text-zinc-900"
+                }`}
+              >
+                <span>📅</span>
+                <span>Siatka</span>
+              </button>
+            </div>
+
+            {/* Przełącznik: Cała załoga vs Moje zmiany */}
             <div className="inline-flex rounded-lg border border-zinc-200 bg-zinc-100 p-0.5">
               <button
                 type="button"
@@ -360,206 +472,430 @@ export function ShiftCalendar({ restaurantId: propRestaurantId }: { restaurantId
                     : "text-zinc-600 hover:text-zinc-900"
                 }`}
               >
-                👤 Tylko moje zmiany
+                👤 Moje zmiany
               </button>
             </div>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handleExportMonthToExcel}
-            >
-              📥 Eksportuj (.xlsx)
-            </Button>
-
-            <div className="flex items-center gap-1.5 bg-zinc-100 p-1 rounded-lg">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={handlePrevMonth}
-                className="h-8 px-2.5 font-bold"
-              >
-                ←
-              </Button>
-              <span className="text-xs font-bold capitalize px-3 min-w-[130px] text-center text-zinc-900">
-                {monthName}
-              </span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={handleNextMonth}
-                className="h-8 px-2.5 font-bold"
-              >
-                →
-              </Button>
-            </div>
           </div>
-        </div>
 
-        {/* PASEK WYBORU LOKALU (GDY PRACOWNIK LUB MANAGER MA WIĘCEJ NIŻ 1 BAR) */}
-        {venues.length > 1 && (
-          <div className="mt-4 pt-3 border-t flex flex-wrap items-center gap-2">
-            <span className="text-xs font-semibold text-zinc-500">Pokaż grafik dla:</span>
-            <button
-              type="button"
-              onClick={() => setSelectedVenueFilter("all")}
-              className={`px-3 py-1 rounded-full text-xs font-bold border transition-all ${
-                selectedVenueFilter === "all"
-                  ? "bg-zinc-900 text-white border-zinc-900"
-                  : "bg-white text-zinc-700 border-zinc-200 hover:border-zinc-400"
-              }`}
-            >
-              🏠 Wszystkie lokale ({venues.length})
-            </button>
-            {venues.map((v) => (
+          {/* PASEK WYBORU LOKALU (GDY PRACOWNIK LUB MANAGER MA WIĘCEJ NIŻ 1 BAR) */}
+          {venues.length > 1 && (
+            <div className="pt-2 border-t flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
+              <span className="text-xs font-semibold text-zinc-500 shrink-0">Lokal:</span>
               <button
-                key={v.id}
                 type="button"
-                onClick={() => setSelectedVenueFilter(v.id)}
-                className={`px-3 py-1 rounded-full text-xs font-bold border transition-all ${
-                  selectedVenueFilter === v.id
-                    ? "bg-indigo-600 text-white border-indigo-600"
+                onClick={() => setSelectedVenueFilter("all")}
+                className={`px-3 py-1 rounded-full text-xs font-bold border transition-all shrink-0 ${
+                  selectedVenueFilter === "all"
+                    ? "bg-zinc-900 text-white border-zinc-900 shadow-xs"
                     : "bg-white text-zinc-700 border-zinc-200 hover:border-zinc-400"
                 }`}
               >
-                🏠 {v.name}
+                🏠 Wszystkie ({venues.length})
               </button>
-            ))}
-          </div>
-        )}
-      </CardHeader>
-
-      <CardContent className="space-y-6">
-        {/* SIATKA MIESIĘCZNA KALENDARZA */}
-        <div className="space-y-2">
-          <div className="grid grid-cols-7 gap-2 text-center text-xs font-bold text-zinc-500 uppercase pb-1">
-            <div>Pon</div>
-            <div>Wt</div>
-            <div>Śr</div>
-            <div>Czw</div>
-            <div>Pt</div>
-            <div>Sob</div>
-            <div>Nd</div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-7 gap-2">
-            {calendarCells.map((dateStr, idx) => {
-              if (!dateStr) {
-                return (
-                  <div
-                    key={`empty-${idx}`}
-                    className="hidden sm:block min-h-[115px] rounded-xl bg-zinc-50/50 border border-dashed border-zinc-200"
-                  />
-                )
-              }
-
-              const dayNum = Number(dateStr.split("-")[2])
-              const isSelected = dateStr === selectedDate
-              const dayShifts = filteredShifts
-                .filter((s) => s.work_date === dateStr)
-                .sort((a, b) => a.start_time.localeCompare(b.start_time))
-
-              return (
-                <div
-                  key={dateStr}
-                  onClick={() => setSelectedDate(dateStr)}
-                  className={`min-h-[115px] p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between ${
-                    isSelected
-                      ? "border-zinc-900 ring-2 ring-zinc-900 bg-zinc-50 shadow-sm"
-                      : "bg-white border-zinc-200 hover:border-zinc-400"
+              {venues.map((v) => (
+                <button
+                  key={v.id}
+                  type="button"
+                  onClick={() => setSelectedVenueFilter(v.id)}
+                  className={`px-3 py-1 rounded-full text-xs font-bold border transition-all shrink-0 ${
+                    selectedVenueFilter === v.id
+                      ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
+                      : "bg-white text-zinc-700 border-zinc-200 hover:border-zinc-400"
                   }`}
                 >
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-xs font-bold text-zinc-900">{dayNum}</span>
-                      {dayShifts.length > 0 && (
-                        <span className="text-[10px] font-semibold text-zinc-400">
-                          {dayShifts.length} zm.
+                  🏠 {v.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </CardHeader>
+
+      <CardContent className="p-3.5 sm:p-6 space-y-6">
+        {/* WIDOK 1: LISTA ZMIAN (AGENDA - ZOPTYMALIZOWANA MOBILNIE) */}
+        {viewMode === "agenda" && (
+          <div className="space-y-4">
+            {/* PRZYPIĘTY KAFELEK: DZISIEJSZA OBSADA / TWOJA ZMIANA (POWIELONY NA SAMEJ GÓRZE) */}
+            {isCurrentMonth && (
+              <div className="rounded-xl border-2 border-amber-400 bg-linear-to-r from-amber-50/90 via-orange-50/40 to-white p-3.5 sm:p-4 shadow-xs space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <span className="w-9 h-9 rounded-xl bg-amber-500 text-white font-black text-sm flex items-center justify-center shadow-xs shrink-0">
+                      {todayDayNum}
+                    </span>
+                    <div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-xs font-black uppercase tracking-wider text-amber-950 flex items-center gap-1">
+                          <span>📌</span> Dzisiaj ({todayWeekdayCapitalized})
                         </span>
-                      )}
-                    </div>
-
-                    <div className="space-y-1">
-                      {dayShifts.map((sh) => {
-                        const person = getPersonDetails(sh.user_id, sh.restaurant_id)
-                        const venueName = getVenueName(sh.restaurant_id)
-                        const showVenueTag =
-                          venues.length > 1 && selectedVenueFilter === "all"
-
-                        return (
-                          <div
-                            key={sh.id}
-                            className="px-2 py-0.5 rounded text-white text-[11px] font-semibold flex flex-col leading-tight"
-                            style={{ backgroundColor: person.color }}
-                            title={`${person.name} (${venueName}): ${sh.start_time}`}
-                          >
-                            <div className="flex items-center justify-between gap-1">
-                              <span className="truncate">{person.name}</span>
-                              <span className="text-[10px] opacity-95 shrink-0 font-mono">
-                                {sh.start_time}
-                              </span>
-                            </div>
-                            {showVenueTag && (
-                              <span className="text-[9px] opacity-90 truncate font-normal">
-                                🏠 {venueName}
-                              </span>
-                            )}
-                          </div>
-                        )
-                      })}
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-white shadow-2xs">
+                          {todayDayNum} {todayMonthLong}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-amber-800/90">
+                        {todayShifts.length > 0
+                          ? `Obsada na dziś: ${todayShifts.length} ${todayShifts.length === 1 ? "osoba" : todayShifts.length < 5 ? "osoby" : "osób"}`
+                          : "Brak zaplanowanych zmian na dziś w lokalu"}
+                      </p>
                     </div>
                   </div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
 
-        {/* SZCZEGÓŁY WYBRANEGO DNIA POD KALENDARZEM */}
-        {selectedDate && (
-          <div className="p-4 rounded-xl bg-zinc-50 border border-zinc-200 space-y-3">
-            <h4 className="text-sm font-bold text-zinc-900">
-              📅 Szczegóły obsady w dniu: {selectedDate}
-            </h4>
-            {selectedDayShifts.length === 0 ? (
-              <p className="text-xs text-zinc-500">
-                Brak opublikowanych zmian na ten dzień w wybranym widoku.
-              </p>
+                  {myTodayShift ? (
+                    <div className="px-3 py-1.5 rounded-lg bg-amber-600 text-white flex items-center gap-1.5 text-xs font-bold shadow-xs">
+                      <span>👤 Twoja zmiana dzisiaj:</span>
+                      <span className="font-mono font-black text-amber-100">
+                        {myTodayShift.start_time}{myTodayShift.end_time ? ` – ${myTodayShift.end_time}` : ""}
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="px-2.5 py-1 rounded-lg bg-white/95 border border-amber-200 text-amber-900 text-xs font-semibold shadow-2xs">
+                      🏖️ Masz dzisiaj wolne
+                    </span>
+                  )}
+                </div>
+
+                {todayShifts.length > 0 && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 pt-1 border-t border-amber-200/60">
+                    {todayShifts.map((sh) => {
+                      const person = getPersonDetails(sh.user_id, sh.restaurant_id)
+                      const venueName = getVenueName(sh.restaurant_id)
+                      const isMe = currentUserId && sh.user_id === currentUserId
+                      const showVenueTag = venues.length > 1 && selectedVenueFilter === "all"
+
+                      return (
+                        <div
+                          key={`top-today-${sh.id}`}
+                          className={`p-2.5 rounded-lg border flex items-center justify-between gap-2 shadow-2xs ${
+                            isMe
+                              ? "bg-white border-amber-400 ring-2 ring-amber-300/60"
+                              : "bg-white/95 border-amber-200/90"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span
+                              className="w-3 h-3 rounded-full shrink-0"
+                              style={{ backgroundColor: person.color }}
+                            />
+                            <div className="min-w-0">
+                              <p className="text-xs font-bold text-zinc-900 truncate flex items-center gap-1">
+                                <span>{person.name}</span>
+                                {isMe && (
+                                  <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-600 text-white">
+                                    Ty
+                                  </span>
+                                )}
+                              </p>
+                              <p className="text-[11px] text-zinc-500 truncate">
+                                {person.role}
+                                {showVenueTag ? ` • 🏠 ${venueName}` : ""}
+                              </p>
+                            </div>
+                          </div>
+
+                          <span className="px-2 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-950 text-xs font-bold font-mono shrink-0">
+                            {sh.start_time}
+                            {sh.end_time ? ` – ${sh.end_time}` : ""}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TYTUŁ PEŁNEGO HARMONOGRAMU */}
+            <div className="flex items-center justify-between pt-1">
+              <span className="text-xs font-bold uppercase tracking-wider text-zinc-500">
+                📅 Harmonogram na cały miesiąc ({monthName}):
+              </span>
+              <span className="text-[11px] font-medium text-zinc-400">
+                {datesWithShifts.length} {datesWithShifts.length === 1 ? "dzień ze zmianami" : "dni ze zmianami"}
+              </span>
+            </div>
+
+            {datesWithShifts.length === 0 ? (
+              <div className="py-12 text-center bg-zinc-50 rounded-xl border border-dashed border-zinc-200 p-6 space-y-2">
+                <span className="text-3xl">📅</span>
+                <h4 className="text-sm font-bold text-zinc-800">
+                  Brak opublikowanych zmian w tym miesiącu
+                </h4>
+                <p className="text-xs text-zinc-500 max-w-sm mx-auto">
+                  {onlyMyShifts
+                    ? "Nie masz zaplanowanych zmian w wybranym miesiącu lub grafik nie został jeszcze opublikowany."
+                    : "Manager nie opublikował jeszcze grafiku na ten miesiąc."}
+                </p>
+              </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
-                {selectedDayShifts.map((sh) => {
-                  const person = getPersonDetails(sh.user_id, sh.restaurant_id)
-                  const venueName = getVenueName(sh.restaurant_id)
+              <div className="space-y-3">
+                {datesWithShifts.map((dateStr) => {
+                  const [y, m, d] = dateStr.split("-").map(Number)
+                  const dateObj = new Date(y, m - 1, d)
+                  const weekdayName = dateObj.toLocaleDateString("pl-PL", { weekday: "long" })
+                  const capitalizedWeekday = weekdayName.charAt(0).toUpperCase() + weekdayName.slice(1)
+                  const monthLong = dateObj.toLocaleDateString("pl-PL", { month: "long" })
+                  const isToday = dateStr === todayStr
+                  const isPast = dateStr < todayStr
+
+                  const dayShifts = monthShifts
+                    .filter((s) => s.work_date === dateStr)
+                    .sort((a, b) => a.start_time.localeCompare(b.start_time))
+                  const myShift = currentUserId ? dayShifts.find((s) => s.user_id === currentUserId) : null
+
                   return (
                     <div
-                      key={sh.id}
-                      className="p-3 rounded-lg bg-white border border-zinc-200 flex items-center justify-between gap-2 shadow-2xs"
+                      key={dateStr}
+                      className={`rounded-xl border transition-all p-3 sm:p-4 ${
+                        isToday
+                          ? "bg-amber-50/30 border-amber-300 ring-2 ring-amber-200/70 shadow-xs"
+                          : myShift
+                          ? "bg-white border-indigo-200 shadow-2xs"
+                          : isPast
+                          ? "bg-zinc-50/60 border-zinc-200 opacity-85"
+                          : "bg-white border-zinc-200 shadow-2xs"
+                      }`}
                     >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span
-                          className="w-3 h-3 rounded-full shrink-0"
-                          style={{ backgroundColor: person.color }}
-                        />
-                        <div className="min-w-0">
-                          <p className="text-xs font-bold text-zinc-900 truncate">
-                            {person.name}
-                          </p>
-                          <p className="text-[11px] text-zinc-500 truncate">
-                            {person.role}{" "}
-                            {venues.length > 1 ? `• 🏠 ${venueName}` : ""}
-                          </p>
+                      <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-zinc-100">
+                        <div className="flex items-center gap-2.5">
+                          <span
+                            className={`w-9 h-9 rounded-xl flex items-center justify-center font-extrabold text-sm shrink-0 ${
+                              isToday
+                                ? "bg-amber-500 text-white shadow-xs"
+                                : myShift
+                                ? "bg-indigo-600 text-white shadow-xs"
+                                : "bg-zinc-100 text-zinc-800"
+                            }`}
+                          >
+                            {d}
+                          </span>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-bold text-zinc-900">
+                                {capitalizedWeekday}
+                              </span>
+                              <span className="text-xs text-zinc-400">
+                                ({d} {monthLong})
+                              </span>
+                              {isToday && (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-white shadow-2xs">
+                                  Dzisiaj
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-zinc-500">
+                              Obsada: {dayShifts.length} {dayShifts.length === 1 ? "osoba" : dayShifts.length < 5 ? "osoby" : "osób"}
+                            </p>
+                          </div>
                         </div>
+
+                        {myShift && (
+                          <div className="px-2.5 py-1 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center gap-1.5 text-xs font-bold text-indigo-900">
+                            <span>👤 Twoja zmiana:</span>
+                            <span className="font-mono font-extrabold text-indigo-700">
+                              {myShift.start_time}{myShift.end_time ? ` – ${myShift.end_time}` : ""}
+                            </span>
+                          </div>
+                        )}
                       </div>
-                      <span className="px-2.5 py-1 rounded-md bg-zinc-100 text-zinc-900 text-xs font-bold font-mono shrink-0">
-                        {sh.start_time}
-                        {sh.end_time ? ` – ${sh.end_time}` : ""}
-                      </span>
+
+                      {/* Lista pracowników na zmianie */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 pt-2.5">
+                        {dayShifts.map((sh) => {
+                          const person = getPersonDetails(sh.user_id, sh.restaurant_id)
+                          const venueName = getVenueName(sh.restaurant_id)
+                          const isMe = currentUserId && sh.user_id === currentUserId
+                          const showVenueTag = venues.length > 1 && selectedVenueFilter === "all"
+
+                          return (
+                            <div
+                              key={sh.id}
+                              className={`p-2.5 rounded-lg border flex items-center justify-between gap-2 transition-all ${
+                                isMe
+                                  ? "bg-indigo-50/50 border-indigo-300 ring-1 ring-indigo-200"
+                                  : "bg-zinc-50/70 border-zinc-200/80 hover:bg-zinc-50"
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span
+                                  className="w-3 h-3 rounded-full shrink-0"
+                                  style={{ backgroundColor: person.color }}
+                                />
+                                <div className="min-w-0">
+                                  <p className="text-xs font-bold text-zinc-900 truncate flex items-center gap-1">
+                                    <span>{person.name}</span>
+                                    {isMe && (
+                                      <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-indigo-600 text-white">
+                                        Ty
+                                      </span>
+                                    )}
+                                  </p>
+                                  <p className="text-[11px] text-zinc-500 truncate">
+                                    {person.role}
+                                    {showVenueTag ? ` • 🏠 ${venueName}` : ""}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <span className="px-2 py-1 rounded-md bg-white border border-zinc-200 text-zinc-900 text-xs font-bold font-mono shrink-0 shadow-2xs">
+                                {sh.start_time}
+                                {sh.end_time ? ` – ${sh.end_time}` : ""}
+                              </span>
+                            </div>
+                          )
+                        })}
+                      </div>
                     </div>
                   )
                 })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* WIDOK 2: SIATKA MIESIĘCZNA KALENDARZA (ZABEZPIECZONA MIN-W-[700PX] Z PŁYNNYM SCROLLEM) */}
+        {viewMode === "calendar" && (
+          <div className="space-y-4">
+            <div className="overflow-x-auto no-scrollbar pb-2">
+              <div className="min-w-[700px]">
+                <div className="grid grid-cols-7 gap-1.5 sm:gap-2 text-center text-xs font-bold text-zinc-500 uppercase pb-1">
+                  <div>Pon</div>
+                  <div>Wt</div>
+                  <div>Śr</div>
+                  <div>Czw</div>
+                  <div>Pt</div>
+                  <div>Sob</div>
+                  <div>Nd</div>
+                </div>
+
+                <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+                  {calendarCells.map((dateStr, idx) => {
+                    if (!dateStr) {
+                      return (
+                        <div
+                          key={`empty-${idx}`}
+                          className="min-h-[115px] rounded-xl bg-zinc-50/50 border border-dashed border-zinc-200"
+                        />
+                      )
+                    }
+
+                    const dayNum = Number(dateStr.split("-")[2])
+                    const isSelected = dateStr === selectedDate
+                    const isToday = dateStr === todayStr
+                    const dayShifts = filteredShifts
+                      .filter((s) => s.work_date === dateStr)
+                      .sort((a, b) => a.start_time.localeCompare(b.start_time))
+
+                    return (
+                      <div
+                        key={dateStr}
+                        onClick={() => setSelectedDate(dateStr)}
+                        className={`min-h-[115px] p-2 sm:p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between ${
+                          isSelected
+                            ? "border-zinc-900 ring-2 ring-zinc-900 bg-zinc-50 shadow-sm"
+                            : isToday
+                            ? "bg-amber-50/40 border-amber-300 ring-1 ring-amber-200"
+                            : "bg-white border-zinc-200 hover:border-zinc-400"
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span
+                              className={`text-xs font-bold ${
+                                isToday
+                                  ? "w-5 h-5 rounded-full bg-amber-500 text-white flex items-center justify-center text-[11px]"
+                                  : "text-zinc-900"
+                              }`}
+                            >
+                              {dayNum}
+                            </span>
+                            {dayShifts.length > 0 && (
+                              <span className="text-[10px] font-semibold text-zinc-400">
+                                {dayShifts.length} zm.
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="space-y-1">
+                            {dayShifts.map((sh) => {
+                              const person = getPersonDetails(sh.user_id, sh.restaurant_id)
+                              const venueName = getVenueName(sh.restaurant_id)
+                              const showVenueTag =
+                                venues.length > 1 && selectedVenueFilter === "all"
+
+                              return (
+                                <div
+                                  key={sh.id}
+                                  className="px-1.5 py-0.5 rounded text-white text-[10px] sm:text-[11px] font-semibold flex flex-col leading-tight"
+                                  style={{ backgroundColor: person.color }}
+                                  title={`${person.name} (${venueName}): ${sh.start_time}`}
+                                >
+                                  <div className="flex items-center justify-between gap-1">
+                                    <span className="truncate">{person.name}</span>
+                                    <span className="text-[9px] sm:text-[10px] opacity-95 shrink-0 font-mono">
+                                      {sh.start_time}
+                                    </span>
+                                  </div>
+                                  {showVenueTag && (
+                                    <span className="text-[8px] sm:text-[9px] opacity-90 truncate font-normal">
+                                      🏠 {venueName}
+                                    </span>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* SZCZEGÓŁY WYBRANEGO DNIA POD KALENDARZEM */}
+            {selectedDate && (
+              <div className="p-3.5 sm:p-4 rounded-xl bg-zinc-50 border border-zinc-200 space-y-2.5 sm:space-y-3">
+                <h4 className="text-xs sm:text-sm font-bold text-zinc-900">
+                  📅 Szczegóły obsady w dniu: {selectedDate}
+                </h4>
+                {selectedDayShifts.length === 0 ? (
+                  <p className="text-xs text-zinc-500">
+                    Brak opublikowanych zmian na ten dzień w wybranym widoku.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 sm:gap-2.5">
+                    {selectedDayShifts.map((sh) => {
+                      const person = getPersonDetails(sh.user_id, sh.restaurant_id)
+                      const venueName = getVenueName(sh.restaurant_id)
+                      return (
+                        <div
+                          key={sh.id}
+                          className="p-2.5 sm:p-3 rounded-lg bg-white border border-zinc-200 flex items-center justify-between gap-2 shadow-2xs"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span
+                              className="w-3 h-3 rounded-full shrink-0"
+                              style={{ backgroundColor: person.color }}
+                            />
+                            <div className="min-w-0">
+                              <p className="text-xs font-bold text-zinc-900 truncate">
+                                {person.name}
+                              </p>
+                              <p className="text-[11px] text-zinc-500 truncate">
+                                {person.role}{" "}
+                                {venues.length > 1 ? `• 🏠 ${venueName}` : ""}
+                              </p>
+                            </div>
+                          </div>
+                          <span className="px-2 py-0.5 rounded-md bg-zinc-100 text-zinc-900 text-xs font-bold font-mono shrink-0">
+                            {sh.start_time}
+                            {sh.end_time ? ` – ${sh.end_time}` : ""}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>

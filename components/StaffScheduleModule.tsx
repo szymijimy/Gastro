@@ -94,6 +94,15 @@ export function StaffScheduleModule({
   const [myShifts, setMyShifts] = useState<GlobalShiftRecord[]>([])
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [expandedPeriodIds, setExpandedPeriodIds] = useState<Record<string, boolean>>({})
+
+  const togglePeriodExpanded = (periodKey: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setExpandedPeriodIds((prev) => ({
+      ...prev,
+      [periodKey]: !prev[periodKey],
+    }))
+  }
 
   useEffect(() => {
     if (!currentUserId) return
@@ -410,30 +419,55 @@ export function StaffScheduleModule({
                         </Button>
                       </div>
 
-                      {periodShifts.length > 0 && (
-                        <div className="pt-3 border-t">
-                          <p className="text-xs font-bold text-zinc-700 mb-2">
-                            Twoje przypisane zmiany w tym okresie ({periodShifts.length}):
-                          </p>
-                          <div className="flex flex-wrap gap-2">
-                            {periodShifts.map((s) => (
-                              <span
-                                key={s.id}
-                                className="px-3 py-1 rounded-lg bg-zinc-900 text-white text-xs font-semibold flex items-center gap-1.5"
-                              >
-                                <span>📅 {s.work_date}:</span>
-                                <span className="text-emerald-300 font-bold">
-                                  {s.start_time}
-                                  {s.end_time ? ` – ${s.end_time}` : ""}
-                                </span>
-                                <span className="px-1.5 py-0.2 rounded bg-white/15 text-[10px]">
-                                  🏠 {s.restaurant_name}
+                      {periodShifts.length > 0 && (() => {
+                        const periodKey = period.id || `${period.start_date}_${period.end_date}`
+                        const isExpanded = !!expandedPeriodIds[periodKey]
+
+                        return (
+                          <div
+                            className="pt-2.5 border-t border-zinc-100"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <button
+                              type="button"
+                              onClick={(e) => togglePeriodExpanded(periodKey, e)}
+                              className="w-full flex items-center justify-between py-1 px-1.5 -mx-1.5 rounded-md text-xs font-semibold text-zinc-700 hover:text-zinc-900 hover:bg-zinc-50 transition-colors"
+                            >
+                              <span className="flex items-center gap-1.5 flex-wrap">
+                                <span>📅 Twoje zmiany w tym okresie:</span>
+                                <span className="px-2 py-0.2 rounded-full text-[11px] font-black bg-zinc-900 text-white">
+                                  {periodShifts.length}
                                 </span>
                               </span>
-                            ))}
+                              <span className="inline-flex items-center gap-1 text-xs font-bold text-indigo-600 hover:text-indigo-800">
+                                {isExpanded ? "Zwiń zmiany ▲" : "Rozwiń zmiany ▼"}
+                              </span>
+                            </button>
+
+                            {isExpanded && (
+                              <div className="mt-2 flex flex-wrap gap-1.5 sm:gap-2 pt-2 border-t border-zinc-100 max-h-64 overflow-y-auto no-scrollbar">
+                                {periodShifts.map((s) => (
+                                  <span
+                                    key={s.id}
+                                    className="px-2.5 py-1 rounded-lg bg-zinc-900 text-white text-xs font-semibold flex items-center gap-1.5 shadow-2xs"
+                                  >
+                                    <span>📅 {s.work_date}:</span>
+                                    <span className="text-emerald-300 font-bold font-mono">
+                                      {s.start_time}
+                                      {s.end_time ? ` – ${s.end_time}` : ""}
+                                    </span>
+                                    {myRestaurants.length > 1 && (
+                                      <span className="px-1.5 py-0.2 rounded bg-white/15 text-[10px]">
+                                        🏠 {s.restaurant_name}
+                                      </span>
+                                    )}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                           </div>
-                        </div>
-                      )}
+                        )
+                      })()}
                     </div>
                   )
                 })}
