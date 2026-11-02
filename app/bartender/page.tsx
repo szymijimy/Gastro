@@ -1,6 +1,7 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, Suspense } from "react"
+import Image from "next/image"
 import { useRouter } from "next/navigation"
 import { supabase } from "@/lib/supabase"
 import { Button } from "@/components/ui/button"
@@ -19,64 +20,19 @@ import {
   DailyRevenue,
   ManualBonus,
 } from "@/components/AttendanceManagerModule"
+import { formatLocalDate, shiftDateByDays, getFriendlyDateLabel } from "@/lib/date-utils"
+import type { PriorityLevel, TodoItem } from "@/types/tasks"
+import type { Announcement } from "@/types/announcements"
+import type { RestaurantRole } from "@/types/restaurant"
+import type { StaffMembership, Teammate } from "@/types/staff"
+import type { Category, Product } from "@/types/inventory"
+import { PriorityIcon } from "@/components/PriorityIcon"
+import { fetchTodos, toggleTodoCompleted, saveTodoNote } from "@/services/tasksService"
+import { fetchAnnouncements } from "@/services/announcementsService"
 
-type PriorityLevel = "high" | "normal" | "low"
 
-const PriorityIcon = ({ priority }: { priority: PriorityLevel }) => {
-  if (priority === "high") {
-    return (
-      <span title="Priorytet: Wysoki" className="inline-flex items-center justify-center w-5 h-5 rounded bg-red-50 text-red-600 shrink-0">
-        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-          <path d="m18 15-6-6-6 6" />
-        </svg>
-      </span>
-    )
-  }
-  if (priority === "low") {
-    return (
-      <span title="Priorytet: Niski" className="inline-flex items-center justify-center w-5 h-5 rounded bg-green-50 text-green-600 shrink-0">
-        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-          <path d="m6 9 6 6 6-6" />
-        </svg>
-      </span>
-    )
-  }
-  return (
-    <span title="Priorytet: Normalny" className="inline-flex items-center justify-center w-5 h-5 rounded bg-yellow-50 text-yellow-500 shrink-0">
-      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round">
-        <line x1="12" y1="5" x2="12" y2="19" />
-      </svg>
-    </span>
-  )
-}
 
-const formatLocalDate = (date: Date): string => {
-  const yyyy = date.getFullYear()
-  const mm = String(date.getMonth() + 1).padStart(2, "0")
-  const dd = String(date.getDate()).padStart(2, "0")
-  return `${yyyy}-${mm}-${dd}`
-}
 
-const shiftDateByDays = (dateStr: string, days: number): string => {
-  if (!dateStr) return ""
-  const [y, m, d] = dateStr.split("-").map(Number)
-  const dateObj = new Date(y, m - 1, d)
-  dateObj.setDate(dateObj.getDate() + days)
-  return formatLocalDate(dateObj)
-}
-
-const getFriendlyDateLabel = (dateStr: string, todayStr: string): string => {
-  if (!dateStr) return ""
-  const [y, m, d] = dateStr.split("-").map(Number)
-  const dateObj = new Date(y, m - 1, d)
-  const weekday = dateObj.toLocaleDateString("pl-PL", { weekday: "long" })
-  const capitalizedWeekday = weekday.charAt(0).toUpperCase() + weekday.slice(1)
-
-  if (dateStr === todayStr) return `Dzisiaj (${capitalizedWeekday})`
-  if (dateStr === shiftDateByDays(todayStr, -1)) return `Wczoraj (${capitalizedWeekday})`
-  if (dateStr === shiftDateByDays(todayStr, 1)) return `Jutro (${capitalizedWeekday})`
-  return capitalizedWeekday
-}
 
 const UNITS_ORDER = ["but.", "keg", "l", "ml", "kg", "g", "szt.", "opak."]
 const getUnitRank = (unit: string) => {
@@ -84,63 +40,7 @@ const getUnitRank = (unit: string) => {
   return idx === -1 ? 999 : idx
 }
 
-type StaffMembership = {
-  restaurant_id: string
-  restaurant_name: string
-  role: string
-  hourly_rate: number
-}
 
-type RestaurantRole = {
-  id: string
-  name: string
-  color: string
-}
-
-type Teammate = {
-  user_id: string
-  role: string
-  full_name: string | null
-  email: string | null
-}
-
-type Announcement = {
-  id: string
-  title: string
-  content: string
-  is_pinned: boolean
-  visible_from: string | null
-  visible_until: string | null
-  created_at: string
-}
-
-type TodoItem = {
-  id: string
-  task: string
-  assigned_role: string | null
-  assigned_user_id: string | null
-  priority: PriorityLevel
-  target_date: string
-  is_completed: boolean
-  note: string | null
-  created_at: string
-}
-
-type Category = {
-  id: string
-  name: string
-  description: string | null
-}
-
-type Product = {
-  id: string
-  category_id: string
-  name: string
-  unit: string
-  quantity: number
-  min_quantity: number
-  image_url: string | null
-}
 
 const isProductShortage = (prod: Product) => {
   const qty = Number(prod.quantity) || 0
@@ -339,7 +239,7 @@ function StaffTodoRow({
 // ============================================================================
 // GŁÓWNY PANEL PRACOWNIKA (/bartender)
 // ============================================================================
-export default function BartenderDashboard() {
+function BartenderDashboard() {
   const router = useRouter()
 
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
@@ -377,8 +277,8 @@ export default function BartenderDashboard() {
   const [categories, setCategories] = useState<Category[]>([])
   const [products, setProducts] = useState<Product[]>([])
 
-  const [todayStr, setTodayStr] = useState<string>("")
-  const [selectedTodoDate, setSelectedTodoDate] = useState<string>("")
+  const [todayStr] = useState<string>(() => formatLocalDate(new Date()))
+  const [selectedTodoDate, setSelectedTodoDate] = useState<string>(() => formatLocalDate(new Date()))
   const [showOnlyMyTasks, setShowOnlyMyTasks] = useState<boolean>(true)
 
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null)
@@ -421,18 +321,8 @@ export default function BartenderDashboard() {
         .select("id, name, color")
         .eq("restaurant_id", restId),
       supabase.rpc("get_restaurant_teammates", { p_restaurant_id: restId }),
-      supabase
-        .from("restaurant_announcements")
-        .select("*")
-        .eq("restaurant_id", restId)
-        .order("is_pinned", { ascending: false })
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("restaurant_todos")
-        .select("*")
-        .eq("restaurant_id", restId)
-        .order("is_completed", { ascending: true })
-        .order("created_at", { ascending: false }),
+      fetchAnnouncements(restId),
+      fetchTodos(restId),
       supabase
         .from("product_categories")
         .select("id, name, description")
@@ -459,12 +349,12 @@ export default function BartenderDashboard() {
 
     if (rolesRes.data) setRoles(rolesRes.data)
     if (teammatesRes.data) setTeammates(teammatesRes.data as Teammate[])
-    if (annRes.data) setAnnouncements(annRes.data as Announcement[])
-    if (todosRes.data) setTodos(todosRes.data as TodoItem[])
+    if (annRes.data) setAnnouncements(annRes.data)
+    if (todosRes.data) setTodos(todosRes.data)
     if (catRes.data) setCategories(catRes.data)
     if (prodRes.data) {
       setProducts(
-        prodRes.data.map((p: any) => ({
+        prodRes.data.map((p: Product) => ({
           ...p,
           quantity: Number(p.quantity) || 0,
           min_quantity: Number(p.min_quantity) || 0,
@@ -551,10 +441,15 @@ export default function BartenderDashboard() {
     }
   }
 
+  interface StaffMembershipDbItem {
+    restaurant_id: string
+    role: string
+    hourly_rate: number | null
+    restaurants: { name: string | null } | { name: string | null }[] | null
+  }
+
   useEffect(() => {
-    const localToday = formatLocalDate(new Date())
-    setTodayStr(localToday)
-    setSelectedTodoDate(localToday)
+    const localToday = todayStr
 
     const fetchStaffData = async () => {
       const { data: { session } } = await supabase.auth.getSession()
@@ -587,7 +482,7 @@ export default function BartenderDashboard() {
         return
       }
 
-      const formattedMemberships: StaffMembership[] = membershipsData.map((m: any) => {
+      const formattedMemberships: StaffMembership[] = membershipsData.map((m: StaffMembershipDbItem) => {
         const restObj = Array.isArray(m.restaurants) ? m.restaurants[0] : m.restaurants
         return {
           restaurant_id: m.restaurant_id,
@@ -609,7 +504,7 @@ export default function BartenderDashboard() {
     }
 
     fetchStaffData()
-  }, [router])
+  }, [router, todayStr])
 
   const handleSwitchVenue = async (targetVenueId: string) => {
     if (!currentUserId || targetVenueId === restaurantId) return
@@ -680,13 +575,10 @@ export default function BartenderDashboard() {
       prev.map((t) => (t.id === todo.id ? { ...t, is_completed: updatedStatus } : t))
     )
 
-    const { error } = await supabase
-      .from("restaurant_todos")
-      .update({ is_completed: updatedStatus })
-      .eq("id", todo.id)
+    const { error } = await toggleTodoCompleted(todo.id, updatedStatus)
 
     if (error) {
-      showToast("Nie udało się zaktualizować zadania: " + error.message, "error")
+      showToast("Nie udało się zaktualizować zadania: " + error, "error")
       setTodos((prev) =>
         prev.map((t) => (t.id === todo.id ? { ...t, is_completed: todo.is_completed } : t))
       )
@@ -694,13 +586,10 @@ export default function BartenderDashboard() {
   }
 
   const handleSaveTodoNote = async (todoId: string, noteText: string | null) => {
-    const { error } = await supabase
-      .from("restaurant_todos")
-      .update({ note: noteText })
-      .eq("id", todoId)
+    const { error } = await saveTodoNote(todoId, noteText)
 
     if (error) {
-      showToast("Błąd zapisywania uwagi: " + error.message, "error")
+      showToast("Błąd zapisywania uwagi: " + error, "error")
       return
     }
 
@@ -766,7 +655,7 @@ export default function BartenderDashboard() {
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
-    window.location.href = "/"
+    router.push("/")
   }
 
   if (loading) {
@@ -845,10 +734,13 @@ export default function BartenderDashboard() {
         <div>
           <div className="relative h-36 w-full bg-zinc-100 flex items-center justify-center overflow-hidden">
             {prod.image_url ? (
-              <img
+              <Image
                 src={prod.image_url}
                 alt={prod.name}
-                className="w-full h-full object-cover"
+                fill
+                sizes="(max-width: 768px) 100vw, 300px"
+                className="object-cover"
+                unoptimized
               />
             ) : (
               <div className="text-zinc-400 text-xs flex flex-col items-center gap-1">
@@ -1105,7 +997,7 @@ export default function BartenderDashboard() {
               <TabsTrigger value="attendance">Czas pracy</TabsTrigger>
             </TabsList>
 
-            <TabsContent value="todos" className="mt-6">
+            <TabsContent value="todos" keepMounted className="mt-6">
               <Card>
                 <CardHeader>
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -1244,7 +1136,7 @@ export default function BartenderDashboard() {
               </Card>
             </TabsContent>
 
-            <TabsContent value="announcements" className="mt-6">
+            <TabsContent value="announcements" keepMounted className="mt-6">
               <Card>
                 <CardHeader>
                   <CardTitle>Tablica Ogłoszeń — {restaurantName}</CardTitle>
@@ -1306,7 +1198,7 @@ export default function BartenderDashboard() {
               </Card>
             </TabsContent>
 
-            <TabsContent value="inventory" className="mt-6">
+            <TabsContent value="inventory" keepMounted className="mt-6">
               <Card>
                 <CardHeader>
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -1384,7 +1276,7 @@ export default function BartenderDashboard() {
                       <span className="text-xs text-zinc-500">Sortuj:</span>
                       <select
                         value={sortBy}
-                        onChange={(e) => setSortBy(e.target.value as any)}
+                        onChange={(e) => setSortBy(e.target.value as "smart_asc" | "smart_desc" | "name_asc")}
                         className="h-8 rounded-md border border-zinc-200 bg-white px-2 text-xs font-medium text-zinc-800"
                       >
                         <option value="smart_asc">
@@ -1491,7 +1383,7 @@ export default function BartenderDashboard() {
               </Card>
             </TabsContent>
 
-            <TabsContent value="schedule" className="mt-6 space-y-6">
+            <TabsContent value="schedule" keepMounted className="mt-6 space-y-6">
               <StaffScheduleModule
                 restaurantId={restaurantId}
                 currentUserId={currentUserId}
@@ -1499,7 +1391,7 @@ export default function BartenderDashboard() {
               <ShiftCalendar />
             </TabsContent>
 
-            <TabsContent value="attendance" className="mt-6 space-y-4">
+            <TabsContent value="attendance" keepMounted className="mt-6 space-y-4">
               {memberships.length > 1 && (
                 <div className="p-3.5 rounded-xl bg-indigo-50/70 border border-indigo-200 flex flex-wrap items-center justify-between gap-3">
                   <span className="text-xs font-semibold text-indigo-950">
@@ -1659,5 +1551,14 @@ export default function BartenderDashboard() {
         </div>
       )}
     </div>
+  )
+}
+
+
+export default function BartenderPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-zinc-100 p-8 text-center text-sm text-zinc-500">Wczytywanie panelu pracownika...</div>}>
+      <BartenderDashboard />
+    </Suspense>
   )
 }

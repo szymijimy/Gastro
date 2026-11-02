@@ -1,28 +1,14 @@
-"use client"
+﻿"use client"
 
 import { useEffect, useState, useRef } from "react"
+import Image from "next/image"
 import { supabase } from "@/lib/supabase"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { askConfirm, showToast } from "@/components/ui/feedback"
-
-type Category = {
-  id: string
-  name: string
-  description: string | null
-}
-
-type Product = {
-  id: string
-  category_id: string
-  name: string
-  unit: string
-  quantity: number
-  min_quantity: number
-  image_url: string | null
-}
+import type { Category, Product } from "@/types/inventory"
 
 type DraftProduct = {
   id: string
@@ -54,28 +40,16 @@ const getUnitRank = (unit: string) => {
 // ============================================================================
 // KOMPONENT POP-UPU: NOWA KATEGORIA
 // ============================================================================
-function CategoryModal({
-  isOpen,
+function CategoryModalDialog({
   onClose,
   onSave,
 }: {
-  isOpen: boolean
   onClose: () => void
   onSave: (name: string, desc: string) => Promise<void>
 }) {
   const [name, setName] = useState("")
   const [desc, setDesc] = useState("")
   const [saving, setSaving] = useState(false)
-
-  useEffect(() => {
-    if (isOpen) {
-      setName("")
-      setDesc("")
-      setSaving(false)
-    }
-  }, [isOpen])
-
-  if (!isOpen) return null
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -131,37 +105,42 @@ function CategoryModal({
   )
 }
 
+function CategoryModal({
+  isOpen,
+  ...props
+}: {
+  isOpen: boolean
+  onClose: () => void
+  onSave: (name: string, desc: string) => Promise<void>
+}) {
+  if (!isOpen) return null
+  return <CategoryModalDialog {...props} />
+}
+
 // ============================================================================
 // KOMPONENT POP-UPU: SERYJNE DODAWANIE PRODUKTÓW Z PROGIEM MINIMALNYM
 // ============================================================================
-function ProductBatchModal({
-  isOpen,
+function ProductBatchModalDialog({
   categoryName,
   onClose,
   onSaveBatch,
 }: {
-  isOpen: boolean
   categoryName: string
   onClose: () => void
   onSaveBatch: (validProducts: DraftProduct[]) => Promise<void>
 }) {
-  const [draftProducts, setDraftProducts] = useState<DraftProduct[]>([])
+  const [draftProducts, setDraftProducts] = useState<DraftProduct[]>([
+    { id: crypto.randomUUID(), name: "", unit: "but.", quantity: "0", min_quantity: "0", file: null, previewUrl: null }
+  ])
   const [saving, setSaving] = useState(false)
   const productInputRefs = useRef<(HTMLInputElement | null)[]>([])
 
   useEffect(() => {
-    if (isOpen) {
-      setDraftProducts([
-        { id: crypto.randomUUID(), name: "", unit: "but.", quantity: "0", min_quantity: "0", file: null, previewUrl: null }
-      ])
-      setSaving(false)
-      setTimeout(() => {
-        productInputRefs.current[0]?.focus()
-      }, 40)
-    }
-  }, [isOpen])
-
-  if (!isOpen) return null
+    const timer = setTimeout(() => {
+      productInputRefs.current[0]?.focus()
+    }, 40)
+    return () => clearTimeout(timer)
+  }, [])
 
   const updateDraftProduct = (index: number, patch: Partial<DraftProduct>) => {
     setDraftProducts(prev => prev.map((item, i) => (i === index ? { ...item, ...patch } : item)))
@@ -262,10 +241,10 @@ function ProductBatchModal({
 
                 <label
                   title="Dodaj zdjęcie produktu"
-                  className="w-10 h-10 rounded-lg border border-dashed border-zinc-300 hover:border-zinc-900 bg-zinc-50 flex items-center justify-center cursor-pointer overflow-hidden shrink-0"
+                  className="relative w-10 h-10 rounded-lg border border-dashed border-zinc-300 hover:border-zinc-900 bg-zinc-50 flex items-center justify-center cursor-pointer overflow-hidden shrink-0"
                 >
                   {item.previewUrl ? (
-                    <img src={item.previewUrl} alt="Podgląd" className="w-full h-full object-cover" />
+                    <Image src={item.previewUrl} alt="Podgląd" fill sizes="40px" className="object-cover" unoptimized />
                   ) : (
                     <span className="text-base">📷</span>
                   )}
@@ -382,6 +361,19 @@ function ProductBatchModal({
   )
 }
 
+function ProductBatchModal({
+  isOpen,
+  ...props
+}: {
+  isOpen: boolean
+  categoryName: string
+  onClose: () => void
+  onSaveBatch: (validProducts: DraftProduct[]) => Promise<void>
+}) {
+  if (!isOpen) return null
+  return <ProductBatchModalDialog {...props} />
+}
+
 // ============================================================================
 // GŁÓWNY MODUŁ MAGAZYNU (PRODUKTY)
 // ============================================================================
@@ -424,7 +416,7 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
       if (catRes.data) setCategories(catRes.data)
       if (prodRes.data) {
         setProducts(
-          prodRes.data.map((p: any) => ({
+          prodRes.data.map((p: Product) => ({
             ...p,
             quantity: Number(p.quantity) || 0,
             min_quantity: Number(p.min_quantity) || 0,
@@ -440,7 +432,7 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
   // --- KOMPRESJA ZDJĘĆ DO WEBP (~20KB) I OBSŁUGA STORAGE ---
   const compressImage = (file: File, maxSize = 500, quality = 0.8): Promise<Blob> => {
     return new Promise((resolve, reject) => {
-      const img = new Image()
+      const img = document.createElement("img")
       const objectUrl = URL.createObjectURL(file)
 
       img.onload = () => {
@@ -477,7 +469,7 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
         )
       }
 
-      img.onerror = (err) => {
+      img.onerror = (err: unknown) => {
         URL.revokeObjectURL(objectUrl)
         reject(err)
       }
@@ -778,10 +770,13 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
           {/* Zdjęcie produktu */}
           <div className="relative h-40 w-full bg-zinc-100 flex items-center justify-center overflow-hidden group">
             {prod.image_url ? (
-              <img
+              <Image
                 src={prod.image_url}
                 alt={prod.name}
+                fill
+                sizes="(max-width: 768px) 100vw, 300px"
                 className="w-full h-full object-cover"
+                unoptimized
               />
             ) : (
               <div className="text-zinc-400 text-xs flex flex-col items-center gap-1">

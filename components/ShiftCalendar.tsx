@@ -1,4 +1,4 @@
-"use client"
+﻿"use client"
 
 import { useEffect, useState } from "react"
 import * as XLSX from "xlsx"
@@ -47,26 +47,24 @@ export function ShiftCalendar({ restaurantId: propRestaurantId }: { restaurantId
   const [shifts, setShifts] = useState<PublishedShift[]>([])
   const [loading, setLoading] = useState(true)
 
-  const [viewYear, setViewYear] = useState<number>(2026)
-  const [viewMonth, setViewMonth] = useState<number>(0)
-  const [selectedDate, setSelectedDate] = useState<string>("")
-
-  useEffect(() => {
+  const [viewYear, setViewYear] = useState<number>(() => new Date().getFullYear())
+  const [viewMonth, setViewMonth] = useState<number>(() => new Date().getMonth())
+  const [selectedDate, setSelectedDate] = useState<string>(() => {
     const now = new Date()
-    setViewYear(now.getFullYear())
-    setViewMonth(now.getMonth())
     const yyyy = now.getFullYear()
     const mm = String(now.getMonth() + 1).padStart(2, "0")
     const dd = String(now.getDate()).padStart(2, "0")
-    setSelectedDate(`${yyyy}-${mm}-${dd}`)
-  }, [])
+    return `${yyyy}-${mm}-${dd}`
+  })
 
-  // Jeśli manager przełączy aktywny lokal u góry swojego panelu, aktualizujemy filtr
-  useEffect(() => {
+  // Dostosowanie filtru gdy propRestaurantId ulegnie zmianie
+  const [prevPropRestaurantId, setPrevPropRestaurantId] = useState(propRestaurantId)
+  if (propRestaurantId !== prevPropRestaurantId) {
+    setPrevPropRestaurantId(propRestaurantId)
     if (propRestaurantId) {
       setSelectedVenueFilter(propRestaurantId)
     }
-  }, [propRestaurantId])
+  }
 
   useEffect(() => {
     const loadCalendarData = async () => {
@@ -85,7 +83,11 @@ export function ShiftCalendar({ restaurantId: propRestaurantId }: { restaurantId
         .select("restaurant_id, restaurants (id, name)")
         .eq("user_id", session.user.id)
 
-      const myVenues: VenueInfo[] = (memberships || []).map((m: any) => {
+            interface VenueMembershipDbItem {
+        restaurant_id: string
+        restaurants: { id: string; name: string } | { id: string; name: string }[] | null
+      }
+      const myVenues: VenueInfo[] = (memberships || []).map((m: VenueMembershipDbItem) => {
         const r = Array.isArray(m.restaurants) ? m.restaurants[0] : m.restaurants
         return {
           id: m.restaurant_id,
@@ -132,9 +134,16 @@ export function ShiftCalendar({ restaurantId: propRestaurantId }: { restaurantId
         setRoles(rolesRes.data as RestaurantRole[])
       }
 
+      interface TeammateRpcItem {
+        user_id: string
+        role: string
+        full_name: string | null
+        email: string | null
+      }
+
       const combinedTeammates: Teammate[] = []
-      teamResponses.forEach((tr: { venueId: string; data: any[] }) => {
-        tr.data.forEach((person: any) => {
+      teamResponses.forEach((tr: { venueId: string; data: TeammateRpcItem[] }) => {
+        tr.data.forEach((person: TeammateRpcItem) => {
           combinedTeammates.push({
             user_id: person.user_id,
             restaurant_id: tr.venueId,
@@ -146,7 +155,7 @@ export function ShiftCalendar({ restaurantId: propRestaurantId }: { restaurantId
       })
       setTeammates(combinedTeammates)
 
-      const publishedPeriodIds = (periodsRes.data || []).map((p: any) => p.id)
+      const publishedPeriodIds = (periodsRes.data || []).map((p: { id: string }) => p.id)
 
       if (publishedPeriodIds.length === 0) {
         setShifts([])

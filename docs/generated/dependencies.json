@@ -1,0 +1,103 @@
+﻿{
+  "app/bartender/page.tsx": [
+    "components/AttendanceManagerModule.tsx",
+    "components/ShiftCalendar.tsx",
+    "components/StaffAttendanceModule.tsx",
+    "components/StaffScheduleModule.tsx",
+    "components/ui/button.tsx",
+    "components/ui/card.tsx",
+    "components/ui/feedback.tsx",
+    "components/ui/input.tsx",
+    "components/ui/label.tsx",
+    "components/ui/tabs.tsx",
+    "lib/supabase.ts"
+  ],
+  "app/globals.css": [],
+  "app/layout.tsx": [
+    "app/globals.css",
+    "lib/utils.ts"
+  ],
+  "app/manager/page.tsx": [
+    "components/AttendanceManagerModule.tsx",
+    "components/InventoryModule.tsx",
+    "components/ManagerScheduleModule.tsx",
+    "components/ShiftCalendar.tsx",
+    "components/ui/button.tsx",
+    "components/ui/card.tsx",
+    "components/ui/feedback.tsx",
+    "components/ui/input.tsx",
+    "components/ui/label.tsx",
+    "components/ui/table.tsx",
+    "components/ui/tabs.tsx",
+    "lib/supabase.ts"
+  ],
+  "app/page.tsx": [
+    "components/ui/button.tsx",
+    "components/ui/card.tsx",
+    "components/ui/input.tsx",
+    "components/ui/label.tsx",
+    "lib/supabase.ts"
+  ],
+  "components/AttendanceManagerModule.tsx": [
+    "components/ui/button.tsx",
+    "components/ui/card.tsx",
+    "components/ui/feedback.tsx",
+    "components/ui/input.tsx",
+    "components/ui/label.tsx",
+    "components/ui/table.tsx",
+    "lib/supabase.ts"
+  ],
+  "components/InventoryModule.tsx": [
+    "components/ui/button.tsx",
+    "components/ui/card.tsx",
+    "components/ui/feedback.tsx",
+    "components/ui/input.tsx",
+    "components/ui/label.tsx",
+    "lib/supabase.ts"
+  ],
+  "components/ManagerScheduleModule.tsx": [
+    "components/ui/button.tsx",
+    "components/ui/card.tsx",
+    "components/ui/feedback.tsx",
+    "components/ui/input.tsx",
+    "components/ui/label.tsx",
+    "lib/supabase.ts"
+  ],
+  "components/ShiftCalendar.tsx": [
+    "components/ui/button.tsx",
+    "components/ui/card.tsx",
+    "lib/supabase.ts"
+  ],
+  "components/StaffAttendanceModule.tsx": [
+    "components/AttendanceManagerModule.tsx",
+    "components/ui/button.tsx",
+    "components/ui/card.tsx",
+    "components/ui/feedback.tsx",
+    "components/ui/input.tsx",
+    "components/ui/label.tsx",
+    "lib/supabase.ts"
+  ],
+  "components/StaffScheduleModule.tsx": [
+    "components/ui/button.tsx",
+    "components/ui/card.tsx",
+    "components/ui/feedback.tsx",
+    "components/ui/input.tsx",
+    "components/ui/label.tsx",
+    "lib/supabase.ts"
+  ],
+  "components/ui/button.tsx": [],
+  "components/ui/calendar.tsx": [
+    "components/ui/button.tsx"
+  ],
+  "components/ui/card.tsx": [],
+  "components/ui/feedback.tsx": [
+    "components/ui/button.tsx"
+  ],
+  "components/ui/input.tsx": [],
+  "components/ui/label.tsx": [],
+  "components/ui/popover.tsx": [],
+  "components/ui/table.tsx": [],
+  "components/ui/tabs.tsx": [],
+  "lib/supabase.ts": [],
+  "lib/utils.ts": []
+}

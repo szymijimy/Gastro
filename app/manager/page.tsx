@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useRef } from "react"
+import { useEffect, useState, useRef, useCallback, useMemo, Suspense } from "react"
 import { useRouter } from "next/navigation"
 import { supabase } from "@/lib/supabase"
 import { Button } from "@/components/ui/button"
@@ -14,6 +14,19 @@ import { ShiftCalendar } from "@/components/ShiftCalendar"
 import { InventoryModule } from "@/components/InventoryModule"
 import { ManagerScheduleModule } from "@/components/ManagerScheduleModule"
 import { AttendanceManagerModule } from "@/components/AttendanceManagerModule"
+import { formatLocalDate, getFriendlyDateLabel } from "@/lib/date-utils"
+import type { PriorityLevel, TodoItem, DraftTask } from "@/types/tasks"
+import type { Announcement } from "@/types/announcements"
+import type { RestaurantRole } from "@/types/restaurant"
+
+import {
+  fetchAnnouncements,
+  createAnnouncement,
+  toggleAnnouncementPin,
+  deleteAnnouncement,
+} from "@/services/announcementsService"
+import { useTasks } from "@/hooks/useTasks"
+import { PriorityIcon } from "@/components/PriorityIcon"
 
 const ROLE_COLORS = [
   { name: "Niebieski", value: "#2563eb" },
@@ -26,63 +39,9 @@ const ROLE_COLORS = [
   { name: "Czerwony", value: "#ef4444" },
 ]
 
-type PriorityLevel = "high" | "normal" | "low"
 
-const PriorityIcon = ({ priority }: { priority: PriorityLevel }) => {
-  if (priority === "high") {
-    return (
-      <span title="Priorytet: Wysoki" className="inline-flex items-center justify-center w-5 h-5 rounded bg-red-50 text-red-600 shrink-0">
-        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-          <path d="m18 15-6-6-6 6" />
-        </svg>
-      </span>
-    )
-  }
-  if (priority === "low") {
-    return (
-      <span title="Priorytet: Niski" className="inline-flex items-center justify-center w-5 h-5 rounded bg-green-50 text-green-600 shrink-0">
-        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-          <path d="m6 9 6 6 6-6" />
-        </svg>
-      </span>
-    )
-  }
-  return (
-    <span title="Priorytet: Normalny" className="inline-flex items-center justify-center w-5 h-5 rounded bg-yellow-50 text-yellow-500 shrink-0">
-      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round">
-        <line x1="12" y1="5" x2="12" y2="19" />
-      </svg>
-    </span>
-  )
-}
 
-const formatLocalDate = (date: Date): string => {
-  const yyyy = date.getFullYear()
-  const mm = String(date.getMonth() + 1).padStart(2, "0")
-  const dd = String(date.getDate()).padStart(2, "0")
-  return `${yyyy}-${mm}-${dd}`
-}
 
-const shiftDateByDays = (dateStr: string, days: number): string => {
-  if (!dateStr) return ""
-  const [y, m, d] = dateStr.split("-").map(Number)
-  const dateObj = new Date(y, m - 1, d)
-  dateObj.setDate(dateObj.getDate() + days)
-  return formatLocalDate(dateObj)
-}
-
-const getFriendlyDateLabel = (dateStr: string, todayStr: string): string => {
-  if (!dateStr) return ""
-  const [y, m, d] = dateStr.split("-").map(Number)
-  const dateObj = new Date(y, m - 1, d)
-  const weekday = dateObj.toLocaleDateString("pl-PL", { weekday: "long" })
-  const capitalizedWeekday = weekday.charAt(0).toUpperCase() + weekday.slice(1)
-
-  if (dateStr === todayStr) return `Dzisiaj (${capitalizedWeekday})`
-  if (dateStr === shiftDateByDays(todayStr, -1)) return `Wczoraj (${capitalizedWeekday})`
-  if (dateStr === shiftDateByDays(todayStr, 1)) return `Jutro (${capitalizedWeekday})`
-  return capitalizedWeekday
-}
 
 type StaffMember = {
   user_id: string
@@ -94,40 +53,9 @@ type StaffMember = {
   }
 }
 
-type RestaurantRole = {
-  id: string
-  name: string
-  color: string
-}
 
-type Announcement = {
-  id: string
-  title: string
-  content: string
-  is_pinned: boolean
-  visible_from: string | null
-  visible_until: string | null
-  created_at: string
-}
 
-type TodoItem = {
-  id: string
-  task: string
-  assigned_role: string | null
-  assigned_user_id: string | null
-  priority: PriorityLevel
-  target_date: string
-  is_completed: boolean
-  note: string | null
-  created_at: string
-}
 
-type DraftTask = {
-  id: string
-  text: string
-  priority: PriorityLevel
-  assignee: string
-}
 
 // ============================================================================
 // KOMPONENT WIERSZA ZADANIA
@@ -319,15 +247,13 @@ function TodoItemRow({
 // ============================================================================
 // KOMPONENT MODALA ZADAŃ
 // ============================================================================
-function TodoBatchModal({
-  isOpen,
+function TodoBatchModalDialog({
   onClose,
   roles,
   staff,
   defaultDate,
   onSaveBatch,
 }: {
-  isOpen: boolean
   onClose: () => void
   roles: RestaurantRole[]
   staff: StaffMember[]
@@ -335,24 +261,18 @@ function TodoBatchModal({
   onSaveBatch: (tasks: DraftTask[], targetDate: string) => Promise<void>
 }) {
   const [draftTasks, setDraftTasks] = useState<DraftTask[]>([
-    { id: "init-1", text: "", priority: "normal", assignee: "all" }
+    { id: crypto.randomUUID(), text: "", priority: "normal", assignee: "all" }
   ])
   const [targetDate, setTargetDate] = useState<string>(defaultDate)
   const [saving, setSaving] = useState(false)
   const taskInputRefs = useRef<(HTMLInputElement | null)[]>([])
 
   useEffect(() => {
-    if (isOpen) {
-      setDraftTasks([{ id: crypto.randomUUID(), text: "", priority: "normal", assignee: "all" }])
-      setTargetDate(defaultDate)
-      setSaving(false)
-      setTimeout(() => {
-        taskInputRefs.current[0]?.focus()
-      }, 40)
-    }
-  }, [isOpen, defaultDate])
-
-  if (!isOpen) return null
+    const timer = setTimeout(() => {
+      taskInputRefs.current[0]?.focus()
+    }, 40)
+    return () => clearTimeout(timer)
+  }, [])
 
   const updateRow = (index: number, patch: Partial<DraftTask>) => {
     setDraftTasks(prev => prev.map((item, i) => (i === index ? { ...item, ...patch } : item)))
@@ -540,17 +460,46 @@ function TodoBatchModal({
   )
 }
 
+function TodoBatchModal({
+  isOpen,
+  onClose,
+  roles,
+  staff,
+  defaultDate,
+  onSaveBatch,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  roles: RestaurantRole[]
+  staff: StaffMember[]
+  defaultDate: string
+  onSaveBatch: (tasks: DraftTask[], targetDate: string) => Promise<void>
+}) {
+  if (!isOpen) return null
+  return (
+    <TodoBatchModalDialog
+      onClose={onClose}
+      roles={roles}
+      staff={staff}
+      defaultDate={defaultDate}
+      onSaveBatch={onSaveBatch}
+    />
+  )
+}
+
 // ============================================================================
 // GŁÓWNY PANEL MANAGERA
 // ============================================================================
-export default function ManagerDashboard() {
+function ManagerDashboard() {
   const router = useRouter()
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [restaurants, setRestaurants] = useState<{ restaurant_id: string; name: string }[]>([])
+  // Ref utrzymujący aktualną wartość restaurants bez powodowania re-renderu w useCallback
+  const restaurantsRef = useRef<{ restaurant_id: string; name: string }[]>([])
   const [activeRestaurantId, setActiveRestaurantId] = useState<string | null>(null)
   const [defaultRestaurantId, setDefaultRestaurantId] = useState<string | null>(null)
   
-  const [todayStr, setTodayStr] = useState<string>("")
+  const [todayStr] = useState<string>(() => formatLocalDate(new Date()))
 
   const [roles, setRoles] = useState<RestaurantRole[]>([])
   const [newRoleName, setNewRoleName] = useState("")
@@ -571,23 +520,45 @@ export default function ManagerDashboard() {
   const [newAnnouncementUntil, setNewAnnouncementUntil] = useState("")
   const [selectedAnnouncementModal, setSelectedAnnouncementModal] = useState<Announcement | null>(null)
 
-  const [todos, setTodos] = useState<TodoItem[]>([])
-  const [selectedTodoDate, setSelectedTodoDate] = useState<string>("")
-  const [isTodoModalOpen, setIsTodoModalOpen] = useState(false)
+  const tasks = useTasks(activeRestaurantId, todayStr)
+  // Stabilna referencja loadTodos – useCallback([], []) w hooku gwarantuje, ze nigdy sie nie zmieni.
+  // Dzieki temu loadVenueData i zalezny od niego useEffect nie wpada w petle renderow.
+  const loadTodosStable = tasks.loadTodos
+
+  // Stable memo references for ManagerScheduleModule props -- prevents
+  // infinite-reload loop caused by new array references on each render.
+  const managedRestaurantsForSchedule = useMemo(
+    () => restaurants.map((r) => ({ id: r.restaurant_id, name: r.name })),
+    [restaurants]
+  )
 
   const [loading, setLoading] = useState(true)
 
-  const loadVenueData = async (
+  interface RestaurantUserItem {
+    restaurant_id: string
+    user_id: string
+    role: string
+    hourly_rate: number | null
+    users: { full_name: string | null; email: string | null } | { full_name: string | null; email: string | null }[] | null
+  }
+
+  interface UserRestaurantItem {
+    restaurant_id: string
+    role: string
+    restaurants: { name: string | null } | { name: string | null }[] | null
+  }
+
+  const loadVenueData = useCallback(async (
     venueId: string,
     managedVenuesList?: { restaurant_id: string; name: string }[]
   ) => {
-    const activeVenuesList = managedVenuesList || restaurants
+    const activeVenuesList = managedVenuesList || restaurantsRef.current
     const allVenueIds =
       activeVenuesList.length > 0
         ? activeVenuesList.map((r) => r.restaurant_id)
         : [venueId]
 
-    const [rolesRes, staffRes, annRes, todosRes] = await Promise.all([
+    const [rolesRes, staffRes, annRes] = await Promise.all([
       supabase
         .from("restaurant_roles")
         .select("id, name, color")
@@ -603,19 +574,7 @@ export default function ManagerDashboard() {
           users ( full_name, email )
         `)
         .in("restaurant_id", allVenueIds),
-      supabase
-        .from("restaurant_announcements")
-        .select("*")
-        .eq("restaurant_id", venueId)
-        .order("is_pinned", { ascending: false })
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("restaurant_todos")
-        .select("*")
-        .eq("restaurant_id", venueId)
-        .order("is_completed", { ascending: true })
-        .order("target_date", { ascending: false })
-        .order("created_at", { ascending: false }),
+      fetchAnnouncements(venueId),
     ])
 
     if (rolesRes.data) {
@@ -631,7 +590,7 @@ export default function ManagerDashboard() {
       const venuesByUser: Record<string, string[]> = {}
       const staffMap = new Map<string, StaffMember>()
 
-      staffRes.data.forEach((item: any) => {
+      staffRes.data.forEach((item: RestaurantUserItem) => {
         const uid = item.user_id
         if (!venuesByUser[uid]) venuesByUser[uid] = []
         if (!venuesByUser[uid].includes(item.restaurant_id)) {
@@ -657,15 +616,12 @@ export default function ManagerDashboard() {
       setStaff(Array.from(staffMap.values()))
     }
 
-    if (annRes.data) setAnnouncements(annRes.data)
-    if (todosRes.data) setTodos(todosRes.data as TodoItem[])
-  }
+    if (annRes.data) setAnnouncements(annRes.data as Announcement[])
+
+    await loadTodosStable(venueId)
+  }, [loadTodosStable])
 
   useEffect(() => {
-    const localToday = formatLocalDate(new Date())
-    setTodayStr(localToday)
-    setSelectedTodoDate(localToday)
-
     const fetchDashboardData = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) {
@@ -681,7 +637,7 @@ export default function ManagerDashboard() {
         .eq("role", "manager")
 
       if (userRestaurants && userRestaurants.length > 0) {
-        const formattedVenues = userRestaurants.map((ur: any) => {
+        const formattedVenues = userRestaurants.map((ur: UserRestaurantItem) => {
           const rObj = Array.isArray(ur.restaurants) ? ur.restaurants[0] : ur.restaurants
           return {
             restaurant_id: ur.restaurant_id,
@@ -700,6 +656,7 @@ export default function ManagerDashboard() {
 
         setDefaultRestaurantId(validDefaultId)
         setRestaurants(sortedVenues)
+        restaurantsRef.current = sortedVenues
         setActiveRestaurantId(validDefaultId)
 
         await loadVenueData(validDefaultId, sortedVenues)
@@ -711,7 +668,7 @@ export default function ManagerDashboard() {
     }
 
     fetchDashboardData()
-  }, [router])
+  }, [router, loadVenueData])
 
   const handleSwitchVenue = async (newVenueId: string) => {
     setActiveRestaurantId(newVenueId)
@@ -748,11 +705,7 @@ export default function ManagerDashboard() {
     return found.users?.full_name || found.users?.email || "Pracownik"
   }
 
-  const priorityWeight = (p: PriorityLevel) => {
-    if (p === "high") return 3
-    if (p === "normal") return 2
-    return 1
-  }
+
 
   // --- ROLE ---
   const handleCreateRole = async (e: React.FormEvent) => {
@@ -1006,25 +959,22 @@ export default function ManagerDashboard() {
       return
     }
 
-    const { data, error } = await supabase
-      .from("restaurant_announcements")
-      .insert([{
-        restaurant_id: activeRestaurantId,
-        title: newAnnouncementTitle.trim(),
-        content: newAnnouncementContent.trim(),
-        is_pinned: newAnnouncementPinned,
-        visible_from: newAnnouncementFrom || null,
-        visible_until: newAnnouncementUntil || null,
-      }])
-      .select()
+    const { data, error } = await createAnnouncement({
+      restaurantId: activeRestaurantId,
+      title: newAnnouncementTitle,
+      content: newAnnouncementContent,
+      isPinned: newAnnouncementPinned,
+      visibleFrom: newAnnouncementFrom || null,
+      visibleUntil: newAnnouncementUntil || null,
+    })
 
     if (error) {
-      showToast("Błąd dodawania ogłoszenia: " + error.message, "error")
+      showToast("Błąd dodawania ogłoszenia: " + error, "error")
       return
     }
 
-    if (data && data[0]) {
-      const updated = [data[0] as Announcement, ...announcements].sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned))
+    if (data) {
+      const updated = [data, ...announcements].sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned))
       setAnnouncements(updated)
       setNewAnnouncementTitle("")
       setNewAnnouncementContent("")
@@ -1038,10 +988,7 @@ export default function ManagerDashboard() {
   const handleTogglePinAnnouncement = async (item: Announcement, e: React.MouseEvent) => {
     e.stopPropagation()
     const newPinned = !item.is_pinned
-    const { error } = await supabase
-      .from("restaurant_announcements")
-      .update({ is_pinned: newPinned })
-      .eq("id", item.id)
+    const { error } = await toggleAnnouncementPin(item.id, newPinned)
 
     if (!error) {
       const updated = announcements
@@ -1060,10 +1007,7 @@ export default function ManagerDashboard() {
     const confirmed = await askConfirm("Czy na pewno chcesz usunąć to ogłoszenie?", "Usuwanie ogłoszenia")
     if (!confirmed) return
 
-    const { error } = await supabase
-      .from("restaurant_announcements")
-      .delete()
-      .eq("id", id)
+    const { error } = await deleteAnnouncement(id)
 
     if (!error) {
       setAnnouncements(announcements.filter(a => a.id !== id))
@@ -1104,123 +1048,18 @@ export default function ManagerDashboard() {
     }
   }
 
-  // --- TO-DO LIST ---
-  const handleSaveBatchTodos = async (validTasks: DraftTask[], targetDate: string) => {
-    if (!activeRestaurantId) return
-
-    const rowsToInsert = validTasks.map(t => {
-      let assigned_role: string | null = null
-      let assigned_user_id: string | null = null
-
-      if (t.assignee.startsWith("role:")) {
-        assigned_role = t.assignee.replace("role:", "")
-      } else if (t.assignee.startsWith("user:")) {
-        assigned_user_id = t.assignee.replace("user:", "")
-      }
-
-      return {
-        restaurant_id: activeRestaurantId,
-        task: t.text.trim(),
-        priority: t.priority,
-        target_date: targetDate || selectedTodoDate || todayStr,
-        assigned_role,
-        assigned_user_id,
-        is_completed: false,
-        note: null
-      }
-    })
-
-    const { data, error } = await supabase
-      .from("restaurant_todos")
-      .insert(rowsToInsert)
-      .select()
-
-    if (error) {
-      showToast("Błąd zapisywania zadań: " + error.message, "error")
-      return
-    }
-
-    if (data) {
-      setTodos(prev => [...(data as TodoItem[]), ...prev])
-      if (targetDate) setSelectedTodoDate(targetDate)
-      setIsTodoModalOpen(false)
-      showToast(`Dodano pomyślnie ${data.length} zadań`, "success")
-    }
-  }
-
-  const handleToggleTodo = async (todo: TodoItem) => {
-    const updatedStatus = !todo.is_completed
-    const { error } = await supabase
-      .from("restaurant_todos")
-      .update({ is_completed: updatedStatus })
-      .eq("id", todo.id)
-
-    if (!error) {
-      setTodos(prev => prev.map(t => t.id === todo.id ? { ...t, is_completed: updatedStatus } : t))
-    }
-  }
-
-  const handleUpdateTodoPriority = async (todoId: string, newPriority: PriorityLevel) => {
-    const { error } = await supabase
-      .from("restaurant_todos")
-      .update({ priority: newPriority })
-      .eq("id", todoId)
-
-    if (!error) {
-      setTodos(prev => prev.map(t => t.id === todoId ? { ...t, priority: newPriority } : t))
-      showToast("Zmieniono priorytet zadania", "info")
-    }
-  }
-
-  const handleSaveTodoNote = async (todoId: string, noteText: string | null) => {
-    const { error } = await supabase
-      .from("restaurant_todos")
-      .update({ note: noteText })
-      .eq("id", todoId)
-
-    if (error) {
-      showToast("Błąd zapisywania uwagi: " + error.message, "error")
-      return
-    }
-
-    setTodos(prev => prev.map(t => t.id === todoId ? { ...t, note: noteText } : t))
-    showToast(noteText ? "Zapisano uwagę" : "Usunięto uwagę", "success")
-  }
-
-  const handleDeleteTodo = async (id: string) => {
-    const confirmed = await askConfirm("Czy na pewno chcesz usunąć to zadanie?", "Usuwanie zadania")
-    if (!confirmed) return
-
-    const { error } = await supabase
-      .from("restaurant_todos")
-      .delete()
-      .eq("id", id)
-
-    if (!error) {
-      setTodos(prev => prev.filter(t => t.id !== id))
-      showToast("Zadanie zostało usunięte", "info")
-    }
-  }
+  // --- TO-DO LIST --- (zarządzane przez useTasks)
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
-    window.location.href = "/"
+    router.push("/")
   }
 
   if (loading) return <div className="p-8 text-center">Wczytywanie panelu...</div>
 
   const activeRestaurantName = restaurants.find(r => r.restaurant_id === activeRestaurantId)?.name
 
-  const dayTodos = todos
-    .filter(t => t.target_date === selectedTodoDate)
-    .sort((a, b) => {
-      if (a.is_completed !== b.is_completed) {
-        return Number(a.is_completed) - Number(b.is_completed)
-      }
-      return priorityWeight(b.priority || "normal") - priorityWeight(a.priority || "normal")
-    })
 
-  const completedTodosCount = dayTodos.filter(t => t.is_completed).length
 
   return (
     <div className="min-h-screen bg-zinc-100 p-8">
@@ -1327,25 +1166,22 @@ export default function ManagerDashboard() {
             </TabsList>
             
             {/* 1. ZAKŁADKA GRAFIKU */}
-            <TabsContent value="schedule" className="mt-6">
+            <TabsContent value="schedule" keepMounted className="mt-6">
               <ManagerScheduleModule
                 restaurantId={activeRestaurantId}
-                managedRestaurants={restaurants.map((r) => ({
-                  id: r.restaurant_id,
-                  name: r.name,
-                }))}
+                managedRestaurants={managedRestaurantsForSchedule}
                 staff={staff}
                 roles={roles}
               />
             </TabsContent>
 
             {/* 2. ZAKŁADKA KALENDARZA */}
-            <TabsContent value="calendar" className="mt-6">
+            <TabsContent value="calendar" keepMounted className="mt-6">
               <ShiftCalendar restaurantId={activeRestaurantId} />
             </TabsContent>
 
             {/* 3. ZAKŁADKA OBECNOŚCI I PREMII */}
-            <TabsContent value="attendance" className="mt-6">
+            <TabsContent value="attendance" keepMounted className="mt-6">
               <AttendanceManagerModule
                 restaurantId={activeRestaurantId}
                 staff={staff}
@@ -1354,7 +1190,7 @@ export default function ManagerDashboard() {
             </TabsContent>
 
             {/* 4. ZAKŁADKA PRACOWNICY */}
-            <TabsContent value="staff" className="mt-6">
+            <TabsContent value="staff" keepMounted className="mt-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <Card className="col-span-1 h-fit">
                   <CardHeader>
@@ -1550,7 +1386,7 @@ export default function ManagerDashboard() {
             </TabsContent>
 
             {/* 5. ZAKŁADKA: ROLE W LOKALU */}
-            <TabsContent value="roles" className="mt-6">
+            <TabsContent value="roles" keepMounted className="mt-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <Card className="col-span-1 h-fit">
                   <CardHeader>
@@ -1646,7 +1482,7 @@ export default function ManagerDashboard() {
             </TabsContent>
 
             {/* 6. ZAKŁADKA: TABLICA OGŁOSZEŃ */}
-            <TabsContent value="announcements" className="mt-6">
+            <TabsContent value="announcements" keepMounted className="mt-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <Card className="col-span-1 h-fit">
                   <CardHeader>
@@ -1780,7 +1616,7 @@ export default function ManagerDashboard() {
             </TabsContent>
 
             {/* 7. ZAKŁADKA: TO-DO LIST */}
-            <TabsContent value="todos" className="mt-6">
+            <TabsContent value="todos" keepMounted className="mt-6">
               <Card>
                 <CardHeader>
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -1790,7 +1626,7 @@ export default function ManagerDashboard() {
                         Zarządzaj zadaniami i sprawdzaj uwagi zgłoszone przez załogę.
                       </CardDescription>
                     </div>
-                    <Button onClick={() => setIsTodoModalOpen(true)} className="h-9">
+                    <Button onClick={() => tasks.openModal()} className="h-9">
                       + Dodaj zadania
                     </Button>
                   </div>
@@ -1801,7 +1637,7 @@ export default function ManagerDashboard() {
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={() => setSelectedTodoDate(prev => shiftDateByDays(prev, -1))}
+                        onClick={() => tasks.goToPrevDay()}
                         className="h-9 px-3 font-bold"
                       >
                         ←
@@ -1809,13 +1645,13 @@ export default function ManagerDashboard() {
 
                       <div className="flex items-center gap-2 bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-1">
                         <span className="text-xs font-semibold text-zinc-700 whitespace-nowrap">
-                          {getFriendlyDateLabel(selectedTodoDate, todayStr)}:
+                          {getFriendlyDateLabel(tasks.selectedDate, todayStr)}:
                         </span>
                         <Input
                           type="date"
-                          value={selectedTodoDate}
+                          value={tasks.selectedDate}
                           onChange={(e) => {
-                            if (e.target.value) setSelectedTodoDate(e.target.value)
+                            if (e.target.value) tasks.setSelectedDate(e.target.value)
                           }}
                           className="h-7 w-36 border-0 bg-transparent p-0 text-xs font-bold text-zinc-900 focus-visible:ring-0 cursor-pointer"
                         />
@@ -1825,18 +1661,18 @@ export default function ManagerDashboard() {
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={() => setSelectedTodoDate(prev => shiftDateByDays(prev, 1))}
+                        onClick={() => tasks.goToNextDay()}
                         className="h-9 px-3 font-bold"
                       >
                         →
                       </Button>
 
-                      {selectedTodoDate !== todayStr && (
+                      {tasks.selectedDate !== todayStr && (
                         <Button
                           type="button"
                           variant="ghost"
                           size="sm"
-                          onClick={() => setSelectedTodoDate(todayStr)}
+                          onClick={() => tasks.goToToday()}
                           className="h-9 text-xs text-blue-600 hover:text-blue-700"
                         >
                           Wróć do dzisiaj
@@ -1844,36 +1680,36 @@ export default function ManagerDashboard() {
                       )}
                     </div>
 
-                    {dayTodos.length > 0 && (
+                    {tasks.dayTodos.length > 0 && (
                       <span className="text-xs font-semibold px-3 py-1.5 rounded-full bg-zinc-100 text-zinc-700">
-                        Wykonano: {completedTodosCount} / {dayTodos.length}
+                        Wykonano: {tasks.completedCount} / {tasks.dayTodos.length}
                       </span>
                     )}
                   </div>
                 </CardHeader>
 
                 <CardContent>
-                  {dayTodos.length === 0 ? (
+                  {tasks.dayTodos.length === 0 ? (
                     <div className="text-center py-12 space-y-3 border-2 border-dashed rounded-xl">
                       <p className="text-sm text-zinc-500">
-                        Brak zadań zaplanowanych na dzień <strong className="text-zinc-800">{selectedTodoDate}</strong>.
+                        Brak zadań zaplanowanych na dzień <strong className="text-zinc-800">{tasks.selectedDate}</strong>.
                       </p>
-                      <Button variant="outline" size="sm" onClick={() => setIsTodoModalOpen(true)}>
+                      <Button variant="outline" size="sm" onClick={() => tasks.openModal()}>
                         + Dodaj zadania na ten dzień
                       </Button>
                     </div>
                   ) : (
                     <div className="space-y-2.5">
-                      {dayTodos.map((todo) => (
+                      {tasks.dayTodos.map((todo) => (
                         <TodoItemRow
                           key={todo.id}
                           todo={todo}
                           roleColor={todo.assigned_role ? getRoleColor(todo.assigned_role) : null}
                           staffMemberName={todo.assigned_user_id ? getStaffMemberName(todo.assigned_user_id) : null}
-                          onToggle={handleToggleTodo}
-                          onUpdatePriority={handleUpdateTodoPriority}
-                          onSaveNote={handleSaveTodoNote}
-                          onDelete={handleDeleteTodo}
+                          onToggle={tasks.handleToggle}
+                          onUpdatePriority={tasks.handleUpdatePriority}
+                          onSaveNote={tasks.handleSaveNote}
+                          onDelete={tasks.handleDelete}
                         />
                       ))}
                     </div>
@@ -1883,7 +1719,7 @@ export default function ManagerDashboard() {
             </TabsContent>
 
             {/* 8. ZAKŁADKA MAGAZYNU */}
-            <TabsContent value="inventory" className="mt-6">
+            <TabsContent value="inventory" keepMounted className="mt-6">
               <InventoryModule restaurantId={activeRestaurantId} />
             </TabsContent>
             
@@ -1931,13 +1767,21 @@ export default function ManagerDashboard() {
 
       {/* POP-UP DODAWANIA ZADAŃ */}
       <TodoBatchModal
-        isOpen={isTodoModalOpen}
-        onClose={() => setIsTodoModalOpen(false)}
+        isOpen={tasks.isModalOpen}
+        onClose={() => tasks.closeModal()}
         roles={roles}
         staff={staff}
-        defaultDate={selectedTodoDate || todayStr}
-        onSaveBatch={handleSaveBatchTodos}
+        defaultDate={tasks.selectedDate || todayStr}
+        onSaveBatch={tasks.handleSaveBatch}
       />
     </div>
+  )
+}
+
+export default function ManagerPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-zinc-100 p-8 text-center text-sm text-zinc-500">Wczytywanie panelu managera...</div>}>
+      <ManagerDashboard />
+    </Suspense>
   )
 }
