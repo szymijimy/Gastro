@@ -1,4 +1,4 @@
-"use client"
+﻿"use client"
 
 import { useEffect, useState } from "react"
 import { supabase } from "@/lib/supabase"
@@ -54,8 +54,17 @@ export function StaffAttendanceModule({
     monthLabel: string
   }) => void
 }) {
-  const [selectedMonth, setSelectedMonth] = useState<string>("")
-  const [workDate, setWorkDate] = useState<string>("")
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
+    const now = new Date()
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
+  })
+  const [workDate, setWorkDate] = useState<string>(() => {
+    const now = new Date()
+    const yyyy = now.getFullYear()
+    const mm = String(now.getMonth() + 1).padStart(2, "0")
+    const dd = String(now.getDate()).padStart(2, "0")
+    return `${yyyy}-${mm}-${dd}`
+  })
   const [startTime, setStartTime] = useState<string>("16:00")
   const [endTime, setEndTime] = useState<string>("00:00")
   const [dailyRevenueInput, setDailyRevenueInput] = useState<string>("")
@@ -67,15 +76,6 @@ export function StaffAttendanceModule({
   const [revenues, setRevenues] = useState<DailyRevenue[]>([])
   const [manualBonuses, setManualBonuses] = useState<ManualBonus[]>([])
   const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    const now = new Date()
-    const yyyy = now.getFullYear()
-    const mm = String(now.getMonth() + 1).padStart(2, "0")
-    const dd = String(now.getDate()).padStart(2, "0")
-    setSelectedMonth(`${yyyy}-${mm}`)
-    setWorkDate(`${yyyy}-${mm}-${dd}`)
-  }, [])
 
   useEffect(() => {
     if (!restaurantId || !currentUserId) return
@@ -107,22 +107,22 @@ export function StaffAttendanceModule({
 
       if (logsRes.data) setAllLogs(logsRes.data as AttendanceLog[])
       if (rulesRes.data) setRules(rulesRes.data as BonusRule[])
-      if (revRes.data) setRevenues(revRes.data as DailyRevenue[])
+      if (revRes.data) {
+        const fetchedRevs = revRes.data as DailyRevenue[]
+        setRevenues(fetchedRevs)
+        const existingRev = fetchedRevs.find((r) => r.work_date === workDate)
+        if (existingRev) {
+          setDailyRevenueInput(String(existingRev.amount))
+        }
+      }
       if (manRes.data) setManualBonuses(manRes.data as ManualBonus[])
       setLoading(false)
     }
 
     fetchAttendanceData()
-  }, [restaurantId, currentUserId])
+  }, [restaurantId, currentUserId, workDate])
 
-  useEffect(() => {
-    const existingRev = revenues.find((r) => r.work_date === workDate)
-    if (existingRev) {
-      setDailyRevenueInput(String(existingRev.amount))
-    } else {
-      setDailyRevenueInput("")
-    }
-  }, [workDate, revenues])
+
 
   useEffect(() => {
     if (!selectedMonth || !currentUserId) return
@@ -146,7 +146,7 @@ export function StaffAttendanceModule({
       totalHours: payroll.totalHours,
       monthLabel: selectedMonth,
     })
-  }, [allLogs, rules, revenues, manualBonuses, selectedMonth, currentUserId, userRole, hourlyRate])
+  }, [allLogs, rules, revenues, manualBonuses, selectedMonth, currentUserId, userRole, hourlyRate, onEarningsCalculated])
 
   const previewHours = calculateShiftDurationHours(startTime, endTime)
 
@@ -279,7 +279,12 @@ export function StaffAttendanceModule({
                 <Input
                   type="date"
                   value={workDate}
-                  onChange={(e) => setWorkDate(e.target.value)}
+                  onChange={(e) => {
+                    const newDate = e.target.value
+                    setWorkDate(newDate)
+                    const existingRev = revenues.find((r) => r.work_date === newDate)
+                    setDailyRevenueInput(existingRev ? String(existingRev.amount) : "")
+                  }}
                   required
                 />
               </div>

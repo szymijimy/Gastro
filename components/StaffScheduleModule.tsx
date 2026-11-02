@@ -1,4 +1,4 @@
-"use client"
+﻿"use client"
 
 import { useEffect, useState } from "react"
 import { supabase } from "@/lib/supabase"
@@ -105,7 +105,11 @@ export function StaffScheduleModule({
         .select("restaurant_id, restaurants (id, name)")
         .eq("user_id", currentUserId)
 
-      const venues = (memberships || []).map((m: any) => {
+            interface StaffVenueMembershipDbItem {
+        restaurant_id: string
+        restaurants: { id: string; name: string } | { id: string; name: string }[] | null
+      }
+      const venues = (memberships || []).map((m: StaffVenueMembershipDbItem) => {
         const r = Array.isArray(m.restaurants) ? m.restaurants[0] : m.restaurants
         return { id: m.restaurant_id, name: r?.name || "Lokal" }
       })
@@ -227,7 +231,14 @@ export function StaffScheduleModule({
     const nextDrafts: Record<string, AvailabilityDraft> = {}
 
     days.forEach((d) => {
-      const existing = data?.find((row: any) => row.work_date === d)
+            interface AvailabilityDbRow {
+        work_date: string
+        is_available: boolean | null
+        min_start_time: string | null
+        max_end_time: string | null
+        note: string | null
+      }
+      const existing = data?.find((row: AvailabilityDbRow) => row.work_date === d)
       if (existing && existing.is_available) {
         const hasAdv = Boolean(existing.min_start_time || existing.max_end_time || existing.note)
         nextDrafts[d] = {

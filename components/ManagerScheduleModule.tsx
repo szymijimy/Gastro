@@ -304,9 +304,51 @@ export function ManagerScheduleModule({
 
   const operatingHours = (restaurantId && allVenuesOpHours[restaurantId]) || getDefaultOperatingHours()
 
+  interface MgrVenueDbItem {
+    restaurant_id: string
+    restaurants: { name: string | null } | { name: string | null }[] | null
+  }
+
+
+
+  interface OpHoursDbItem {
+    restaurant_id: string
+    day_of_week: number
+    is_closed: boolean | null
+    default_start_time: string | null
+    shift_start_times: string[] | null
+    default_end_time: string | null
+    min_staff_needed: number | null
+    day_color: string | null
+  }
+
+  interface AllStaffDbItem {
+    restaurant_id: string
+    user_id: string
+    role: string
+    hourly_rate: number | null
+    users: { full_name: string | null; email: string | null } | { full_name: string | null; email: string | null }[] | null
+  }
+
+  interface ScheduleRuleDbItem {
+    user_id: string
+    restaurant_id?: string | null
+    min_shifts?: number | null
+    max_streak?: number | null
+    shift_priority?: number | null
+    priority_days?: number[] | null
+    avoid_user_ids?: string[] | null
+    prefer_user_ids?: string[] | null
+    priority_restaurant_id?: string | null
+  }
+
+  // Stabilne klucze – zmieniają się tylko gdy faktycznie zmienia się skład staffu lub lokali,
+  // nie przy każdym re-renderze rodzica (nowa referencja tablicy != nowa zawartość).
+  const staffKey = staff.map((s) => s.user_id).sort().join(',')
+  const managedKey = managedRestaurants.map((r) => r.id).sort().join(',')
+
   useEffect(() => {
     if (!restaurantId) return
-    setEditingOpHoursVenueId(restaurantId)
 
     const fetchInitialData = async () => {
       setLoading(true)
@@ -325,7 +367,7 @@ export function ManagerScheduleModule({
             .eq("role", "manager")
 
           if (mgrVenues) {
-            venuesList = mgrVenues.map((v: any) => {
+            venuesList = mgrVenues.map((v: MgrVenueDbItem) => {
               const r = Array.isArray(v.restaurants) ? v.restaurants[0] : v.restaurants
               return { id: v.restaurant_id, name: r?.name || "Lokal" }
             })
@@ -344,7 +386,7 @@ export function ManagerScheduleModule({
       ])
 
       if (periodsRes.data) {
-        setPeriods(periodsRes.data.map((p: any) => ({ ...p, is_published: Boolean(p.is_published) })))
+        setPeriods((periodsRes.data as unknown as SchedulePeriod[]).map((p) => ({ ...p, is_published: Boolean(p.is_published) })))
       }
 
       const opMapByVenue: Record<string, Record<number, OperatingHourConfig>> = {}
@@ -352,7 +394,7 @@ export function ManagerScheduleModule({
         opMapByVenue[vId] = getDefaultOperatingHours()
       })
       if (opHoursRes.data) {
-        opHoursRes.data.forEach((row: any) => {
+        opHoursRes.data.forEach((row: OpHoursDbItem) => {
           const vId = row.restaurant_id
           if (!opMapByVenue[vId]) opMapByVenue[vId] = getDefaultOperatingHours()
           const count = Number(row.min_staff_needed) ?? 2
@@ -374,7 +416,7 @@ export function ManagerScheduleModule({
       const membershipMap: Record<string, string[]> = {}
       const dedupStaffMap: Record<string, StaffMember> = {}
 
-      ;(allStaffRes.data || []).forEach((item: any) => {
+      ;(allStaffRes.data || []).forEach((item: AllStaffDbItem) => {
         const uid = item.user_id
         if (!membershipMap[uid]) membershipMap[uid] = []
         if (!membershipMap[uid].includes(item.restaurant_id)) {
@@ -398,8 +440,8 @@ export function ManagerScheduleModule({
       const nextRules: Record<string, StaffGeneratorRule> = {}
       ;(combinedStaffList.length > 0 ? combinedStaffList : staff).forEach((m) => {
         const found =
-          rulesRes.data?.find((r: any) => r.user_id === m.user_id && r.restaurant_id === restaurantId) ||
-          rulesRes.data?.find((r: any) => r.user_id === m.user_id)
+          rulesRes.data?.find((r: ScheduleRuleDbItem) => r.user_id === m.user_id && r.restaurant_id === restaurantId) ||
+          rulesRes.data?.find((r: ScheduleRuleDbItem) => r.user_id === m.user_id)
 
         nextRules[m.user_id] = {
           user_id: m.user_id,
@@ -417,7 +459,8 @@ export function ManagerScheduleModule({
     }
 
     fetchInitialData()
-  }, [restaurantId, staff])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restaurantId, staffKey, managedKey])
 
   const openPeriodBuilder = async (period: SchedulePeriod) => {
     setActivePeriod(period)
@@ -740,7 +783,20 @@ export function ManagerScheduleModule({
     const targetVenues =
       allManagedVenues.length > 0 ? allManagedVenues.map((v) => v.id) : [restaurantId]
 
-    const rows: any[] = []
+    interface StaffScheduleRuleUpsertRow {
+      restaurant_id: string
+      user_id: string
+      min_shifts: number
+      max_streak: number
+      shift_priority: number
+      priority_days: number[]
+      avoid_user_ids: string[]
+      prefer_user_ids: string[]
+      priority_restaurant_id: string | null
+      updated_at: string
+    }
+
+    const rows: StaffScheduleRuleUpsertRow[] = []
     targetVenues.forEach((vId) => {
       Object.values(staffRules).forEach((r) => {
         rows.push({
@@ -785,7 +841,7 @@ export function ManagerScheduleModule({
       .eq("end_date", activePeriod.end_date)
 
     const periodByVenue: Record<string, SchedulePeriod> = {}
-    ;(matchingPeriodsData || []).forEach((p: any) => {
+    ;((matchingPeriodsData || []) as SchedulePeriod[]).forEach((p: SchedulePeriod) => {
       periodByVenue[p.restaurant_id] = p as SchedulePeriod
     })
 
