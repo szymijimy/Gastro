@@ -1,4 +1,4 @@
-"use client"
+﻿"use client"
 
 import { useEffect, useState } from "react"
 import { supabase } from "@/lib/supabase"
@@ -477,8 +477,7 @@ function BonusRulesModal({
 // ============================================================================
 // POP-UP 2: RĘCZNE PRZYPISANIE PREMII
 // ============================================================================
-function ManualBonusModal({
-  isOpen,
+function ManualBonusModalDialog({
   onClose,
   staff,
   defaultDate,
@@ -487,7 +486,6 @@ function ManualBonusModal({
   onDeleteManualBonus,
   getMemberName,
 }: {
-  isOpen: boolean
   onClose: () => void
   staff: StaffMember[]
   defaultDate: string
@@ -501,17 +499,6 @@ function ManualBonusModal({
   const [bonusDate, setBonusDate] = useState<string>(defaultDate)
   const [reason, setReason] = useState<string>("")
   const [saving, setSaving] = useState(false)
-
-  useEffect(() => {
-    if (isOpen) {
-      if (staff.length > 0 && !selectedUserId) {
-        setSelectedUserId(staff[0].user_id)
-      }
-      setBonusDate(defaultDate)
-    }
-  }, [isOpen, staff, defaultDate])
-
-  if (!isOpen) return null
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -657,6 +644,23 @@ function ManualBonusModal({
   )
 }
 
+function ManualBonusModal({
+  isOpen,
+  ...props
+}: {
+  isOpen: boolean
+  onClose: () => void
+  staff: StaffMember[]
+  defaultDate: string
+  manualBonuses: ManualBonus[]
+  onAddManualBonus: (userId: string, amount: number, bonusDate: string, reason: string) => Promise<void>
+  onDeleteManualBonus: (id: string) => Promise<void>
+  getMemberName: (uid: string) => string
+}) {
+  if (!isOpen) return null
+  return <ManualBonusModalDialog {...props} />
+}
+
 // ============================================================================
 // GŁÓWNY MODUŁ OBECNOŚCI I ROZLICZEŃ U MANAGERA
 // ============================================================================
@@ -669,8 +673,17 @@ export function AttendanceManagerModule({
   staff: StaffMember[]
   roles: RestaurantRole[]
 }) {
-  const [selectedMonth, setSelectedMonth] = useState<string>("")
-  const [todayStr, setTodayStr] = useState<string>("")
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
+    const now = new Date()
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
+  })
+  const [todayStr] = useState<string>(() => {
+    const now = new Date()
+    const yyyy = now.getFullYear()
+    const mm = String(now.getMonth() + 1).padStart(2, "0")
+    const dd = String(now.getDate()).padStart(2, "0")
+    return `${yyyy}-${mm}-${dd}`
+  })
   const [filterUserId, setFilterUserId] = useState<string>("all")
 
   const [logs, setLogs] = useState<AttendanceLog[]>([])
@@ -678,22 +691,18 @@ export function AttendanceManagerModule({
   const [revenues, setRevenues] = useState<DailyRevenue[]>([])
   const [manualBonuses, setManualBonuses] = useState<ManualBonus[]>([])
 
-  const [revDate, setRevDate] = useState<string>("")
+  const [revDate, setRevDate] = useState<string>(() => {
+    const now = new Date()
+    const yyyy = now.getFullYear()
+    const mm = String(now.getMonth() + 1).padStart(2, "0")
+    const dd = String(now.getDate()).padStart(2, "0")
+    return `${yyyy}-${mm}-${dd}`
+  })
   const [revAmount, setRevAmount] = useState<string>("")
 
   const [isBonusModalOpen, setIsBonusModalOpen] = useState(false)
   const [isManualBonusModalOpen, setIsManualBonusModalOpen] = useState(false)
   const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    const now = new Date()
-    const yyyy = now.getFullYear()
-    const mm = String(now.getMonth() + 1).padStart(2, "0")
-    const dd = String(now.getDate()).padStart(2, "0")
-    setSelectedMonth(`${yyyy}-${mm}`)
-    setTodayStr(`${yyyy}-${mm}-${dd}`)
-    setRevDate(`${yyyy}-${mm}-${dd}`)
-  }, [])
 
   useEffect(() => {
     if (!restaurantId) return

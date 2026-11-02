@@ -1,6 +1,6 @@
-"use client"
+﻿"use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import { supabase } from "@/lib/supabase"
 import { Button } from "@/components/ui/button"
@@ -23,7 +23,7 @@ export default function AuthPage() {
 
   const [unassignedUserEmail, setUnassignedUserEmail] = useState<string | null>(null)
 
-  const checkAssignmentAndRedirect = async (userId: string, userEmail: string) => {
+  const checkAssignmentAndRedirect = useCallback(async (userId: string, userEmail: string) => {
     setLoading(true)
     setErrorMsg(null)
 
@@ -38,7 +38,7 @@ export default function AuthPage() {
       return
     }
 
-    const rolesList = (memberships || []).map((m: any) => m.role)
+    const rolesList = (memberships || []).map((m: { role: string }) => m.role)
 
     if (rolesList.includes("manager")) {
       setLoading(false)
@@ -50,12 +50,9 @@ export default function AuthPage() {
       setUnassignedUserEmail(userEmail)
       setLoading(false)
     }
-  }
+  }, [router])
 
   useEffect(() => {
-    // Zawsze przy wejściu na ekran logowania odblokowujemy przycisk
-    setLoading(false)
-
     const checkInitialSession = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (session?.user) {
@@ -64,7 +61,7 @@ export default function AuthPage() {
       setCheckingSession(false)
     }
     checkInitialSession()
-  }, [])
+  }, [checkAssignmentAndRedirect])
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
