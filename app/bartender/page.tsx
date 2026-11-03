@@ -1000,51 +1000,56 @@ function BartenderDashboard() {
 
           <Tabs defaultValue="todos" className="w-full pt-1">
             <div className="w-full overflow-x-auto md:overflow-visible no-scrollbar scroll-smooth -mx-1 px-1 sm:mx-0 sm:px-0 pb-1">
-              <TabsList className="inline-flex md:flex md:flex-wrap w-max md:w-full group-data-horizontal/tabs:h-auto h-auto items-center gap-1 bg-zinc-100/90 p-1 rounded-xl border border-zinc-200/50">
+              <TabsList className="inline-flex w-max min-w-full md:w-full md:flex md:flex-nowrap items-center gap-0.5 sm:gap-1 bg-zinc-100/90 p-1 rounded-xl border border-zinc-200/50">
                 <TabsTrigger
                   value="todos"
-                  className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"
+                  className="shrink-0 md:shrink md:flex-1 min-w-0 justify-center px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"
                 >
-                  <span>📋 Check-lista</span>
+                  <span className="shrink-0">📋</span>
+                  <span className="truncate">Check-lista</span>
                   {todayRemainingCount > 0 && (
-                    <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-700">
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-700 shrink-0">
                       {todayRemainingCount}
                     </span>
                   )}
                 </TabsTrigger>
                 <TabsTrigger
                   value="announcements"
-                  className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"
+                  className="shrink-0 md:shrink md:flex-1 min-w-0 justify-center px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"
                 >
-                  <span>📢 Ogłoszenia</span>
+                  <span className="shrink-0">📢</span>
+                  <span className="truncate">Ogłoszenia</span>
                   {visibleAnnouncements.length > 0 && (
-                    <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 shrink-0">
                       {visibleAnnouncements.length}
                     </span>
                   )}
                 </TabsTrigger>
                 <TabsTrigger
                   value="inventory"
-                  className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"
+                  className="shrink-0 md:shrink md:flex-1 min-w-0 justify-center px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"
                 >
-                  <span>📦 Magazyn</span>
+                  <span className="shrink-0">📦</span>
+                  <span className="truncate">Magazyn</span>
                   {shortageProducts.length > 0 && (
-                    <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-red-100 text-red-700">
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-red-100 text-red-700 shrink-0">
                       {shortageProducts.length}
                     </span>
                   )}
                 </TabsTrigger>
                 <TabsTrigger
                   value="schedule"
-                  className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"
+                  className="shrink-0 md:shrink md:flex-1 min-w-0 justify-center px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"
                 >
-                  <span>📅 Grafik</span>
+                  <span className="shrink-0">📅</span>
+                  <span className="truncate">Grafik</span>
                 </TabsTrigger>
                 <TabsTrigger
                   value="attendance"
-                  className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"
+                  className="shrink-0 md:shrink md:flex-1 min-w-0 justify-center px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"
                 >
-                  <span>⏱️ Czas pracy</span>
+                  <span className="shrink-0">⏱️</span>
+                  <span className="truncate">Czas pracy</span>
                 </TabsTrigger>
               </TabsList>
             </div>
