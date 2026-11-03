@@ -999,8 +999,8 @@ function BartenderDashboard() {
           </div>
 
           <Tabs defaultValue="todos" className="w-full pt-1">
-            <div className="w-full overflow-x-auto no-scrollbar scroll-smooth -mx-1 px-1 sm:mx-0 sm:px-0 pb-1">
-              <TabsList className="inline-flex w-max min-w-full sm:w-auto h-auto items-center gap-1 bg-zinc-100/90 p-1 rounded-xl border border-zinc-200/50">
+            <div className="w-full overflow-x-auto md:overflow-visible no-scrollbar scroll-smooth -mx-1 px-1 sm:mx-0 sm:px-0 pb-1">
+              <TabsList className="inline-flex md:flex md:flex-wrap w-max md:w-full group-data-horizontal/tabs:h-auto h-auto items-center gap-1 bg-zinc-100/90 p-1 rounded-xl border border-zinc-200/50">
                 <TabsTrigger
                   value="todos"
                   className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"

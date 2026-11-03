@@ -1164,18 +1164,18 @@ function ManagerDashboard() {
           </div>
           
           <Tabs defaultValue="schedule" className="w-full pt-1">
-            <div className="w-full overflow-x-auto no-scrollbar scroll-smooth -mx-1 px-1 sm:mx-0 sm:px-0 pb-1">
-              <TabsList className="inline-flex w-max min-w-full sm:w-auto h-auto items-center gap-1 bg-zinc-100/90 p-1 rounded-xl border border-zinc-200/50">
-                <TabsTrigger value="schedule" className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
+            <div className="w-full overflow-x-auto md:overflow-visible no-scrollbar scroll-smooth -mx-1 px-1 sm:mx-0 sm:px-0 pb-1">
+              <TabsList className="inline-flex md:flex md:flex-wrap w-max md:w-full group-data-horizontal/tabs:h-auto h-auto items-center gap-1 sm:gap-1.5 bg-zinc-100/90 p-1 sm:p-1.5 rounded-xl border border-zinc-200/50">
+                <TabsTrigger value="schedule" className="shrink-0 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
                   <span>📅 Grafik</span>
                 </TabsTrigger>
-                <TabsTrigger value="calendar" className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
+                <TabsTrigger value="calendar" className="shrink-0 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
                   <span>🗓️ Kalendarz</span>
                 </TabsTrigger>
-                <TabsTrigger value="attendance" className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
+                <TabsTrigger value="attendance" className="shrink-0 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
                   <span>⏱️ Obecność i Premie</span>
                 </TabsTrigger>
-                <TabsTrigger value="staff" className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
+                <TabsTrigger value="staff" className="shrink-0 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
                   <span>👥 Pracownicy</span>
                   {staff.length > 0 && (
                     <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-zinc-200 text-zinc-800">
@@ -1183,10 +1183,10 @@ function ManagerDashboard() {
                     </span>
                   )}
                 </TabsTrigger>
-                <TabsTrigger value="roles" className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
+                <TabsTrigger value="roles" className="shrink-0 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
                   <span>🏷️ Role</span>
                 </TabsTrigger>
-                <TabsTrigger value="announcements" className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
+                <TabsTrigger value="announcements" className="shrink-0 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
                   <span>📢 Ogłoszenia</span>
                   {announcements.length > 0 && (
                     <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
@@ -1194,10 +1194,10 @@ function ManagerDashboard() {
                     </span>
                   )}
                 </TabsTrigger>
-                <TabsTrigger value="todos" className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
+                <TabsTrigger value="todos" className="shrink-0 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
                   <span>📋 To-do list</span>
                 </TabsTrigger>
-                <TabsTrigger value="inventory" className="shrink-0 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
+                <TabsTrigger value="inventory" className="shrink-0 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5">
                   <span>📦 Magazyn</span>
                 </TabsTrigger>
               </TabsList>
