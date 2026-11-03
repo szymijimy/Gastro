@@ -73,25 +73,20 @@ BEGIN
     SELECT id INTO v_user_id FROM auth.users WHERE email = v_users.email;
 
     -- C. Dodaj wpis do auth.identities (wymagany przez Supabase do logowania hasłem)
-    BEGIN
-      INSERT INTO auth.identities (
-        id, user_id, identity_data, provider, provider_id, last_sign_in_at, created_at, updated_at
-      )
-      SELECT
-        v_user_id,
-        v_user_id,
-        json_build_object('sub', v_user_id::text, 'email', v_users.email)::jsonb,
-        'email',
-        v_user_id::text,
-        now(),
-        now(),
-        now()
-      WHERE NOT EXISTS (
-        SELECT 1 FROM auth.identities WHERE user_id = v_user_id
-      );
-    EXCEPTION WHEN OTHERS THEN
-      NULL;
-    END;
+    INSERT INTO auth.identities (
+      id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at
+    )
+    SELECT
+      v_user_id::text,
+      v_user_id,
+      json_build_object('sub', v_user_id::text, 'email', v_users.email, 'full_name', v_users.full_name)::jsonb,
+      'email',
+      now(),
+      now(),
+      now()
+    WHERE NOT EXISTS (
+      SELECT 1 FROM auth.identities WHERE user_id = v_user_id
+    );
 
     -- D. Zapisz profil w public.users
     INSERT INTO public.users (id, email, full_name, default_hourly_rate, is_active)
