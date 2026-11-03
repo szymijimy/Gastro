@@ -3,7 +3,6 @@
 -- ==============================================================================
 
 -- 1. Uzupełnienie potwierdzenia emaila i metadanych w auth.users
--- (Uwaga: confirmed_at jest kolumną generowaną, więc aktualizujemy wyłącznie email_confirmed_at)
 UPDATE auth.users
 SET 
   email_confirmed_at = coalesce(email_confirmed_at, now()),
@@ -24,7 +23,7 @@ SET
 WHERE email IN ('ps@t.pl', 'mp@t.pl', 'pd@t.pl', 'sw@t.pl', 'pn@t.pl', 'mo@t.pl');
 
 
--- 2. Wstawienie brakujących rekordów do auth.identities
+-- 2. Wstawienie brakujących rekordów do auth.identities (kolumna id to UUID)
 INSERT INTO auth.identities (
   id,
   user_id,
@@ -35,7 +34,7 @@ INSERT INTO auth.identities (
   updated_at
 )
 SELECT
-  id::text,
+  id,
   id,
   jsonb_build_object(
     'sub', id::text, 

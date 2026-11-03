@@ -77,7 +77,7 @@ BEGIN
       id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at
     )
     SELECT
-      v_user_id::text,
+      v_user_id,
       v_user_id,
       json_build_object('sub', v_user_id::text, 'email', v_users.email, 'full_name', v_users.full_name)::jsonb,
       'email',
