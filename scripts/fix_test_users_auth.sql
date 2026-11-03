@@ -1,21 +1,20 @@
 -- ==============================================================================
--- NAPRAWA KONT PRACOWNIKÓW TESTOWYCH (GOTRUE NULL SCAN FIX + IDENTITIES)
+-- NAPRAWA KONT PRACOWNIKÓW TESTOWYCH (BEZ POLA PHONE Z UNIKALNYM KLUCZEM)
 -- ==============================================================================
 
--- 1. Zastąpienie wartości NULL pustymi stringami '' w auth.users
--- Silnik GoTrue (Supabase Auth) w języku Go rzuca błąd 500 (Database error querying schema),
--- gdy pola tekstowe (tokeny, phone) mają wartość NULL zamiast pustego ciągu ''.
+-- 1. Uzupełnienie tokenów i metadanych w auth.users
+-- (Pole phone pozostaje NULL, ponieważ ma unikalny indeks users_phone_key)
 UPDATE auth.users
 SET 
   confirmation_token = coalesce(confirmation_token, ''),
   recovery_token = coalesce(recovery_token, ''),
   email_change_token_new = coalesce(email_change_token_new, ''),
   email_change = coalesce(email_change, ''),
-  phone = coalesce(phone, ''),
   phone_change = coalesce(phone_change, ''),
   phone_change_token = coalesce(phone_change_token, ''),
   email_change_token_current = coalesce(email_change_token_current, ''),
   reauthentication_token = coalesce(reauthentication_token, ''),
+  phone = null,
   is_sso_user = coalesce(is_sso_user, false),
   is_anonymous = coalesce(is_anonymous, false),
   email_confirmed_at = coalesce(email_confirmed_at, now()),
