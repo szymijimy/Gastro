@@ -501,6 +501,7 @@ function TodoBatchModal({
 function ManagerDashboard() {
   const router = useRouter()
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
+  const [userName, setUserName] = useState<string>("")
   const [restaurants, setRestaurants] = useState<{ restaurant_id: string; name: string }[]>([])
   // Ref utrzymujący aktualną wartość restaurants bez powodowania re-renderu w useCallback
   const restaurantsRef = useRef<{ restaurant_id: string; name: string }[]>([])
@@ -637,6 +638,16 @@ function ManagerDashboard() {
         return
       }
       setCurrentUserId(session.user.id)
+
+      const { data: profileData } = await supabase
+        .from("users")
+        .select("full_name, email")
+        .eq("id", session.user.id)
+        .single()
+
+      setUserName(
+        profileData?.full_name || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "Manager"
+      )
 
       const { data: userRestaurants } = await supabase
         .from("restaurant_users")
@@ -1078,9 +1089,16 @@ function ManagerDashboard() {
         <div className="bg-white p-3.5 sm:p-6 rounded-xl sm:rounded-2xl shadow-sm space-y-4 sm:space-y-5">
           <div className="flex flex-col gap-3 sm:gap-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <h1 className="text-xl sm:text-2xl font-bold text-zinc-900 tracking-tight">Panel Managera</h1>
-                <p className="text-xs text-zinc-500 mt-0.5">
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h1 className="text-xl sm:text-2xl font-bold text-zinc-900 tracking-tight">
+                    Cześć, {userName || "Manager"}! 👋
+                  </h1>
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] sm:text-xs font-semibold bg-blue-600 text-white shadow-2xs">
+                    Panel Managera
+                  </span>
+                </div>
+                <p className="text-xs text-zinc-500">
                   Aktywny lokal: <strong className="text-zinc-900">{activeRestaurantName || "Brak aktywnego lokalu"}</strong>
                 </p>
               </div>
