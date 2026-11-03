@@ -1,12 +1,11 @@
 -- ==============================================================================
--- NAPRAWA KONT PRACOWNIKÓW TESTOWYCH (AUTH.IDENTITIES + CONFIRMATION)
--- Naprawia błąd 500 (Internal Server Error) podczas logowania pracowników
+-- NAPRAWA TOŻSAMOŚCI W SUPABASE AUTH DLA PRACOWNIKÓW TESTOWYCH
 -- ==============================================================================
 
--- 1. Uzupełnienie potwierdzenia konta i metadanych w auth.users
+-- 1. Uzupełnienie potwierdzenia emaila i metadanych w auth.users
+-- (Uwaga: confirmed_at jest kolumną generowaną, więc aktualizujemy wyłącznie email_confirmed_at)
 UPDATE auth.users
 SET 
-  confirmed_at = coalesce(confirmed_at, now()),
   email_confirmed_at = coalesce(email_confirmed_at, now()),
   is_anonymous = false,
   raw_app_meta_data = '{"provider":"email","providers":["email"]}'::jsonb,
@@ -25,8 +24,7 @@ SET
 WHERE email IN ('ps@t.pl', 'mp@t.pl', 'pd@t.pl', 'sw@t.pl', 'pn@t.pl', 'mo@t.pl');
 
 
--- 2. Wstawienie brakujących tożsamości do auth.identities
--- To brak tego rekordu powodował błąd 500 w Supabase Auth
+-- 2. Wstawienie brakujących rekordów do auth.identities
 INSERT INTO auth.identities (
   id,
   user_id,
