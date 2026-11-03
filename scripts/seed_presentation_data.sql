@@ -53,7 +53,10 @@ BEGIN
     -- B. Wstaw jeśli jeszcze nie istnieje (bezpiecznie przez WHERE NOT EXISTS)
     INSERT INTO auth.users (
       id, instance_id, aud, role, email, encrypted_password, email_confirmed_at,
-      raw_app_meta_data, raw_user_meta_data, created_at, updated_at
+      raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
+      confirmation_token, recovery_token, email_change_token_new, email_change,
+      phone, phone_change, phone_change_token, email_change_token_current, reauthentication_token,
+      is_sso_user, is_anonymous
     )
     SELECT
       v_users.uid,
@@ -66,7 +69,8 @@ BEGIN
       '{"provider":"email","providers":["email"]}'::jsonb,
       jsonb_build_object('full_name', v_users.full_name),
       now(),
-      now()
+      now(),
+      '', '', '', '', '', '', '', '', '', false, false
     WHERE NOT EXISTS (SELECT 1 FROM auth.users WHERE email = v_users.email);
 
     -- Pobierz aktualny UUID użytkownika z auth.users

@@ -1,12 +1,24 @@
 -- ==============================================================================
--- NAPRAWA TOŻSAMOŚCI W SUPABASE AUTH DLA PRACOWNIKÓW TESTOWYCH
+-- NAPRAWA KONT PRACOWNIKÓW TESTOWYCH (GOTRUE NULL SCAN FIX + IDENTITIES)
 -- ==============================================================================
 
--- 1. Uzupełnienie potwierdzenia emaila i metadanych w auth.users
+-- 1. Zastąpienie wartości NULL pustymi stringami '' w auth.users
+-- Silnik GoTrue (Supabase Auth) w języku Go rzuca błąd 500 (Database error querying schema),
+-- gdy pola tekstowe (tokeny, phone) mają wartość NULL zamiast pustego ciągu ''.
 UPDATE auth.users
 SET 
+  confirmation_token = coalesce(confirmation_token, ''),
+  recovery_token = coalesce(recovery_token, ''),
+  email_change_token_new = coalesce(email_change_token_new, ''),
+  email_change = coalesce(email_change, ''),
+  phone = coalesce(phone, ''),
+  phone_change = coalesce(phone_change, ''),
+  phone_change_token = coalesce(phone_change_token, ''),
+  email_change_token_current = coalesce(email_change_token_current, ''),
+  reauthentication_token = coalesce(reauthentication_token, ''),
+  is_sso_user = coalesce(is_sso_user, false),
+  is_anonymous = coalesce(is_anonymous, false),
   email_confirmed_at = coalesce(email_confirmed_at, now()),
-  is_anonymous = false,
   raw_app_meta_data = '{"provider":"email","providers":["email"]}'::jsonb,
   raw_user_meta_data = jsonb_build_object(
     'full_name', 
@@ -23,7 +35,7 @@ SET
 WHERE email IN ('ps@t.pl', 'mp@t.pl', 'pd@t.pl', 'sw@t.pl', 'pn@t.pl', 'mo@t.pl');
 
 
--- 2. Wstawienie brakujących rekordów do auth.identities (kolumna id to UUID)
+-- 2. Wstawienie brakujących tożsamości do auth.identities
 INSERT INTO auth.identities (
   id,
   user_id,
