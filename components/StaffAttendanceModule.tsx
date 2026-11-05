@@ -1,6 +1,6 @@
 ﻿"use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useMemo } from "react"
 import { supabase } from "@/lib/supabase"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -11,6 +11,7 @@ import {
   AttendanceLog,
   BonusRule,
   DailyRevenue,
+  RevenueField,
   ManualBonus,
   calculateUserMonthlyPayroll,
   formatBonusRuleSentence,
@@ -78,6 +79,8 @@ export function StaffAttendanceModule({
   const [startTime, setStartTime] = useState<string>("16:00")
   const [endTime, setEndTime] = useState<string>("00:00")
   const [dailyRevenueInput, setDailyRevenueInput] = useState<string>("")
+  const [revBreakdown, setRevBreakdown] = useState<Record<string, string>>({})
+  const [revenueFields, setRevenueFields] = useState<RevenueField[]>([])
   const [note, setNote] = useState<string>("")
   const [saving, setSaving] = useState(false)
   const [showRules, setShowRules] = useState(false)
@@ -93,7 +96,7 @@ export function StaffAttendanceModule({
 
     const fetchAttendanceData = async () => {
       setLoading(true)
-      const [logsRes, rulesRes, revRes, manRes] = await Promise.all([
+      const [logsRes, rulesRes, revRes, manRes, fieldsRes] = await Promise.all([
         supabase
           .from("attendance_logs")
           .select("*")
@@ -114,6 +117,12 @@ export function StaffAttendanceModule({
           .select("*")
           .eq("restaurant_id", restaurantId)
           .eq("user_id", currentUserId),
+        supabase
+          .from("restaurant_revenue_fields")
+          .select("*")
+          .eq("restaurant_id", restaurantId)
+          .eq("is_active", true)
+          .order("sort_order", { ascending: true }),
       ])
 
       if (logsRes.data) setAllLogs(logsRes.data as AttendanceLog[])
@@ -124,9 +133,19 @@ export function StaffAttendanceModule({
         const existingRev = fetchedRevs.find((r) => r.work_date === workDate)
         if (existingRev) {
           setDailyRevenueInput(String(existingRev.amount))
+          const bObj: Record<string, string> = {}
+          if (existingRev.breakdown) {
+            Object.entries(existingRev.breakdown).forEach(([k, v]) => {
+              bObj[k] = String(v)
+            })
+          }
+          setRevBreakdown(bObj)
         }
       }
       if (manRes.data) setManualBonuses(manRes.data as ManualBonus[])
+      if (!fieldsRes.error && fieldsRes.data) {
+        setRevenueFields(fieldsRes.data as RevenueField[])
+      }
       setLoading(false)
     }
 
@@ -160,6 +179,15 @@ export function StaffAttendanceModule({
   }, [allLogs, rules, revenues, manualBonuses, selectedMonth, currentUserId, userRole, hourlyRate, onEarningsCalculated])
 
   const previewHours = calculateShiftDurationHours(startTime, endTime)
+
+  const breakdownSum = useMemo(() => {
+    let sum = 0
+    Object.values(revBreakdown).forEach((val) => {
+      const n = parseFloat(val) || 0
+      sum += n
+    })
+    return Math.round(sum * 100) / 100
+  }, [revBreakdown])
 
   const handleSaveAttendance = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -195,21 +223,46 @@ export function StaffAttendanceModule({
 
     if (dailyRevenueInput.trim() !== "") {
       const parsedRev = parseFloat(dailyRevenueInput) || 0
-      const { data: revData } = await supabase
+      const cleanBreakdown: Record<string, number> = {}
+      Object.entries(revBreakdown).forEach(([k, v]) => {
+        const num = parseFloat(v) || 0
+        if (num > 0) cleanBreakdown[k] = num
+      })
+
+      let { data: revData, error: revError } = await supabase
         .from("daily_revenues")
         .upsert(
           {
             restaurant_id: restaurantId,
             work_date: workDate,
             amount: parsedRev,
+            breakdown: cleanBreakdown,
             updated_by: currentUserId,
           },
           { onConflict: "restaurant_id,work_date" }
         )
         .select()
 
+      // Graceful fallback
+      if (revError && (revError.code === "42703" || revError.message?.includes("breakdown"))) {
+        const fallbackRes = await supabase
+          .from("daily_revenues")
+          .upsert(
+            {
+              restaurant_id: restaurantId,
+              work_date: workDate,
+              amount: parsedRev,
+              updated_by: currentUserId,
+            },
+            { onConflict: "restaurant_id,work_date" }
+          )
+          .select()
+        revData = fallbackRes.data
+      }
+
       if (revData && revData[0]) {
         const savedRev = revData[0] as DailyRevenue
+        savedRev.breakdown = cleanBreakdown
         setRevenues((prev) => [
           savedRev,
           ...prev.filter((r) => r.work_date !== savedRev.work_date),
@@ -294,7 +347,19 @@ export function StaffAttendanceModule({
                     const newDate = e.target.value
                     setWorkDate(newDate)
                     const existingRev = revenues.find((r) => r.work_date === newDate)
-                    setDailyRevenueInput(existingRev ? String(existingRev.amount) : "")
+                    if (existingRev) {
+                      setDailyRevenueInput(String(existingRev.amount))
+                      const bObj: Record<string, string> = {}
+                      if (existingRev.breakdown) {
+                        Object.entries(existingRev.breakdown).forEach(([k, v]) => {
+                          bObj[k] = String(v)
+                        })
+                      }
+                      setRevBreakdown(bObj)
+                    } else {
+                      setDailyRevenueInput("")
+                      setRevBreakdown({})
+                    }
                   }}
                   className="h-10 text-sm font-semibold bg-white cursor-pointer"
                   required
@@ -331,22 +396,79 @@ export function StaffAttendanceModule({
                 </span>
               </div>
 
-              <div className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-200 space-y-1.5">
-                <Label className="text-xs font-bold text-emerald-900">
-                  💰 Utarg lokalu z tego dnia (PLN)
-                </Label>
+              <div className="p-3.5 rounded-xl bg-emerald-50/70 border border-emerald-200 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                    <span>💰 Utarg całkowity lokalu (PLN)</span>
+                    <span className="text-[10px] font-bold px-1.5 py-0.2 bg-emerald-200 text-emerald-900 rounded">
+                      Podstawa premii
+                    </span>
+                  </Label>
+                  {breakdownSum > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setDailyRevenueInput(String(breakdownSum))}
+                      className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 hover:underline flex items-center gap-1"
+                      title="Wstaw sumę pozycji składowych jako utarg całkowity"
+                    >
+                      <span>↙ Suma pozycji: {breakdownSum.toFixed(2)} zł</span>
+                    </button>
+                  )}
+                </div>
+
                 <Input
                   type="number"
                   step="any"
                   min="0"
                   inputMode="decimal"
-                  placeholder="Wprowadź kwotę utargu (opcjonalnie)"
+                  placeholder="Wprowadź łączną kwotę utargu lokalu..."
                   value={dailyRevenueInput}
                   onChange={(e) => setDailyRevenueInput(e.target.value)}
-                  className="bg-white h-10 text-sm font-bold placeholder:text-xs placeholder:font-normal"
+                  className="bg-white h-10 text-sm font-bold placeholder:text-xs placeholder:font-normal border-emerald-300 focus-visible:ring-emerald-500"
                 />
-                <p className="text-[11px] text-emerald-800/80">
-                  Wpisanie utargu automatycznie przeliczy premie od obrotu dla zespołu pracującego w tym dniu.
+
+                {/* ROZBICIE NA SKŁADOWE (NP. KARTY, GRUBE, ZASYP) */}
+                {revenueFields.length > 0 && (
+                  <div className="pt-2 border-t border-emerald-200/70 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-emerald-900">
+                        📋 Rozbicie raportu dziennego (opcjonalnie):
+                      </span>
+                      {breakdownSum > 0 && (
+                        <span className="text-[11px] font-bold text-emerald-800">
+                          Suma: {breakdownSum.toFixed(2)} zł
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      {revenueFields.map((field) => (
+                        <div key={field.id} className="p-2 rounded-lg bg-white border border-emerald-200/80 space-y-1">
+                          <Label className="text-[10px] font-bold text-zinc-700 block truncate" title={field.name}>
+                            {field.name}
+                          </Label>
+                          <Input
+                            type="number"
+                            step="any"
+                            min="0"
+                            placeholder="0 zł"
+                            value={revBreakdown[field.name] || ""}
+                            onChange={(e) =>
+                              setRevBreakdown((prev) => ({
+                                ...prev,
+                                [field.name]: e.target.value,
+                              }))
+                            }
+                            className="h-7 text-xs font-bold bg-zinc-50 focus:bg-white"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <p className="text-[11px] text-emerald-800/90 leading-tight">
+                  Wpisanie utargu całkowitego automatycznie nalicza premie od obrotu dla zespołu pracującego w tym dniu.
                 </p>
               </div>
 
@@ -510,6 +632,18 @@ export function StaffAttendanceModule({
                           <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 text-xs font-semibold">
                             💰 Utarg: {Number(dayRev.amount).toFixed(2)} zł
                           </span>
+                        )}
+                        {dayRev?.breakdown && Object.keys(dayRev.breakdown).length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-0.5">
+                            {Object.entries(dayRev.breakdown).map(([k, v]) => (
+                              <span
+                                key={k}
+                                className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-zinc-100 text-zinc-600 border border-zinc-200/60"
+                              >
+                                {k}: {Number(v).toFixed(0)} zł
+                              </span>
+                            ))}
+                          </div>
                         )}
                       </div>
                       {log.note && (

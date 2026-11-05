@@ -1,6 +1,6 @@
 ﻿"use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useMemo } from "react"
 import { supabase } from "@/lib/supabase"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -55,11 +55,24 @@ export type AttendanceLog = {
   created_at: string
 }
 
+export type RevenueBreakdown = Record<string, number>
+
+export type RevenueField = {
+  id: string
+  restaurant_id: string
+  name: string
+  is_active: boolean
+  sort_order: number
+}
+
 export type DailyRevenue = {
   id: string
   restaurant_id: string
   work_date: string
   amount: number
+  breakdown?: RevenueBreakdown | null
+  updated_by?: string | null
+  updated_at?: string | null
 }
 
 export type ManualBonus = {
@@ -661,6 +674,250 @@ function ManualBonusModal({
   return <ManualBonusModalDialog {...props} />
 }
 
+const DEFAULT_REVENUE_FIELD_NAMES = ["Karty", "Gotówka / Grube", "Zasyp", "Raport fiskalny"]
+
+// ============================================================================
+// POP-UP 3: KONFIGURACJA POZYCJI UTARGU / RAPORTU LOKALU
+// ============================================================================
+function RevenueFieldsSettingsModal({
+  isOpen,
+  onClose,
+  fields,
+  onAddField,
+  onUpdateField,
+  onDeleteField,
+  onLoadSuggested,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  fields: RevenueField[]
+  onAddField: (name: string) => Promise<void>
+  onUpdateField: (id: string, updates: Partial<RevenueField>) => Promise<void>
+  onDeleteField: (id: string, name: string) => Promise<void>
+  onLoadSuggested: () => Promise<void>
+}) {
+  const [newFieldName, setNewFieldName] = useState("")
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editName, setEditName] = useState("")
+  const [saving, setSaving] = useState(false)
+
+  if (!isOpen) return null
+
+  const handleAdd = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newFieldName.trim()) return
+    setSaving(true)
+    await onAddField(newFieldName.trim())
+    setNewFieldName("")
+    setSaving(false)
+  }
+
+  const handleStartEdit = (f: RevenueField) => {
+    setEditingId(f.id)
+    setEditName(f.name)
+  }
+
+  const handleSaveEdit = async (id: string) => {
+    if (!editName.trim()) return
+    setSaving(true)
+    await onUpdateField(id, { name: editName.trim() })
+    setEditingId(null)
+    setEditName("")
+    setSaving(false)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-in fade-in duration-150">
+      <div className="bg-white rounded-2xl shadow-2xl border border-zinc-200 w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="flex items-center justify-between px-5 py-4 border-b bg-zinc-50">
+          <div>
+            <h2 className="text-base sm:text-lg font-bold text-zinc-900 flex items-center gap-2">
+              <span>⚙️</span>
+              <span>Ustawienia Pozycji Raportu Utargu</span>
+            </h2>
+            <p className="text-xs text-zinc-500 mt-0.5">
+              Skonfiguruj dodatkowe pozycje raportu dziennego (np. Karty, Gotówka / Grube, Zasyp, Raport fiskalny).
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-zinc-400 hover:text-zinc-700 text-xl font-bold leading-none px-2 py-1 rounded-md"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="p-5 overflow-y-auto space-y-5">
+          {/* INFORMACJA O BAZOWYM UTARGU */}
+          <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
+            <strong>ℹ️ Zasada działania:</strong> Pole <strong>&quot;Utarg całkowity&quot;</strong> jest zawsze polem bazowym i nadrzędnym do naliczania automatycznych premii zespołu. Poniższe pozycje pozwalają obsłudze i managerowi szczegółowo rozliczać składniki obrotu lokalu (karty, gotówkę, zasyp i inne).
+          </div>
+
+          {/* FORMULARZ DODAWANIA NOWEJ POZYCJI */}
+          <form onSubmit={handleAdd} className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-200 space-y-2">
+            <Label className="text-xs font-bold text-zinc-700">Dodaj nową pozycję raportu</Label>
+            <div className="flex gap-2">
+              <Input
+                placeholder="np. Karty, Gotówka / Grube, Zasyp, Pyszne.pl, Vouchery..."
+                value={newFieldName}
+                onChange={(e) => setNewFieldName(e.target.value)}
+                className="h-9 text-xs bg-white"
+                required
+              />
+              <Button type="submit" size="sm" disabled={saving || !newFieldName.trim()} className="h-9 text-xs shrink-0 font-bold">
+                + Dodaj pozycję
+              </Button>
+            </div>
+          </form>
+
+          {/* LISTA SKONFIGUROWANYCH POZYCJI */}
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold text-zinc-800 uppercase tracking-wide">
+                Zdefiniowane pozycje ({fields.length})
+              </h3>
+              {fields.length === 0 && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={onLoadSuggested}
+                  className="h-7 text-xs font-semibold"
+                >
+                  + Załaduj standardowe (Karty, Grube, Zasyp, Raport)
+                </Button>
+              )}
+            </div>
+
+            {fields.length === 0 ? (
+              <div className="p-6 text-center text-xs text-zinc-500 border border-dashed rounded-xl bg-zinc-50 space-y-2">
+                <p>Brak skonfigurowanych pozycji dla tego lokalu.</p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={onLoadSuggested}
+                  className="text-xs font-bold"
+                >
+                  Załaduj sugerowane pozycje
+                </Button>
+              </div>
+            ) : (
+              <div className="divide-y divide-zinc-100 border rounded-xl overflow-hidden bg-white shadow-2xs">
+                {fields.map((f, idx) => (
+                  <div
+                    key={f.id}
+                    className="p-3 flex items-center justify-between gap-3 hover:bg-zinc-50/70 transition-colors"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                      <span className="w-5 h-5 rounded-full bg-zinc-100 text-zinc-500 text-[10px] font-bold flex items-center justify-center shrink-0">
+                        {idx + 1}
+                      </span>
+
+                      {editingId === f.id ? (
+                        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                          <Input
+                            value={editName}
+                            onChange={(e) => setEditName(e.target.value)}
+                            className="h-8 text-xs bg-white"
+                            autoFocus
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-8 text-xs px-2.5"
+                            onClick={() => handleSaveEdit(f.id)}
+                            disabled={saving}
+                          >
+                            Zapisz
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="h-8 text-xs px-2"
+                            onClick={() => setEditingId(null)}
+                          >
+                            Anuluj
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="min-w-0">
+                          <p className={`text-xs font-bold truncate ${f.is_active ? "text-zinc-900" : "text-zinc-400 line-through"}`}>
+                            {f.name}
+                          </p>
+                          <p className="text-[10px] text-zinc-400">
+                            {f.is_active ? "Aktywna pozycja" : "Wyłączona (ukryta w formularzu)"}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {editingId !== f.id && (
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => onUpdateField(f.id, { is_active: !f.is_active })}
+                          className={`h-7 px-2 text-[11px] font-bold ${
+                            f.is_active ? "text-emerald-700 bg-emerald-50 hover:bg-emerald-100" : "text-zinc-500 bg-zinc-100 hover:bg-zinc-200"
+                          }`}
+                        >
+                          {f.is_active ? "Włączona" : "Wyłączona"}
+                        </Button>
+
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleStartEdit(f)}
+                          className="h-7 w-7 p-0 text-zinc-500 hover:text-zinc-800"
+                          title="Zmień nazwę"
+                        >
+                          ✏️
+                        </Button>
+
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => onDeleteField(f.id, f.name)}
+                          className="h-7 w-7 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
+                          title="Usuń pozycję"
+                        >
+                          🗑️
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="px-5 py-3.5 bg-zinc-50 border-t flex items-center justify-between">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onLoadSuggested}
+            className="text-xs text-zinc-600 hover:text-zinc-900"
+          >
+            + Przywróć sugerowane standardowe
+          </Button>
+
+          <Button type="button" onClick={onClose} size="sm" className="font-bold">
+            Gotowe / Zamknij
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ============================================================================
 // GŁÓWNY MODUŁ OBECNOŚCI I ROZLICZEŃ U MANAGERA
 // ============================================================================
@@ -699,6 +956,10 @@ export function AttendanceManagerModule({
     return `${yyyy}-${mm}-${dd}`
   })
   const [revAmount, setRevAmount] = useState<string>("")
+  const [revBreakdown, setRevBreakdown] = useState<Record<string, string>>({})
+  const [revenueFields, setRevenueFields] = useState<RevenueField[]>([])
+  const [isRevenueSettingsOpen, setIsRevenueSettingsOpen] = useState(false)
+  const [savingRevenue, setSavingRevenue] = useState(false)
 
   const [isBonusModalOpen, setIsBonusModalOpen] = useState(false)
   const [isManualBonusModalOpen, setIsManualBonusModalOpen] = useState(false)
@@ -708,7 +969,7 @@ export function AttendanceManagerModule({
     if (!restaurantId) return
     const fetchAll = async () => {
       setLoading(true)
-      const [logsRes, rulesRes, revRes, manRes] = await Promise.all([
+      const [logsRes, rulesRes, revRes, manRes, fieldsRes] = await Promise.all([
         supabase
           .from("attendance_logs")
           .select("*")
@@ -730,12 +991,45 @@ export function AttendanceManagerModule({
           .select("*")
           .eq("restaurant_id", restaurantId)
           .order("bonus_date", { ascending: false }),
+        supabase
+          .from("restaurant_revenue_fields")
+          .select("*")
+          .eq("restaurant_id", restaurantId)
+          .order("sort_order", { ascending: true }),
       ])
 
       if (logsRes.data) setLogs(logsRes.data as AttendanceLog[])
       if (rulesRes.data) setRules(rulesRes.data as BonusRule[])
-      if (revRes.data) setRevenues(revRes.data as DailyRevenue[])
+      if (revRes.data) {
+        const fetchedRevs = revRes.data as DailyRevenue[]
+        setRevenues(fetchedRevs)
+        const currentDayRev = fetchedRevs.find((r) => r.work_date === revDate)
+        if (currentDayRev) {
+          setRevAmount(String(currentDayRev.amount))
+          const bObj: Record<string, string> = {}
+          if (currentDayRev.breakdown) {
+            Object.entries(currentDayRev.breakdown).forEach(([k, v]) => {
+              bObj[k] = String(v)
+            })
+          }
+          setRevBreakdown(bObj)
+        }
+      }
       if (manRes.data) setManualBonuses(manRes.data as ManualBonus[])
+
+      if (!fieldsRes.error && fieldsRes.data && fieldsRes.data.length > 0) {
+        setRevenueFields(fieldsRes.data as RevenueField[])
+      } else {
+        setRevenueFields(
+          DEFAULT_REVENUE_FIELD_NAMES.map((name, idx) => ({
+            id: `local-${idx}`,
+            restaurant_id: restaurantId,
+            name,
+            is_active: true,
+            sort_order: idx + 1,
+          }))
+        )
+      }
       setLoading(false)
     }
 
@@ -840,22 +1134,77 @@ export function AttendanceManagerModule({
     }
   }
 
+  const handleSelectRevDate = (newDate: string) => {
+    setRevDate(newDate)
+    const existing = revenues.find((r) => r.work_date === newDate)
+    if (existing) {
+      setRevAmount(String(existing.amount))
+      const bObj: Record<string, string> = {}
+      if (existing.breakdown) {
+        Object.entries(existing.breakdown).forEach(([k, v]) => {
+          bObj[k] = String(v)
+        })
+      }
+      setRevBreakdown(bObj)
+    } else {
+      setRevAmount("")
+      setRevBreakdown({})
+    }
+  }
+
+  const breakdownSum = useMemo(() => {
+    let sum = 0
+    Object.values(revBreakdown).forEach((val) => {
+      const n = parseFloat(val) || 0
+      sum += n
+    })
+    return Math.round(sum * 100) / 100
+  }, [revBreakdown])
+
   const handleSaveDailyRevenue = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!restaurantId || !revDate || !revAmount) return
 
-    const parsed = parseFloat(revAmount) || 0
-    const { data, error } = await supabase
+    setSavingRevenue(true)
+    const parsedAmount = parseFloat(revAmount) || 0
+
+    const cleanBreakdown: Record<string, number> = {}
+    Object.entries(revBreakdown).forEach(([k, v]) => {
+      const num = parseFloat(v) || 0
+      if (num > 0) cleanBreakdown[k] = num
+    })
+
+    let { data, error } = await supabase
       .from("daily_revenues")
       .upsert(
         {
           restaurant_id: restaurantId,
           work_date: revDate,
-          amount: parsed,
+          amount: parsedAmount,
+          breakdown: cleanBreakdown,
         },
         { onConflict: "restaurant_id,work_date" }
       )
       .select()
+
+    // Graceful fallback jeśli kolumny breakdown jeszcze nie ma w bazie
+    if (error && (error.code === "42703" || error.message?.includes("breakdown"))) {
+      const fallbackRes = await supabase
+        .from("daily_revenues")
+        .upsert(
+          {
+            restaurant_id: restaurantId,
+            work_date: revDate,
+            amount: parsedAmount,
+          },
+          { onConflict: "restaurant_id,work_date" }
+        )
+        .select()
+      data = fallbackRes.data
+      error = fallbackRes.error
+    }
+
+    setSavingRevenue(false)
 
     if (error) {
       showToast("Błąd zapisywania utargu: " + error.message, "error")
@@ -864,12 +1213,123 @@ export function AttendanceManagerModule({
 
     if (data && data[0]) {
       const saved = data[0] as DailyRevenue
+      saved.breakdown = cleanBreakdown
       setRevenues((prev) => {
         const without = prev.filter((r) => r.work_date !== saved.work_date)
         return [saved, ...without].sort((a, b) => b.work_date.localeCompare(a.work_date))
       })
+      showToast(`Zapisano raport utargu z dnia ${revDate} (${parsedAmount.toFixed(2)} zł)`, "success")
+    }
+  }
+
+  const handleDeleteDailyRevenue = async (id: string, date: string) => {
+    const confirmed = await askConfirm(
+      `Czy na pewno chcesz usunąć raport utargu z dnia ${date}?`,
+      "Usuwanie raportu utargu"
+    )
+    if (!confirmed) return
+
+    const { error } = await supabase.from("daily_revenues").delete().eq("id", id)
+    if (error) {
+      showToast("Błąd usuwania utargu: " + error.message, "error")
+      return
+    }
+
+    setRevenues((prev) => prev.filter((r) => r.id !== id))
+    if (revDate === date) {
       setRevAmount("")
-      showToast(`Zapisano utarg dnia (${parsed} zł)`, "success")
+      setRevBreakdown({})
+    }
+    showToast(`Usunięto utarg z dnia ${date}`, "info")
+  }
+
+  const handleAddRevenueField = async (name: string) => {
+    if (!restaurantId || !name.trim()) return
+    const { data, error } = await supabase
+      .from("restaurant_revenue_fields")
+      .insert([
+        {
+          restaurant_id: restaurantId,
+          name: name.trim(),
+          sort_order: revenueFields.length + 1,
+          is_active: true,
+        },
+      ])
+      .select()
+
+    if (error) {
+      setRevenueFields((prev) => [
+        ...prev,
+        {
+          id: `local-${Date.now()}`,
+          restaurant_id: restaurantId,
+          name: name.trim(),
+          sort_order: prev.length + 1,
+          is_active: true,
+        },
+      ])
+      showToast(`Dodano pozycję "${name}" (stan lokalny)`, "info")
+    } else if (data && data[0]) {
+      setRevenueFields((prev) => [...prev, data[0] as RevenueField])
+      showToast(`Dodano pozycję "${name}" do raportu utargu.`, "success")
+    }
+  }
+
+  const handleUpdateRevenueField = async (id: string, updates: Partial<RevenueField>) => {
+    if (!id.startsWith("local-")) {
+      await supabase.from("restaurant_revenue_fields").update(updates).eq("id", id)
+    }
+    setRevenueFields((prev) =>
+      prev.map((f) => (f.id === id ? { ...f, ...updates } : f))
+    )
+    showToast("Zaktualizowano pozycję utargu.", "info")
+  }
+
+  const handleDeleteRevenueField = async (id: string, name: string) => {
+    const confirmed = await askConfirm(
+      `Czy na pewno chcesz usunąć pozycję "${name}" z raportu?`,
+      "Usuwanie pozycji utargu"
+    )
+    if (!confirmed) return
+
+    if (!id.startsWith("local-")) {
+      await supabase.from("restaurant_revenue_fields").delete().eq("id", id)
+    }
+    setRevenueFields((prev) => prev.filter((f) => f.id !== id))
+    showToast(`Usunięto pozycję "${name}".`, "info")
+  }
+
+  const handleLoadSuggestedFields = async () => {
+    if (!restaurantId) return
+    const toInsert = DEFAULT_REVENUE_FIELD_NAMES
+      .filter((s) => !revenueFields.some((f) => f.name.toLowerCase() === s.toLowerCase()))
+      .map((name, idx) => ({
+        restaurant_id: restaurantId,
+        name,
+        sort_order: revenueFields.length + idx + 1,
+        is_active: true,
+      }))
+
+    if (toInsert.length === 0) {
+      showToast("Wszystkie standardowe pozycje są już na liście.", "info")
+      return
+    }
+
+    const { data, error } = await supabase
+      .from("restaurant_revenue_fields")
+      .insert(toInsert)
+      .select()
+
+    if (!error && data) {
+      setRevenueFields((prev) => [...prev, ...(data as RevenueField[])])
+      showToast(`Dodano ${data.length} standardowych pozycji.`, "success")
+    } else {
+      const localItems = toInsert.map((item, idx) => ({
+        ...item,
+        id: `local-sug-${Date.now()}-${idx}`,
+      }))
+      setRevenueFields((prev) => [...prev, ...localItems])
+      showToast("Dodano standardowe pozycje (stan lokalny).", "info")
     }
   }
 
@@ -1025,62 +1485,257 @@ export function AttendanceManagerModule({
         </CardContent>
       </Card>
 
+      {/* ========================================================================= */}
+      {/* SEKCJA: UTARGI DZIENNE I POZYCJE RAPORTU */}
+      {/* ========================================================================= */}
       <Card>
-        <CardHeader className="pb-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <CardHeader className="pb-3 border-b border-zinc-100">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <CardTitle className="text-base">💰 Utargi Dzienne ({monthRevenues.length} dni)</CardTitle>
-              <CardDescription className="text-xs">
-                Utargi wpisane przez pracowników lub managera.
+              <div className="flex items-center gap-2">
+                <CardTitle className="text-base sm:text-lg font-bold text-zinc-900 flex items-center gap-2">
+                  <span>💰 Utargi Dzienne i Raporty</span>
+                  <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold">
+                    {monthRevenues.length} {monthRevenues.length === 1 ? "dzień" : "dni"}
+                  </span>
+                </CardTitle>
+              </div>
+              <CardDescription className="text-xs text-zinc-500 mt-0.5">
+                Wprowadzanie utargu całkowitego (podstawa premii) oraz pozycji raportu (np. karty, grube, zasyp).
               </CardDescription>
             </div>
 
-            <form onSubmit={handleSaveDailyRevenue} className="flex flex-wrap items-center gap-2">
-              <Input
-                type="date"
-                value={revDate}
-                onChange={(e) => setRevDate(e.target.value)}
-                className="h-8 w-36 text-xs"
-                required
-              />
-              <Input
-                type="number"
-                step="any"
-                min="0"
-                placeholder="Kwota (PLN)"
-                value={revAmount}
-                onChange={(e) => setRevAmount(e.target.value)}
-                className="h-8 w-32 text-xs"
-                required
-              />
-              <Button type="submit" size="sm" className="h-8 text-xs">
-                Zapisz utarg
-              </Button>
-            </form>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setIsRevenueSettingsOpen(true)}
+              className="h-8 text-xs font-semibold gap-1.5 border-zinc-300 hover:bg-zinc-100 shrink-0"
+              title="Skonfiguruj dodatkowe pozycje raportu dla tego lokalu"
+            >
+              <span>⚙️</span>
+              <span>Ustawienia pozycji utargu</span>
+              {revenueFields.length > 0 && (
+                <span className="ml-0.5 px-1.5 py-0.2 rounded-full text-[10px] bg-zinc-200 text-zinc-800 font-bold">
+                  {revenueFields.filter((f) => f.is_active).length}
+                </span>
+              )}
+            </Button>
           </div>
         </CardHeader>
-        <CardContent>
-          {monthRevenues.length === 0 ? (
-            <p className="text-xs text-zinc-400">Brak wpisanych utargów w tym miesiącu.</p>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {monthRevenues.map((r) => {
-                const workersCount = new Set(
-                  monthLogs.filter((l) => l.work_date === r.work_date).map((l) => l.user_id)
-                ).size
-                return (
-                  <div
-                    key={r.id}
-                    className="px-3 py-1.5 rounded-lg border bg-zinc-50 text-xs flex items-center gap-2"
-                  >
-                    <span className="font-semibold text-zinc-700">📅 {r.work_date}:</span>
-                    <strong className="text-emerald-700">{Number(r.amount).toFixed(2)} zł</strong>
-                    <span className="text-[11px] text-zinc-400">({workersCount} os. w pracy)</span>
-                  </div>
-                )
-              })}
+
+        <CardContent className="pt-4 space-y-5">
+          {/* FORMULARZ WPISYWANIA / EDYCJI UTARGU DNIA */}
+          <form onSubmit={handleSaveDailyRevenue} className="p-4 rounded-xl bg-zinc-50/80 border border-zinc-200 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-200/80 pb-2.5">
+              <span className="text-xs font-bold text-zinc-800 uppercase tracking-wide">
+                📝 Wprowadź raport dla wybranego dnia
+              </span>
+              {revenues.some((r) => r.work_date === revDate) && (
+                <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full">
+                  ℹ️ Dla tego dnia istnieje już wpis – formularz go edytuje
+                </span>
+              )}
             </div>
-          )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs font-semibold text-zinc-700">Dzień utargu *</Label>
+                <Input
+                  type="date"
+                  value={revDate}
+                  onChange={(e) => handleSelectRevDate(e.target.value)}
+                  className="h-9 text-xs bg-white font-semibold cursor-pointer"
+                  required
+                />
+              </div>
+
+              {/* POLE BAZOWE: UTARG CAŁKOWITY */}
+              <div className="sm:col-span-2 space-y-1">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                    <span>💰 Utarg całkowity lokalu (PLN) *</span>
+                    <span className="text-[10px] font-bold px-1.5 py-0.2 bg-emerald-200 text-emerald-900 rounded">
+                      Pole bazowe (premie)
+                    </span>
+                  </Label>
+                  {breakdownSum > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setRevAmount(String(breakdownSum))}
+                      className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 hover:underline flex items-center gap-1"
+                      title="Wstaw sumę pozycji składowych jako utarg całkowity"
+                    >
+                      <span>↙ Suma pozycji: {breakdownSum.toFixed(2)} zł</span>
+                    </button>
+                  )}
+                </div>
+                <Input
+                  type="number"
+                  step="any"
+                  min="0"
+                  placeholder="Wprowadź łączną kwotę utargu lokalu..."
+                  value={revAmount}
+                  onChange={(e) => setRevAmount(e.target.value)}
+                  className="h-9 text-sm font-bold bg-white border-emerald-300 focus-visible:ring-emerald-500"
+                  required
+                />
+              </div>
+            </div>
+
+            {/* ROZBICIE NA SKŁADOWE (KARTY, GRUBE, ZASYP I INNE) */}
+            {revenueFields.filter((f) => f.is_active).length > 0 && (
+              <div className="pt-2 border-t border-zinc-200/70 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-zinc-700 flex items-center gap-1">
+                    <span>📋 Pozycje składowe raportu (opcjonalnie):</span>
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-zinc-600">
+                      Suma pozycji: <strong>{breakdownSum.toFixed(2)} zł</strong>
+                    </span>
+                    {breakdownSum > 0 && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => setRevAmount(String(breakdownSum))}
+                        className="h-6 px-2 text-[11px] font-bold"
+                      >
+                        Przepisz do całości ➔
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  {revenueFields
+                    .filter((f) => f.is_active)
+                    .map((field) => {
+                      const val = revBreakdown[field.name] || ""
+                      return (
+                        <div key={field.id} className="p-2.5 rounded-lg bg-white border border-zinc-200 space-y-1 shadow-2xs">
+                          <Label className="text-[11px] font-semibold text-zinc-700 block truncate" title={field.name}>
+                            {field.name}
+                          </Label>
+                          <Input
+                            type="number"
+                            step="any"
+                            min="0"
+                            placeholder="0.00 zł"
+                            value={val}
+                            onChange={(e) =>
+                              setRevBreakdown((prev) => ({
+                                ...prev,
+                                [field.name]: e.target.value,
+                              }))
+                            }
+                            className="h-8 text-xs font-semibold bg-zinc-50 focus:bg-white"
+                          />
+                        </div>
+                      )
+                    })}
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end pt-1">
+              <Button type="submit" size="sm" disabled={savingRevenue} className="font-bold text-xs h-9 px-4">
+                {savingRevenue ? "Zapisywanie..." : "💾 Zapisz raport utargu"}
+              </Button>
+            </div>
+          </form>
+
+          {/* LISTA ZAPISANYCH UTARGÓW W WYBRANYM MIESIĄCU */}
+          <div className="space-y-2">
+            <h4 className="text-xs font-bold text-zinc-700 uppercase tracking-wide">
+              Zapisane utargi w miesiącu {selectedMonth} ({monthRevenues.length})
+            </h4>
+
+            {monthRevenues.length === 0 ? (
+              <div className="p-8 text-center text-xs text-zinc-400 border border-dashed rounded-xl">
+                Brak wpisanych utargów w miesiącu {selectedMonth}.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                {monthRevenues.map((r) => {
+                  const workersCount = new Set(
+                    monthLogs.filter((l) => l.work_date === r.work_date).map((l) => l.user_id)
+                  ).size
+
+                  const [y, m, d] = r.work_date.split("-").map(Number)
+                  const weekday = new Date(y, m - 1, d).toLocaleDateString("pl-PL", { weekday: "short" })
+
+                  const breakdownEntries = r.breakdown ? Object.entries(r.breakdown) : []
+
+                  return (
+                    <div
+                      key={r.id}
+                      className="p-3 rounded-xl border border-zinc-200 bg-white hover:border-zinc-300 transition-all space-y-2 shadow-2xs"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-zinc-900 text-xs">
+                              📅 {r.work_date}
+                            </span>
+                            <span className="text-[10px] text-zinc-500 uppercase font-semibold">
+                              ({weekday})
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-zinc-500 mt-0.5">
+                            Załoga na zmianie: <strong>{workersCount} os.</strong>
+                          </p>
+                        </div>
+
+                        <div className="text-right">
+                          <p className="text-xs text-zinc-400 font-medium">Utarg całkowity:</p>
+                          <p className="text-sm font-extrabold text-emerald-700 font-mono">
+                            {Number(r.amount).toFixed(2)} zł
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* BADGE'E Z POZYCJAMI RAPORTU */}
+                      {breakdownEntries.length > 0 && (
+                        <div className="pt-2 border-t border-zinc-100 flex flex-wrap gap-1">
+                          {breakdownEntries.map(([name, val]) => (
+                            <span
+                              key={name}
+                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-zinc-100 text-zinc-700 border border-zinc-200/60"
+                            >
+                              {name}: <strong>{Number(val).toFixed(0)} zł</strong>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-end gap-1.5 pt-1 border-t border-zinc-50">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleSelectRevDate(r.work_date)}
+                          className="h-6 px-2 text-[11px] text-zinc-600 hover:text-zinc-900"
+                        >
+                          ✏️ Edytuj
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDeleteDailyRevenue(r.id, r.work_date)}
+                          className="h-6 px-2 text-[11px] text-red-500 hover:text-red-700 hover:bg-red-50"
+                        >
+                          🗑️ Usuń
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
 
@@ -1187,6 +1842,16 @@ export function AttendanceManagerModule({
         onAddManualBonus={handleAddManualBonus}
         onDeleteManualBonus={handleDeleteManualBonus}
         getMemberName={getMemberName}
+      />
+
+      <RevenueFieldsSettingsModal
+        isOpen={isRevenueSettingsOpen}
+        onClose={() => setIsRevenueSettingsOpen(false)}
+        fields={revenueFields}
+        onAddField={handleAddRevenueField}
+        onUpdateField={handleUpdateRevenueField}
+        onDeleteField={handleDeleteRevenueField}
+        onLoadSuggested={handleLoadSuggestedFields}
       />
     </div>
   )
