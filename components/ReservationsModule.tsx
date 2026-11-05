@@ -293,9 +293,9 @@ export function ReservationsModule({
     }
   }
 
-  // Filtrowanie i wyszukiwanie rezerwacji
+  // Filtrowanie, wyszukiwanie i precyzyjne sortowanie po dacie i godzinie rezerwacji
   const filteredReservations = useMemo(() => {
-    return reservations.filter((r) => {
+    const list = reservations.filter((r) => {
       // 1. Filtr daty
       if (dateFilter === "today") {
         if (r.reservation_date !== todayStr) return false
@@ -325,6 +325,21 @@ export function ReservationsModule({
       }
 
       return true
+    })
+
+    // Sortowanie:
+    // Dla nadchodzących, dzisiaj, jutro, inna data: chronologicznie rosnąco (najbliższa data i najwcześniejsza godzina na górze)
+    // Dla archiwum: malejąco (najświeższe przeszłe rezerwacje na górze)
+    const isArchive = dateFilter === "archive"
+    return list.sort((a, b) => {
+      const dateComparison = isArchive
+        ? b.reservation_date.localeCompare(a.reservation_date)
+        : a.reservation_date.localeCompare(b.reservation_date)
+      if (dateComparison !== 0) return dateComparison
+
+      return isArchive
+        ? b.reservation_time.localeCompare(a.reservation_time)
+        : a.reservation_time.localeCompare(b.reservation_time)
     })
   }, [reservations, dateFilter, todayStr, tomorrowStr, selectedDate, statusFilter, searchQuery])
 
