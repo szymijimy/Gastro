@@ -1709,7 +1709,7 @@ function BartenderDashboard() {
                 restaurantId={restaurantId}
                 currentUserId={currentUserId}
               />
-              <ShiftCalendar />
+              <ShiftCalendar restaurantId={restaurantId} isManager={false} />
             </TabsContent>
 
             <TabsContent value="attendance" keepMounted className="mt-6 space-y-4">

@@ -536,9 +536,12 @@ function ManagerDashboard() {
   const router = useRouter()
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [userName, setUserName] = useState<string>("")
-  const [restaurants, setRestaurants] = useState<{ restaurant_id: string; name: string }[]>([])
+  const [restaurants, setRestaurants] = useState<{ restaurant_id: string; name: string; color?: string }[]>([])
   // Ref utrzymujący aktualną wartość restaurants bez powodowania re-renderu w useCallback
-  const restaurantsRef = useRef<{ restaurant_id: string; name: string }[]>([])
+  const restaurantsRef = useRef<{ restaurant_id: string; name: string; color?: string }[]>([])
+  const [editingVenueColor, setEditingVenueColor] = useState<{ id: string; name: string; color: string } | null>(null)
+  const [tempVenueColor, setTempVenueColor] = useState<string>("#8b5cf6")
+  const [savingVenueColor, setSavingVenueColor] = useState<boolean>(false)
   const [activeRestaurantId, setActiveRestaurantId] = useState<string | null>(null)
   const [defaultRestaurantId, setDefaultRestaurantId] = useState<string | null>(null)
   
@@ -589,7 +592,10 @@ function ManagerDashboard() {
   interface UserRestaurantItem {
     restaurant_id: string
     role: string
-    restaurants: { name: string | null } | { name: string | null }[] | null
+    restaurants:
+      | { name: string | null; color?: string | null }
+      | { name: string | null; color?: string | null }[]
+      | null
   }
 
   const loadVenueData = useCallback(async (
@@ -686,16 +692,21 @@ function ManagerDashboard() {
 
       const { data: userRestaurants } = await supabase
         .from("restaurant_users")
-        .select("restaurant_id, role, restaurants (name)")
+        .select("restaurant_id, role, restaurants (name, color)")
         .eq("user_id", session.user.id)
         .eq("role", "manager")
 
       if (userRestaurants && userRestaurants.length > 0) {
         const formattedVenues = userRestaurants.map((ur: UserRestaurantItem) => {
           const rObj = Array.isArray(ur.restaurants) ? ur.restaurants[0] : ur.restaurants
+          const vName = rObj?.name || "Lokal"
+          const vColor =
+            rObj?.color ||
+            (vName === "Wielokran" ? "#8b5cf6" : vName === "Tankownia" ? "#f97316" : "#6366f1")
           return {
             restaurant_id: ur.restaurant_id,
-            name: rObj?.name || "Lokal",
+            name: vName,
+            color: vColor,
           }
         })
 
@@ -728,6 +739,31 @@ function ManagerDashboard() {
     setActiveRestaurantId(newVenueId)
     await loadVenueData(newVenueId)
     showToast("Przełączono aktywny lokal", "info")
+  }
+
+  const handleSaveVenueColor = async () => {
+    if (!editingVenueColor) return
+    setSavingVenueColor(true)
+    try {
+      const { error } = await supabase
+        .from("restaurants")
+        .update({ color: tempVenueColor })
+        .eq("id", editingVenueColor.id)
+
+      if (error) throw error
+
+      setRestaurants((prev) =>
+        prev.map((r) =>
+          r.restaurant_id === editingVenueColor.id ? { ...r, color: tempVenueColor } : r
+        )
+      )
+      showToast(`Zaktualizowano kolor dla lokalu „${editingVenueColor.name}”`, "success")
+      setEditingVenueColor(null)
+    } catch (err: any) {
+      showToast("Błąd zapisu koloru lokalu: " + err.message, "error")
+    } finally {
+      setSavingVenueColor(false)
+    }
   }
 
   const handleSetDefaultVenue = (venueId: string, e: React.MouseEvent) => {
@@ -1182,7 +1218,28 @@ function ManagerDashboard() {
 
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5">
+                            <span
+                              className="w-3 h-3 rounded-full shrink-0 border border-black/15 shadow-2xs"
+                              style={{ backgroundColor: r.color || "#8b5cf6" }}
+                              title={`Kolor lokalu: ${r.color || "#8b5cf6"}`}
+                            />
                             <p className="text-sm font-bold truncate">{r.name}</p>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setEditingVenueColor({
+                                  id: r.restaurant_id,
+                                  name: r.name,
+                                  color: r.color || "#8b5cf6",
+                                })
+                                setTempVenueColor(r.color || "#8b5cf6")
+                              }}
+                              className="text-xs p-0.5 text-zinc-400 hover:text-zinc-800 rounded hover:bg-black/5"
+                              title="Zmień kolor lokalu"
+                            >
+                              🎨
+                            </button>
                             {isDefault && (
                               <span
                                 className={`text-[10px] font-semibold px-1.5 py-0.2 rounded ${
@@ -1308,7 +1365,7 @@ function ManagerDashboard() {
 
             {/* 2. ZAKŁADKA KALENDARZA */}
             <TabsContent value="calendar" keepMounted className="mt-6">
-              <ShiftCalendar restaurantId={activeRestaurantId} />
+              <ShiftCalendar restaurantId={activeRestaurantId} isManager={true} />
             </TabsContent>
 
             {/* 3. ZAKŁADKA OBECNOŚCI I PREMII */}
@@ -1937,6 +1994,101 @@ function ManagerDashboard() {
           </Tabs>
         </div>
       </div>
+
+      {/* MODAL EDYCJI KOLORU LOKALU DLA MANAGERA */}
+      {editingVenueColor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl border w-full max-w-sm overflow-hidden p-6 space-y-4">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">🎨</span>
+                <h3 className="text-base font-bold text-zinc-900">
+                  Kolor lokalu: {editingVenueColor.name}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingVenueColor(null)}
+                className="text-zinc-400 hover:text-zinc-700 text-xl font-bold leading-none p-1"
+              >
+                ×
+              </button>
+            </div>
+
+            <p className="text-xs text-zinc-500">
+              Wybierz kolor reprezentujący ten lokal w kalendarzu wielolokacyjnym (widok „Wszystkie lokale”).
+            </p>
+
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { name: "Fioletowy", value: "#8b5cf6" },
+                  { name: "Pomarańczowy", value: "#f97316" },
+                  { name: "Niebieski", value: "#2563eb" },
+                  { name: "Szmaragdowy", value: "#10b981" },
+                  { name: "Różowy", value: "#ec4899" },
+                  { name: "Morski", value: "#0d9488" },
+                  { name: "Bursztynowy", value: "#f59e0b" },
+                  { name: "Indygo", value: "#6366f1" },
+                  { name: "Grafitowy", value: "#475569" },
+                ].map((c) => (
+                  <button
+                    key={c.value}
+                    type="button"
+                    onClick={() => setTempVenueColor(c.value)}
+                    className={`p-2 rounded-xl border flex flex-col items-center gap-1.5 transition-all text-center ${
+                      tempVenueColor.toLowerCase() === c.value.toLowerCase()
+                        ? "border-zinc-900 ring-2 ring-zinc-900 bg-zinc-50 shadow-2xs font-bold"
+                        : "border-zinc-200 bg-white hover:bg-zinc-50"
+                    }`}
+                  >
+                    <span
+                      className="w-5 h-5 rounded-full shadow-2xs border border-black/10"
+                      style={{ backgroundColor: c.value }}
+                    />
+                    <span className="text-[11px] text-zinc-700">{c.name}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2 pt-2 border-t">
+                <span className="text-xs font-semibold text-zinc-600">Dowolny hex:</span>
+                <Input
+                  type="text"
+                  value={tempVenueColor}
+                  onChange={(e) => setTempVenueColor(e.target.value)}
+                  className="h-8 text-xs font-mono w-28 uppercase"
+                />
+                <span
+                  className="w-8 h-8 rounded-lg border border-black/10 shadow-2xs shrink-0"
+                  style={{ backgroundColor: tempVenueColor }}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setEditingVenueColor(null)}
+                disabled={savingVenueColor}
+              >
+                Anuluj
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleSaveVenueColor}
+                disabled={savingVenueColor}
+                className="font-bold"
+              >
+                {savingVenueColor ? "Zapis..." : "Zapisz kolor"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* POP-UP PODGLĄDU OGŁOSZENIA */}
       {selectedAnnouncementModal && (
