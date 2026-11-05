@@ -327,19 +327,17 @@ export function ReservationsModule({
       return true
     })
 
-    // Sortowanie:
-    // Dla nadchodzących, dzisiaj, jutro, inna data: chronologicznie rosnąco (najbliższa data i najwcześniejsza godzina na górze)
-    // Dla archiwum: malejąco (najświeższe przeszłe rezerwacje na górze)
-    const isArchive = dateFilter === "archive"
+    // Jednolite sortowanie we wszystkich zakładkach i filtrach:
+    // Zawsze ściśle po dacie sugerowanej przez rezerwację (chronologicznie rosnąco),
+    // a w obrębie tego samego dnia po planowanej godzinie przyjścia.
     return list.sort((a, b) => {
-      const dateComparison = isArchive
-        ? b.reservation_date.localeCompare(a.reservation_date)
-        : a.reservation_date.localeCompare(b.reservation_date)
+      const dateComparison = a.reservation_date.localeCompare(b.reservation_date)
       if (dateComparison !== 0) return dateComparison
 
-      return isArchive
-        ? b.reservation_time.localeCompare(a.reservation_time)
-        : a.reservation_time.localeCompare(b.reservation_time)
+      const timeComparison = a.reservation_time.localeCompare(b.reservation_time)
+      if (timeComparison !== 0) return timeComparison
+
+      return a.customer_name.localeCompare(b.customer_name)
     })
   }, [reservations, dateFilter, todayStr, tomorrowStr, selectedDate, statusFilter, searchQuery])
 
