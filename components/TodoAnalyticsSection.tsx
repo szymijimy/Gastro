@@ -29,7 +29,7 @@ interface TodoAnalyticsSectionProps {
   currentUserName: string
 }
 
-type ScopeFilter = "day" | "week" | "all"
+type ScopeFilter = "day" | "week" | "month" | "all"
 
 export function TodoAnalyticsSection({
   todos,
@@ -40,7 +40,9 @@ export function TodoAnalyticsSection({
   currentUserId,
   currentUserName,
 }: TodoAnalyticsSectionProps) {
-  const [scope, setScope] = useState<ScopeFilter>("day")
+  const [scope, setScope] = useState<ScopeFilter>("month")
+  const initialMonth = selectedDate ? selectedDate.slice(0, 7) : todayStr.slice(0, 7)
+  const [selectedMonth, setSelectedMonth] = useState<string>(initialMonth)
   const [searchQuery, setSearchQuery] = useState("")
   const [expandedUsers, setExpandedUsers] = useState<Record<string, boolean>>({})
   const [showZeroStaff, setShowZeroStaff] = useState(false)
@@ -50,6 +52,32 @@ export function TodoAnalyticsSection({
     if (roleName.toLowerCase() === "manager") return "#18181b"
     const found = roles.find((r) => r.name.toLowerCase() === roleName.toLowerCase())
     return found?.color || "#71717a"
+  }
+
+  // Formatowanie etykiety miesiąca (np. "2026-11" -> "Listopad 2026")
+  const formatMonthLabel = (monthStr: string): string => {
+    if (!monthStr) return ""
+    try {
+      const [y, m] = monthStr.split("-").map(Number)
+      const d = new Date(y, m - 1, 1)
+      const monthName = d.toLocaleDateString("pl-PL", { month: "long" })
+      return `${monthName.charAt(0).toUpperCase() + monthName.slice(1)} ${y}`
+    } catch {
+      return monthStr
+    }
+  }
+
+  // Przesuwanie miesiąca o zadany offset (+1, -1)
+  const shiftMonth = (monthStr: string, delta: number): string => {
+    try {
+      const [y, m] = monthStr.split("-").map(Number)
+      const d = new Date(y, m - 1 + delta, 1)
+      const newY = d.getFullYear()
+      const newM = String(d.getMonth() + 1).padStart(2, "0")
+      return `${newY}-${newM}`
+    } catch {
+      return monthStr
+    }
   }
 
   // Mapowanie ID użytkownika na imię i nazwisko
@@ -102,9 +130,16 @@ export function TodoAnalyticsSection({
           Boolean(todo.completed_at && todo.completed_at.slice(0, 10) >= sevenDaysAgoStr)
         return targetInRange || completedInRange
       }
+      if (scope === "month") {
+        const matchesTarget = Boolean(todo.target_date && todo.target_date.startsWith(selectedMonth))
+        const matchesCompletedAt = Boolean(
+          todo.completed_at && todo.completed_at.slice(0, 7) === selectedMonth
+        )
+        return matchesTarget || matchesCompletedAt
+      }
       return true // "all"
     })
-  }, [todos, scope, selectedDate, sevenDaysAgoStr])
+  }, [todos, scope, selectedDate, sevenDaysAgoStr, selectedMonth])
 
   // Statystyki ogólne
   const totalCount = scopedTodos.length
@@ -240,6 +275,8 @@ export function TodoAnalyticsSection({
         ? `Dzień: ${selectedDate}`
         : scope === "week"
         ? `Ostatnie 7 dni`
+        : scope === "month"
+        ? `Miesiąc: ${formatMonthLabel(selectedMonth)}`
         : `Wszystkie zadania`
 
     let report = `📊 RAPORT REALIZACJI ZADAŃ (${scopeLabel})\n`
@@ -303,6 +340,17 @@ export function TodoAnalyticsSection({
                 </button>
                 <button
                   type="button"
+                  onClick={() => setScope("month")}
+                  className={`px-3 py-1.5 rounded-md transition-all ${
+                    scope === "month"
+                      ? "bg-white text-zinc-900 shadow-2xs font-bold"
+                      : "text-zinc-600 hover:text-zinc-900"
+                  }`}
+                >
+                  🗓️ Miesiąc
+                </button>
+                <button
+                  type="button"
                   onClick={() => setScope("all")}
                   className={`px-3 py-1.5 rounded-md transition-all ${
                     scope === "all"
@@ -310,7 +358,7 @@ export function TodoAnalyticsSection({
                       : "text-zinc-600 hover:text-zinc-900"
                   }`}
                 >
-                  🗓️ Wszystkie ({todos.length})
+                  🌐 Wszystkie ({todos.length})
                 </button>
               </div>
 
@@ -328,6 +376,67 @@ export function TodoAnalyticsSection({
         </CardHeader>
 
         <CardContent className="pt-0">
+          {/* PASEK NAWIGACJI MIESIĄCA (GDY WYBRANY TRYB MIESIĘCZNY) */}
+          {scope === "month" && (
+            <div className="mb-5 p-2.5 rounded-xl bg-zinc-50 border border-zinc-200 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSelectedMonth(shiftMonth(selectedMonth, -1))}
+                  className="h-8 w-8 p-0 font-bold shadow-2xs"
+                  title="Poprzedni miesiąc"
+                >
+                  ←
+                </Button>
+
+                <div className="relative flex items-center justify-center gap-1.5 bg-white border border-zinc-200 rounded-lg px-3 py-1.5 shadow-2xs cursor-pointer hover:bg-zinc-50 transition-colors">
+                  <span className="text-xs font-bold text-zinc-900">
+                    🗓️ {formatMonthLabel(selectedMonth)}
+                  </span>
+                  <input
+                    type="month"
+                    value={selectedMonth}
+                    onChange={(e) => {
+                      if (e.target.value) setSelectedMonth(e.target.value)
+                    }}
+                    className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                    title="Kliknij, aby wybrać inny miesiąc z listy"
+                  />
+                </div>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSelectedMonth(shiftMonth(selectedMonth, 1))}
+                  className="h-8 w-8 p-0 font-bold shadow-2xs"
+                  title="Następny miesiąc"
+                >
+                  →
+                </Button>
+
+                {selectedMonth !== todayStr.slice(0, 7) && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectedMonth(todayStr.slice(0, 7))}
+                    className="h-8 px-2 text-xs text-blue-600 hover:text-blue-700 font-bold"
+                    title="Wróć do bieżącego miesiąca"
+                  >
+                    Bieżący miesiąc
+                  </Button>
+                )}
+              </div>
+
+              <div className="text-xs text-zinc-500 font-medium">
+                Zestawienie zadań za miesiąc: <strong className="text-zinc-800">{formatMonthLabel(selectedMonth)}</strong>
+              </div>
+            </div>
+          )}
+
           {/* KAFELKI KPI */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
             <div className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-200">
