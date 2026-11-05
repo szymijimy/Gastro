@@ -68,6 +68,8 @@ export async function insertBatchTodos(
       assigned_user_id,
       is_completed: false,
       note: null,
+      completed_by_user_id: null,
+      completed_at: null,
     }
   })
 
@@ -85,15 +87,27 @@ export async function insertBatchTodos(
 // ---------------------------------------------------------------------------
 
 /**
- * Przełącza status ukończenia zadania (is_completed).
+ * Przełącza status ukończenia zadania (is_completed) oraz rejestruje
+ * ID użytkownika i timestamp wykonania (lub czyści je przy wznowieniu zadania).
+ *
+ * @param todoId            ID zadania
+ * @param newStatus         Nowy status ukończenia (true = wykonane, false = aktywne)
+ * @param completedByUserId ID użytkownika oznaczającego wykonanie zadania
  */
 export async function toggleTodoCompleted(
   todoId: string,
-  newStatus: boolean
+  newStatus: boolean,
+  completedByUserId?: string | null
 ): Promise<ServiceResult<true>> {
+  const updatePayload = {
+    is_completed: newStatus,
+    completed_by_user_id: newStatus ? (completedByUserId ?? null) : null,
+    completed_at: newStatus ? new Date().toISOString() : null,
+  }
+
   const { error } = await supabase
     .from("restaurant_todos")
-    .update({ is_completed: newStatus })
+    .update(updatePayload)
     .eq("id", todoId)
 
   if (error) return { data: null, error: error.message }

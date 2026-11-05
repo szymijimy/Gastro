@@ -27,6 +27,7 @@ import {
 } from "@/services/announcementsService"
 import { useTasks } from "@/hooks/useTasks"
 import { PriorityIcon } from "@/components/PriorityIcon"
+import { TodoAnalyticsSection } from "@/components/TodoAnalyticsSection"
 
 const ROLE_COLORS = [
   { name: "Niebieski", value: "#2563eb" },
@@ -38,6 +39,21 @@ const ROLE_COLORS = [
   { name: "Turkusowy", value: "#06b6d4" },
   { name: "Czerwony", value: "#ef4444" },
 ]
+
+const formatCompletedTime = (isoString: string | null | undefined): string => {
+  if (!isoString) return ""
+  try {
+    const d = new Date(isoString)
+    if (isNaN(d.getTime())) return ""
+    const day = String(d.getDate()).padStart(2, "0")
+    const month = String(d.getMonth() + 1).padStart(2, "0")
+    const hours = String(d.getHours()).padStart(2, "0")
+    const mins = String(d.getMinutes()).padStart(2, "0")
+    return `${day}.${month}, ${hours}:${mins}`
+  } catch {
+    return ""
+  }
+}
 
 
 
@@ -72,6 +88,7 @@ function TodoItemRow({
   todo,
   roleColor,
   staffMemberName,
+  completedByName,
   onToggle,
   onUpdatePriority,
   onSaveNote,
@@ -80,6 +97,7 @@ function TodoItemRow({
   todo: TodoItem
   roleColor: string | null
   staffMemberName: string | null
+  completedByName: string | null
   onToggle: (todo: TodoItem) => void
   onUpdatePriority: (todoId: string, newPriority: PriorityLevel) => void
   onSaveNote: (todoId: string, noteText: string | null) => Promise<void>
@@ -108,24 +126,39 @@ function TodoItemRow({
       }`}
     >
       <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3 flex-1 min-w-0">
+        <div className="flex items-start sm:items-center gap-3 flex-1 min-w-0">
           <input
             type="checkbox"
             checked={todo.is_completed}
             onChange={() => onToggle(todo)}
-            className="w-4 h-4 rounded border-zinc-300 cursor-pointer shrink-0"
+            className="w-4 h-4 rounded border-zinc-300 cursor-pointer shrink-0 mt-0.5 sm:mt-0"
           />
 
           <PriorityIcon priority={priority} />
 
-          <span
-            onClick={() => onToggle(todo)}
-            className={`text-sm font-medium cursor-pointer ${
-              todo.is_completed ? "line-through text-zinc-400" : "text-zinc-800"
-            }`}
-          >
-            {todo.task}
-          </span>
+          <div className="flex flex-col min-w-0 flex-1">
+            <span
+              onClick={() => onToggle(todo)}
+              className={`text-sm font-medium cursor-pointer ${
+                todo.is_completed ? "line-through text-zinc-400" : "text-zinc-800"
+              }`}
+            >
+              {todo.task}
+            </span>
+
+            {todo.is_completed && (
+              <div className="flex items-center gap-1.5 mt-1 text-[11px] text-emerald-700 font-medium">
+                <span className="inline-flex items-center gap-1 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded text-[11px]">
+                  ✓ Wykonał(a): <strong className="font-semibold">{completedByName || "Pracownik"}</strong>
+                  {todo.completed_at && (
+                    <span className="text-zinc-500 font-normal ml-0.5">
+                      • {formatCompletedTime(todo.completed_at)}
+                    </span>
+                  )}
+                </span>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -529,7 +562,8 @@ function ManagerDashboard() {
   const [newAnnouncementUntil, setNewAnnouncementUntil] = useState("")
   const [selectedAnnouncementModal, setSelectedAnnouncementModal] = useState<Announcement | null>(null)
 
-  const tasks = useTasks(activeRestaurantId, todayStr)
+  const [todoActiveTab, setTodoActiveTab] = useState<"list" | "analytics">("list")
+  const tasks = useTasks(activeRestaurantId, todayStr, currentUserId)
   // Stabilna referencja loadTodos – useCallback([], []) w hooku gwarantuje, ze nigdy sie nie zmieni.
   // Dzieki temu loadVenueData i zalezny od niego useEffect nie wpada w petle renderow.
   const loadTodosStable = tasks.loadTodos
@@ -719,6 +753,7 @@ function ManagerDashboard() {
   }
 
   const getStaffMemberName = (userId: string) => {
+    if (userId === currentUserId) return `${userName || "Ty"} (Ty)`
     const found = staff.find(s => s.user_id === userId)
     if (!found) return "Pracownik"
     return found.users?.full_name || found.users?.email || "Pracownik"
@@ -1704,110 +1739,175 @@ function ManagerDashboard() {
             </TabsContent>
 
             {/* 7. ZAKŁADKA: TO-DO LIST */}
-            <TabsContent value="todos" keepMounted className="mt-6">
-              <Card>
-                <CardHeader>
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                    <div>
-                      <CardTitle>Lista Zadań (To-do)</CardTitle>
-                      <CardDescription>
-                        Zarządzaj zadaniami i sprawdzaj uwagi zgłoszone przez załogę.
-                      </CardDescription>
-                    </div>
-                    <Button onClick={() => tasks.openModal()} className="h-9">
-                      + Dodaj zadania
-                    </Button>
-                  </div>
+            <TabsContent value="todos" keepMounted className="mt-6 space-y-4">
+              {/* PRZEŁĄCZNIK WIDOKU TO-DO (LISTA DZIENNA vs EWIDENCJA) */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="inline-flex p-1 bg-zinc-100 rounded-lg">
+                  <button
+                    type="button"
+                    onClick={() => setTodoActiveTab("list")}
+                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                      todoActiveTab === "list"
+                        ? "bg-white text-zinc-900 shadow-2xs font-bold"
+                        : "text-zinc-600 hover:text-zinc-900"
+                    }`}
+                  >
+                    <span>📋 Lista dzienna</span>
+                    <span className="text-[11px] text-zinc-400 font-normal">
+                      ({formatDisplayDate(tasks.selectedDate)})
+                    </span>
+                  </button>
 
-                  <div className="mt-4 pt-4 border-t flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-center gap-1.5 w-full sm:w-auto min-w-0">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => tasks.goToPrevDay()}
-                        className="h-9 w-9 p-0 font-bold shrink-0 shadow-2xs"
-                        title="Poprzedni dzień"
-                      >
-                        ←
-                      </Button>
-
-                      <div className="relative flex-1 sm:flex-initial min-w-0 flex items-center justify-center gap-1.5 bg-zinc-50 hover:bg-zinc-100/90 border border-zinc-200 rounded-lg px-2.5 py-1.5 transition-colors cursor-pointer text-center shadow-2xs">
-                        <span className="text-xs font-bold text-zinc-900 truncate">
-                          📅 {getFriendlyDateLabel(tasks.selectedDate, todayStr)} • {formatDisplayDate(tasks.selectedDate)}
-                        </span>
-                        <input
-                          type="date"
-                          value={tasks.selectedDate}
-                          onChange={(e) => {
-                            if (e.target.value) tasks.setSelectedDate(e.target.value)
-                          }}
-                          className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
-                          title="Kliknij, aby wybrać inną datę"
-                        />
-                      </div>
-
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => tasks.goToNextDay()}
-                        className="h-9 w-9 p-0 font-bold shrink-0 shadow-2xs"
-                        title="Następny dzień"
-                      >
-                        →
-                      </Button>
-
-                      {tasks.selectedDate !== todayStr && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => tasks.goToToday()}
-                          className="h-9 px-2 text-xs text-blue-600 hover:text-blue-700 font-bold shrink-0"
-                          title="Wróć do dzisiejszego dnia"
-                        >
-                          Dzisiaj
-                        </Button>
-                      )}
-                    </div>
-
-                    {tasks.dayTodos.length > 0 && (
-                      <span className="text-xs font-semibold px-3 py-1.5 rounded-full bg-zinc-100 text-zinc-700">
-                        Wykonano: {tasks.completedCount} / {tasks.dayTodos.length}
+                  <button
+                    type="button"
+                    onClick={() => setTodoActiveTab("analytics")}
+                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                      todoActiveTab === "analytics"
+                        ? "bg-white text-zinc-900 shadow-2xs font-bold"
+                        : "text-zinc-600 hover:text-zinc-900"
+                    }`}
+                  >
+                    <span>📊 Ewidencja i analiza wykonania</span>
+                    {tasks.todos.filter((t) => t.is_completed).length > 0 && (
+                      <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-100 text-emerald-800 font-bold">
+                        {tasks.todos.filter((t) => t.is_completed).length}
                       </span>
                     )}
-                  </div>
-                </CardHeader>
+                  </button>
+                </div>
 
-                <CardContent>
-                  {tasks.dayTodos.length === 0 ? (
-                    <div className="text-center py-12 space-y-3 border-2 border-dashed rounded-xl">
-                      <p className="text-sm text-zinc-500">
-                        Brak zadań zaplanowanych na dzień <strong className="text-zinc-800">{tasks.selectedDate}</strong>.
-                      </p>
-                      <Button variant="outline" size="sm" onClick={() => tasks.openModal()}>
-                        + Dodaj zadania na ten dzień
+                {todoActiveTab === "list" && (
+                  <Button onClick={() => tasks.openModal()} className="h-9">
+                    + Dodaj zadania
+                  </Button>
+                )}
+              </div>
+
+              {todoActiveTab === "list" ? (
+                <Card>
+                  <CardHeader>
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div>
+                        <CardTitle>Lista Zadań (To-do)</CardTitle>
+                        <CardDescription>
+                          Zarządzaj zadaniami, sprawdzaj kto je odznaczył oraz uwagi zgłoszone przez załogę.
+                        </CardDescription>
+                      </div>
+                      <Button onClick={() => tasks.openModal()} className="h-9">
+                        + Dodaj zadania
                       </Button>
                     </div>
-                  ) : (
-                    <div className="space-y-2.5">
-                      {tasks.dayTodos.map((todo) => (
-                        <TodoItemRow
-                          key={todo.id}
-                          todo={todo}
-                          roleColor={todo.assigned_role ? getRoleColor(todo.assigned_role) : null}
-                          staffMemberName={todo.assigned_user_id ? getStaffMemberName(todo.assigned_user_id) : null}
-                          onToggle={tasks.handleToggle}
-                          onUpdatePriority={tasks.handleUpdatePriority}
-                          onSaveNote={tasks.handleSaveNote}
-                          onDelete={tasks.handleDelete}
-                        />
-                      ))}
+
+                    <div className="mt-4 pt-4 border-t flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="flex items-center gap-1.5 w-full sm:w-auto min-w-0">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => tasks.goToPrevDay()}
+                          className="h-9 w-9 p-0 font-bold shrink-0 shadow-2xs"
+                          title="Poprzedni dzień"
+                        >
+                          ←
+                        </Button>
+
+                        <div className="relative flex-1 sm:flex-initial min-w-0 flex items-center justify-center gap-1.5 bg-zinc-50 hover:bg-zinc-100/90 border border-zinc-200 rounded-lg px-2.5 py-1.5 transition-colors cursor-pointer text-center shadow-2xs">
+                          <span className="text-xs font-bold text-zinc-900 truncate">
+                            📅 {getFriendlyDateLabel(tasks.selectedDate, todayStr)} • {formatDisplayDate(tasks.selectedDate)}
+                          </span>
+                          <input
+                            type="date"
+                            value={tasks.selectedDate}
+                            onChange={(e) => {
+                              if (e.target.value) tasks.setSelectedDate(e.target.value)
+                            }}
+                            className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                            title="Kliknij, aby wybrać inną datę"
+                          />
+                        </div>
+
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => tasks.goToNextDay()}
+                          className="h-9 w-9 p-0 font-bold shrink-0 shadow-2xs"
+                          title="Następny dzień"
+                        >
+                          →
+                        </Button>
+
+                        {tasks.selectedDate !== todayStr && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => tasks.goToToday()}
+                            className="h-9 px-2 text-xs text-blue-600 hover:text-blue-700 font-bold shrink-0"
+                            title="Wróć do dzisiejszego dnia"
+                          >
+                            Dzisiaj
+                          </Button>
+                        )}
+                      </div>
+
+                      {tasks.dayTodos.length > 0 && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-semibold px-3 py-1.5 rounded-full bg-zinc-100 text-zinc-700">
+                            Wykonano: {tasks.completedCount} / {tasks.dayTodos.length}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setTodoActiveTab("analytics")}
+                            className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
+                          >
+                            Zobacz ewidencję →
+                          </button>
+                        </div>
+                      )}
                     </div>
-                  )}
-                </CardContent>
-              </Card>
+                  </CardHeader>
+
+                  <CardContent>
+                    {tasks.dayTodos.length === 0 ? (
+                      <div className="text-center py-12 space-y-3 border-2 border-dashed rounded-xl">
+                        <p className="text-sm text-zinc-500">
+                          Brak zadań zaplanowanych na dzień <strong className="text-zinc-800">{tasks.selectedDate}</strong>.
+                        </p>
+                        <Button variant="outline" size="sm" onClick={() => tasks.openModal()}>
+                          + Dodaj zadania na ten dzień
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {tasks.dayTodos.map((todo) => (
+                          <TodoItemRow
+                            key={todo.id}
+                            todo={todo}
+                            roleColor={todo.assigned_role ? getRoleColor(todo.assigned_role) : null}
+                            staffMemberName={todo.assigned_user_id ? getStaffMemberName(todo.assigned_user_id) : null}
+                            completedByName={todo.completed_by_user_id ? getStaffMemberName(todo.completed_by_user_id) : null}
+                            onToggle={tasks.handleToggle}
+                            onUpdatePriority={tasks.handleUpdatePriority}
+                            onSaveNote={tasks.handleSaveNote}
+                            onDelete={tasks.handleDelete}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              ) : (
+                <TodoAnalyticsSection
+                  todos={tasks.todos}
+                  selectedDate={tasks.selectedDate}
+                  todayStr={todayStr}
+                  staff={staff}
+                  roles={roles}
+                  currentUserId={currentUserId}
+                  currentUserName={userName}
+                />
+              )}
             </TabsContent>
 
             {/* 8. ZAKŁADKA MAGAZYNU */}

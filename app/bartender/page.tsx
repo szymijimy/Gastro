@@ -63,6 +63,7 @@ function StaffTodoRow({
   todo,
   currentUserId,
   assignedUserName,
+  completedByName,
   roleColor,
   onToggle,
   onSaveNote,
@@ -70,6 +71,7 @@ function StaffTodoRow({
   todo: TodoItem
   currentUserId: string | null
   assignedUserName: string | null
+  completedByName: string | null
   roleColor: string | null
   onToggle: (todo: TodoItem) => void
   onSaveNote: (todoId: string, noteText: string | null) => Promise<void>
@@ -114,14 +116,26 @@ function StaffTodoRow({
             <PriorityIcon priority={priority} />
           </div>
 
-          <span
-            onClick={() => onToggle(todo)}
-            className={`text-sm font-medium cursor-pointer select-none leading-snug break-words flex-1 ${
-              todo.is_completed ? "line-through text-zinc-400" : "text-zinc-900"
-            }`}
-          >
-            {todo.task}
-          </span>
+          <div className="flex flex-col flex-1 min-w-0">
+            <span
+              onClick={() => onToggle(todo)}
+              className={`text-sm font-medium cursor-pointer select-none leading-snug break-words ${
+                todo.is_completed ? "line-through text-zinc-400" : "text-zinc-900"
+              }`}
+            >
+              {todo.task}
+            </span>
+            {todo.is_completed && (
+              <span className="text-[11px] text-emerald-700 font-medium inline-flex items-center gap-1 mt-0.5">
+                ✓ Wykonane{completedByName ? `: ${completedByName}` : ""}
+                {todo.completed_at && (
+                  <span className="text-zinc-400 font-normal">
+                    ({new Date(todo.completed_at).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" })})
+                  </span>
+                )}
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0 pl-8.5 sm:pl-0">
@@ -581,16 +595,28 @@ function BartenderDashboard() {
   // --- AKCJE TO-DO LIST ---
   const handleToggleTodo = async (todo: TodoItem) => {
     const updatedStatus = !todo.is_completed
+    const actingUserId = updatedStatus ? currentUserId : null
+    const completedAt = updatedStatus ? new Date().toISOString() : null
+
     setTodos((prev) =>
-      prev.map((t) => (t.id === todo.id ? { ...t, is_completed: updatedStatus } : t))
+      prev.map((t) =>
+        t.id === todo.id
+          ? {
+              ...t,
+              is_completed: updatedStatus,
+              completed_by_user_id: actingUserId,
+              completed_at: completedAt,
+            }
+          : t
+      )
     )
 
-    const { error } = await toggleTodoCompleted(todo.id, updatedStatus)
+    const { error } = await toggleTodoCompleted(todo.id, updatedStatus, actingUserId)
 
     if (error) {
       showToast("Nie udało się zaktualizować zadania: " + error, "error")
       setTodos((prev) =>
-        prev.map((t) => (t.id === todo.id ? { ...t, is_completed: todo.is_completed } : t))
+        prev.map((t) => (t.id === todo.id ? todo : t))
       )
     }
   }
@@ -1183,6 +1209,13 @@ function BartenderDashboard() {
                           assignedUserName={
                             todo.assigned_user_id
                               ? getTeammateName(todo.assigned_user_id)
+                              : null
+                          }
+                          completedByName={
+                            todo.completed_by_user_id === currentUserId
+                              ? "Ty"
+                              : todo.completed_by_user_id
+                              ? getTeammateName(todo.completed_by_user_id)
                               : null
                           }
                           roleColor={
