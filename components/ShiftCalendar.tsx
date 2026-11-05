@@ -380,6 +380,41 @@ export function ShiftCalendar({
     return RESERVATION_STATUS_CONFIG[res.status]?.color || "#f59e0b"
   }
 
+  // Porównywarka lokali: najpierw wg kolejności w venues, fallback alfabetycznie
+  const compareVenues = (restIdA: string, restIdB: string) => {
+    if (restIdA === restIdB) return 0
+    const idxA = venues.findIndex((v) => v.id === restIdA)
+    const idxB = venues.findIndex((v) => v.id === restIdB)
+    if (idxA !== -1 && idxB !== -1 && idxA !== idxB) {
+      return idxA - idxB
+    }
+    return getVenueName(restIdA).localeCompare(getVenueName(restIdB), "pl")
+  }
+
+  // Porównywarka zmian: 1) Lokal, 2) Godzina rozpoczęcia, 3) Osoba (Pracownik)
+  const compareShifts = (a: PublishedShift, b: PublishedShift) => {
+    const vCmp = compareVenues(a.restaurant_id, b.restaurant_id)
+    if (vCmp !== 0) return vCmp
+
+    const tCmp = a.start_time.localeCompare(b.start_time)
+    if (tCmp !== 0) return tCmp
+
+    const personA = getPersonDetails(a.user_id, a.restaurant_id).name
+    const personB = getPersonDetails(b.user_id, b.restaurant_id).name
+    return personA.localeCompare(personB, "pl")
+  }
+
+  // Porównywarka rezerwacji: 1) Lokal, 2) Godzina wejścia, 3) Osoba (Klient)
+  const compareReservations = (a: Reservation, b: Reservation) => {
+    const vCmp = compareVenues(a.restaurant_id, b.restaurant_id)
+    if (vCmp !== 0) return vCmp
+
+    const tCmp = a.reservation_time.localeCompare(b.reservation_time)
+    if (tCmp !== 0) return tCmp
+
+    return a.customer_name.localeCompare(b.customer_name, "pl")
+  }
+
   // Zapis nowego koloru lokalu (przez Managera)
   const handleSaveVenueColor = async () => {
     if (!editingVenueColor) return
@@ -435,7 +470,7 @@ export function ShiftCalendar({
     })
   }, [shifts, selectedVenueFilter, onlyMyShifts, currentUserId])
 
-  // Filtrowanie rezerwacji ze ścisłym sortowaniem po dacie i godzinie
+  // Filtrowanie rezerwacji ze ścisłym sortowaniem: Data -> Lokal -> Godzina -> Osoba
   const filteredReservations = useMemo(() => {
     const list = reservations.filter((r) => {
       if (selectedVenueFilter !== "all" && r.restaurant_id !== selectedVenueFilter) {
@@ -447,11 +482,9 @@ export function ShiftCalendar({
     return list.sort((a, b) => {
       const dCmp = a.reservation_date.localeCompare(b.reservation_date)
       if (dCmp !== 0) return dCmp
-      const tCmp = a.reservation_time.localeCompare(b.reservation_time)
-      if (tCmp !== 0) return tCmp
-      return a.customer_name.localeCompare(b.customer_name)
+      return compareReservations(a, b)
     })
-  }, [reservations, selectedVenueFilter])
+  }, [reservations, selectedVenueFilter, venues])
 
   // Generowanie dni miesiąca
   const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate()
@@ -478,9 +511,11 @@ export function ShiftCalendar({
   const currentMonthPrefix = `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}`
   const monthShifts = filteredShifts
     .filter((s) => s.work_date.startsWith(currentMonthPrefix))
-    .sort(
-      (a, b) => a.work_date.localeCompare(b.work_date) || a.start_time.localeCompare(b.start_time)
-    )
+    .sort((a, b) => {
+      const dCmp = a.work_date.localeCompare(b.work_date)
+      if (dCmp !== 0) return dCmp
+      return compareShifts(a, b)
+    })
 
   // Rezerwacje w bieżącym miesiącu do Agendy
   const monthReservations = filteredReservations.filter((r) =>
@@ -598,11 +633,11 @@ export function ShiftCalendar({
 
   const selectedDayShifts = filteredShifts
     .filter((s) => s.work_date === selectedDate)
-    .sort((a, b) => a.start_time.localeCompare(b.start_time))
+    .sort(compareShifts)
 
-  const selectedDayReservations = filteredReservations.filter(
-    (r) => r.reservation_date === selectedDate
-  )
+  const selectedDayReservations = filteredReservations
+    .filter((r) => r.reservation_date === selectedDate)
+    .sort(compareReservations)
 
   const isMultiVenueView = venues.length > 1 && selectedVenueFilter === "all"
 
@@ -896,7 +931,9 @@ export function ShiftCalendar({
               ) : (
                 <div className="space-y-3">
                   {Array.from(new Set(monthShifts.map((s) => s.work_date))).map((dStr) => {
-                    const shiftsOnDay = monthShifts.filter((s) => s.work_date === dStr)
+                    const shiftsOnDay = monthShifts
+                      .filter((s) => s.work_date === dStr)
+                      .sort(compareShifts)
                     const [y, m, d] = dStr.split("-").map(Number)
                     const dateObj = new Date(y, m - 1, d)
                     const weekday = dateObj.toLocaleDateString("pl-PL", { weekday: "long" })
@@ -975,9 +1012,9 @@ export function ShiftCalendar({
               ) : (
                 <div className="space-y-3">
                   {Array.from(new Set(monthReservations.map((r) => r.reservation_date))).map((dStr) => {
-                    const reservationsOnDay = monthReservations.filter(
-                      (r) => r.reservation_date === dStr
-                    )
+                    const reservationsOnDay = monthReservations
+                      .filter((r) => r.reservation_date === dStr)
+                      .sort(compareReservations)
                     const [y, m, d] = dStr.split("-").map(Number)
                     const dateObj = new Date(y, m - 1, d)
                     const weekday = dateObj.toLocaleDateString("pl-PL", { weekday: "long" })
@@ -1100,11 +1137,11 @@ export function ShiftCalendar({
 
                     const dayShifts = filteredShifts
                       .filter((s) => s.work_date === dateStr)
-                      .sort((a, b) => a.start_time.localeCompare(b.start_time))
+                      .sort(compareShifts)
 
-                    const dayReservations = filteredReservations.filter(
-                      (r) => r.reservation_date === dateStr
-                    )
+                    const dayReservations = filteredReservations
+                      .filter((r) => r.reservation_date === dateStr)
+                      .sort(compareReservations)
 
                     return (
                       <div
