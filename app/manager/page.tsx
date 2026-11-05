@@ -28,6 +28,7 @@ import {
 import { useTasks } from "@/hooks/useTasks"
 import { PriorityIcon } from "@/components/PriorityIcon"
 import { TodoAnalyticsSection } from "@/components/TodoAnalyticsSection"
+import { ReservationsModule } from "@/components/ReservationsModule"
 
 const ROLE_COLORS = [
   { name: "Niebieski", value: "#2563eb" },
@@ -1279,6 +1280,13 @@ function ManagerDashboard() {
                   <span className="truncate">To-do list</span>
                 </TabsTrigger>
                 <TabsTrigger
+                  value="reservations"
+                  className="shrink-0 md:shrink md:flex-1 min-w-0 justify-center px-2.5 md:px-1.5 lg:px-2.5 xl:px-3 py-1.5 text-xs lg:text-xs xl:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1"
+                >
+                  <span className="shrink-0">🛎️</span>
+                  <span className="truncate">Rezerwacje</span>
+                </TabsTrigger>
+                <TabsTrigger
                   value="inventory"
                   className="shrink-0 md:shrink md:flex-1 min-w-0 justify-center px-2.5 md:px-1.5 lg:px-2.5 xl:px-3 py-1.5 text-xs lg:text-xs xl:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1"
                 >
@@ -1910,7 +1918,18 @@ function ManagerDashboard() {
               )}
             </TabsContent>
 
-            {/* 8. ZAKŁADKA MAGAZYNU */}
+            {/* 8. ZAKŁADKA REZERWACJI */}
+            <TabsContent value="reservations" keepMounted className="mt-6">
+              <ReservationsModule
+                restaurantId={activeRestaurantId}
+                restaurantName={restaurants.find((r) => r.restaurant_id === activeRestaurantId)?.name || "Lokal"}
+                currentUserId={currentUserId || undefined}
+                currentUserName={userName || undefined}
+                isManager={true}
+              />
+            </TabsContent>
+
+            {/* 9. ZAKŁADKA MAGAZYNU */}
             <TabsContent value="inventory" keepMounted className="mt-6">
               <InventoryModule restaurantId={activeRestaurantId} />
             </TabsContent>

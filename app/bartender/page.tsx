@@ -27,6 +27,7 @@ import type { RestaurantRole } from "@/types/restaurant"
 import type { StaffMembership, Teammate } from "@/types/staff"
 import type { Category, Product } from "@/types/inventory"
 import { PriorityIcon } from "@/components/PriorityIcon"
+import { ReservationsModule } from "@/components/ReservationsModule"
 import { fetchTodos, toggleTodoCompleted, saveTodoNote } from "@/services/tasksService"
 import { fetchAnnouncements } from "@/services/announcementsService"
 
@@ -1265,6 +1266,13 @@ function BartenderDashboard() {
                   )}
                 </TabsTrigger>
                 <TabsTrigger
+                  value="reservations"
+                  className="shrink-0 md:shrink md:flex-1 min-w-0 justify-center px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"
+                >
+                  <span className="shrink-0">🛎️</span>
+                  <span className="truncate">Rezerwacje</span>
+                </TabsTrigger>
+                <TabsTrigger
                   value="inventory"
                   className="shrink-0 md:shrink md:flex-1 min-w-0 justify-center px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"
                 >
@@ -1684,6 +1692,16 @@ function BartenderDashboard() {
                   )}
                 </CardContent>
               </Card>
+            </TabsContent>
+
+            <TabsContent value="reservations" keepMounted className="mt-6">
+              <ReservationsModule
+                restaurantId={restaurantId}
+                restaurantName={restaurantName}
+                currentUserId={currentUserId || undefined}
+                currentUserName={userName || undefined}
+                isManager={false}
+              />
             </TabsContent>
 
             <TabsContent value="schedule" keepMounted className="mt-6 space-y-6">
