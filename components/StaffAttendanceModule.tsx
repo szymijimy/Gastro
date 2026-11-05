@@ -1,4 +1,6 @@
-﻿"use client"
+"use client"
+
+import { resolveRevenueFields } from "@/types/attendance"
 
 import { useEffect, useState, useMemo } from "react"
 import { supabase } from "@/lib/supabase"
@@ -144,9 +146,7 @@ export function StaffAttendanceModule({
         }
       }
       if (manRes.data) setManualBonuses(manRes.data as ManualBonus[])
-      if (!fieldsRes.error && fieldsRes.data) {
-        setRevenueFields(fieldsRes.data as RevenueField[])
-      }
+      setRevenueFields(resolveRevenueFields(fieldsRes.data, restaurantId))
       setLoading(false)
     }
 

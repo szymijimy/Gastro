@@ -1,4 +1,6 @@
-﻿"use client"
+"use client"
+
+import { resolveRevenueFields, DEFAULT_REVENUE_FIELD_PRESETS } from "@/types/attendance"
 
 import { useEffect, useState, useMemo } from "react"
 import { supabase } from "@/lib/supabase"
@@ -945,16 +947,8 @@ function ManualBonusModal({
   return <ManualBonusModalDialog {...props} />
 }
 
-export const DEFAULT_REVENUE_FIELD_PRESETS: {
-  name: string
-  include_in_total: boolean
-  deduct_previous_day: boolean
-}[] = [
-  { name: "Karty", include_in_total: true, deduct_previous_day: false },
-  { name: "Gotówka / Grube", include_in_total: true, deduct_previous_day: false },
-  { name: "Zasyp", include_in_total: true, deduct_previous_day: true },
-  { name: "Raport fiskalny", include_in_total: false, deduct_previous_day: false },
-]
+// DEFAULT_REVENUE_FIELD_PRESETS is re-exported from @/types/attendance
+export { DEFAULT_REVENUE_FIELD_PRESETS } from "@/types/attendance" 
 
 export const getPreviousDayFieldValue = (
   fieldName: string,
@@ -1334,6 +1328,22 @@ export function AttendanceManagerModule({
   const [revAmount, setRevAmount] = useState<string>("")
   const [revBreakdown, setRevBreakdown] = useState<Record<string, string>>({})
   const [revenueFields, setRevenueFields] = useState<RevenueField[]>([])
+  useEffect(() => {
+
+    if (typeof window !== "undefined" && restaurantId && revenueFields.length > 0) {
+
+      try {
+
+        localStorage.setItem(`gastro_revenue_fields_v2_${restaurantId}`, JSON.stringify(revenueFields))
+
+      } catch {}
+
+    }
+
+  }, [revenueFields, restaurantId])
+
+
+
   const [isRevenueSettingsOpen, setIsRevenueSettingsOpen] = useState(false)
   const [savingRevenue, setSavingRevenue] = useState(false)
 
@@ -1393,21 +1403,7 @@ export function AttendanceManagerModule({
       }
       if (manRes.data) setManualBonuses(manRes.data as ManualBonus[])
 
-      if (!fieldsRes.error && fieldsRes.data && fieldsRes.data.length > 0) {
-        setRevenueFields(fieldsRes.data as RevenueField[])
-      } else {
-        setRevenueFields(
-          DEFAULT_REVENUE_FIELD_PRESETS.map((p, idx) => ({
-            id: `local-${idx}`,
-            restaurant_id: restaurantId,
-            name: p.name,
-            is_active: true,
-            sort_order: idx + 1,
-            include_in_total: p.include_in_total,
-            deduct_previous_day: p.deduct_previous_day,
-          }))
-        )
-      }
+      setRevenueFields(resolveRevenueFields(fieldsRes.data, restaurantId))
       setLoading(false)
     }
 
@@ -1732,12 +1728,25 @@ export function AttendanceManagerModule({
   }
 
   const handleUpdateRevenueField = async (id: string, updates: Partial<RevenueField>) => {
+    const updatedList = revenueFields.map((f) => (f.id === id ? { ...f, ...updates } : f))
+    setRevenueFields(updatedList)
+
+    try {
+      if (typeof window !== "undefined" && restaurantId) {
+        localStorage.setItem(`gastro_revenue_fields_v2_${restaurantId}`, JSON.stringify(updatedList))
+      }
+    } catch {}
+
     if (!id.startsWith("local-")) {
-      await supabase.from("restaurant_revenue_fields").update(updates).eq("id", id)
+      const { error } = await supabase.from("restaurant_revenue_fields").update(updates).eq("id", id)
+      if (error && (error.code === "42703" || error.message?.includes("include_in_total"))) {
+        // Kolumny jeszcze nie ma w bazie SQL – zaktualizuj to co się da
+        const { include_in_total, deduct_previous_day, ...safeUpdates } = updates as any
+        if (Object.keys(safeUpdates).length > 0) {
+          await supabase.from("restaurant_revenue_fields").update(safeUpdates).eq("id", id)
+        }
+      }
     }
-    setRevenueFields((prev) =>
-      prev.map((f) => (f.id === id ? { ...f, ...updates } : f))
-    )
     showToast("Zaktualizowano pozycję utargu.", "info")
   }
 
@@ -1751,7 +1760,13 @@ export function AttendanceManagerModule({
     if (!id.startsWith("local-")) {
       await supabase.from("restaurant_revenue_fields").delete().eq("id", id)
     }
-    setRevenueFields((prev) => prev.filter((f) => f.id !== id))
+    const filtered = revenueFields.filter((f) => f.id !== id)
+    setRevenueFields(filtered)
+    try {
+      if (typeof window !== "undefined" && restaurantId) {
+        localStorage.setItem(`gastro_revenue_fields_v2_${restaurantId}`, JSON.stringify(filtered))
+      }
+    } catch {}
     showToast(`Usunięto pozycję "${name}".`, "info")
   }
 
