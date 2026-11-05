@@ -27,5 +27,25 @@ CREATE INDEX IF NOT EXISTS idx_restaurant_day_requirements_venue_date
 ALTER TABLE restaurant_operating_hours
   ADD COLUMN IF NOT EXISTS shift_roles text[];
 
+-- Nadanie uprawnień dla ról Supabase (authenticated, anon, service_role)
+GRANT ALL ON TABLE restaurant_day_requirements TO authenticated;
+GRANT ALL ON TABLE restaurant_day_requirements TO anon;
+GRANT ALL ON TABLE restaurant_day_requirements TO service_role;
+
+GRANT ALL ON TABLE restaurant_operating_hours TO authenticated;
+GRANT ALL ON TABLE restaurant_operating_hours TO anon;
+GRANT ALL ON TABLE restaurant_operating_hours TO service_role;
+
+-- Konfiguracja RLS (Row Level Security)
+ALTER TABLE restaurant_day_requirements ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "allow_all_authenticated_restaurant_day_requirements" ON restaurant_day_requirements;
+CREATE POLICY "allow_all_authenticated_restaurant_day_requirements" ON restaurant_day_requirements
+  FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "allow_all_anon_restaurant_day_requirements" ON restaurant_day_requirements;
+CREATE POLICY "allow_all_anon_restaurant_day_requirements" ON restaurant_day_requirements
+  FOR ALL TO anon USING (true) WITH CHECK (true);
+
 -- Odświeżenie schematu PostgREST w Supabase
 NOTIFY pgrst, 'reload schema';
