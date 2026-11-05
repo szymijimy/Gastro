@@ -293,6 +293,7 @@ export function ManagerScheduleModule({
 
   const [dayRequirements, setDayRequirements] = useState<Record<string, Record<string, DayRequirement>>>({})
   const [isMonthlyRequirementsModalOpen, setIsMonthlyRequirementsModalOpen] = useState(false)
+  const [scheduleRequirementsTab, setScheduleRequirementsTab] = useState<"month" | "weekly">("month")
   const [isOperatingHoursModalOpen, setIsOperatingHoursModalOpen] = useState(false)
   const [savingOperatingHours, setSavingOperatingHours] = useState(false)
 
@@ -428,6 +429,7 @@ export function ManagerScheduleModule({
             is_closed: Boolean(row.is_closed),
             default_start_time: normalizedTimes[0] || fallbackStart,
             shift_start_times: normalizedTimes,
+            shift_roles: normalizeRolesArray(row.shift_roles, count),
             default_end_time: row.default_end_time || "",
             min_staff_needed: count,
             day_color: row.day_color || "",
@@ -706,6 +708,51 @@ export function ManagerScheduleModule({
       nextStatus === "open" ? "Otwarto zapisy dyspozycyjności." : "Zamknięto zapisy dyspozycyjności.",
       "info"
     )
+  }
+
+  const handleSaveWeeklyTemplate = async (
+    venueId: string,
+    targetMap: Record<number, OperatingHourConfig>
+  ) => {
+    const rows = Object.values(targetMap).map((cfg) => {
+      const count = Math.max(1, Number(cfg.min_staff_needed) || 1)
+      const normalizedSlots = normalizeStartTimesArray(
+        cfg.shift_start_times,
+        count,
+        cfg.default_start_time || "16:00"
+      )
+      const normalizedRoles = normalizeRolesArray(cfg.shift_roles, count, "")
+      return {
+        restaurant_id: venueId,
+        day_of_week: cfg.day_of_week,
+        is_closed: Boolean(cfg.is_closed),
+        default_start_time: normalizedSlots[0] || "16:00",
+        shift_start_times: normalizedSlots,
+        shift_roles: normalizedRoles,
+        default_end_time: cfg.default_end_time?.trim() || null,
+        min_staff_needed: count,
+        day_color: cfg.day_color || null,
+      }
+    })
+
+    const { error } = await supabase
+      .from("restaurant_operating_hours")
+      .upsert(rows, { onConflict: "restaurant_id,day_of_week" })
+
+    if (error) {
+      showToast("Błąd zapisu szablonu tygodniowego: " + error.message, "error")
+      throw error
+    }
+
+    setAllVenuesOpHours((prev) => ({
+      ...prev,
+      [venueId]: targetMap,
+    }))
+
+    if (selectedDate && venueId === restaurantId) {
+      prepareDayDrafts(selectedDate, shifts, availabilities, targetMap)
+    }
+    showToast("Zapisano standardowy szablon tygodniowy lokalu.", "success")
   }
 
   const handleSaveOperatingHours = async (e: React.FormEvent) => {
@@ -1683,8 +1730,11 @@ export function ManagerScheduleModule({
         roles={roles}
         currentMonthStr={activePeriod?.start_date?.slice(0, 7) || new Date().toISOString().slice(0, 7)}
         existingRequirements={dayRequirements}
+        operatingHoursByVenue={allVenuesOpHours}
         onSaveMonth={handleSaveMonthlyRequirements}
+        onSaveWeeklyTemplate={handleSaveWeeklyTemplate}
         getDefaultDayConfig={getDayConfigForDate}
+        initialTab={scheduleRequirementsTab}
       />
     )
   }
@@ -1709,7 +1759,10 @@ export function ManagerScheduleModule({
                 </CardDescription>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <Button type="button" variant="outline" onClick={() => setIsMonthlyRequirementsModalOpen(true)}>
+                <Button type="button" variant="outline" onClick={() => { setScheduleRequirementsTab("weekly"); setIsMonthlyRequirementsModalOpen(true); }}>
+                  🕒 Szablon tygodnia (Pn–Nd)
+                </Button>
+                <Button type="button" variant="outline" onClick={() => { setScheduleRequirementsTab("month"); setIsMonthlyRequirementsModalOpen(true); }}>
                   🗓️ Miesięczny plan obsady i role
                 </Button>
                 <Button onClick={openCreatePeriodModal}>+ Nowy okres grafikowy</Button>
@@ -2128,7 +2181,10 @@ export function ManagerScheduleModule({
                 {isCurrentlyAccepting ? "🔒 Zamknij zapisy" : "🔓 Otwórz ponownie zapisy"}
               </Button>
 
-              <Button type="button" variant="outline" size="sm" onClick={() => setIsMonthlyRequirementsModalOpen(true)}>
+              <Button type="button" variant="outline" size="sm" onClick={() => { setScheduleRequirementsTab("weekly"); setIsMonthlyRequirementsModalOpen(true); }}>
+                🕒 Szablon tygodnia
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => { setScheduleRequirementsTab("month"); setIsMonthlyRequirementsModalOpen(true); }}>
                 🗓️ Miesięczny plan obsady i role
               </Button>
 
