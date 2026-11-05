@@ -1291,19 +1291,340 @@ function RevenueFieldsSettingsModal({
 // ============================================================================
 // GŁÓWNY MODUŁ OBECNOŚCI I ROZLICZEŃ U MANAGERA
 // ============================================================================
+
+export const calculateShiftDurationHours = (startTime: string, endTime: string): number => {
+  if (!startTime || !endTime) return 0
+  const [sh, sm] = startTime.split(":").map(Number)
+  const [eh, em] = endTime.split(":").map(Number)
+  if (isNaN(sh) || isNaN(sm) || isNaN(eh) || isNaN(em)) return 0
+
+  const startMins = sh * 60 + sm
+  let endMins = eh * 60 + em
+  if (endMins <= startMins) {
+    endMins += 24 * 60
+  }
+  return Math.round(((endMins - startMins) / 60) * 100) / 100
+}
+
+function AttendanceLogModal({
+  isOpen,
+  onClose,
+  staff,
+  currentUserId,
+  currentUserName,
+  defaultDate,
+  initialLog,
+  targetUserId,
+  onSave,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  staff: StaffMember[]
+  currentUserId?: string | null
+  currentUserName?: string | null
+  defaultDate: string
+  initialLog?: AttendanceLog | null
+  targetUserId?: string
+  onSave: (payload: {
+    id?: string
+    user_id: string
+    work_date: string
+    start_time: string
+    end_time: string
+    hours_worked: number
+    note: string | null
+  }) => Promise<void>
+}) {
+  const [userId, setUserId] = useState<string>("")
+  const [workDate, setWorkDate] = useState<string>(defaultDate)
+  const [startTime, setStartTime] = useState<string>("10:00")
+  const [endTime, setEndTime] = useState<string>("18:00")
+  const [note, setNote] = useState<string>("")
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (initialLog) {
+      setUserId(initialLog.user_id)
+      setWorkDate(initialLog.work_date)
+      setStartTime(initialLog.start_time)
+      setEndTime(initialLog.end_time)
+      setNote(initialLog.note || "")
+    } else {
+      setUserId(targetUserId || currentUserId || staff[0]?.user_id || "")
+      setWorkDate(defaultDate)
+      setStartTime("10:00")
+      setEndTime("18:00")
+      setNote("")
+    }
+  }, [initialLog, targetUserId, currentUserId, staff, defaultDate, isOpen])
+
+  if (!isOpen) return null
+
+  const durationHours = calculateShiftDurationHours(startTime, endTime)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!userId) {
+      showToast("Wybierz pracownika lub menadżera.", "error")
+      return
+    }
+    if (!workDate) {
+      showToast("Podaj datę pracy.", "error")
+      return
+    }
+    if (!startTime || !endTime) {
+      showToast("Podaj godzinę rozpoczęcia i zakończenia.", "error")
+      return
+    }
+    if (durationHours <= 0 || durationHours > 24) {
+      showToast("Sprawdź wpisane godziny pracy.", "error")
+      return
+    }
+
+    setSaving(true)
+    try {
+      await onSave({
+        id: initialLog?.id,
+        user_id: userId,
+        work_date: workDate,
+        start_time: startTime,
+        end_time: endTime,
+        hours_worked: durationHours,
+        note: note.trim() || null,
+      })
+      onClose()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl overflow-hidden border border-zinc-200 animate-in fade-in zoom-in duration-150">
+        <div className="p-4 sm:p-5 border-b border-zinc-100 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <span className="text-2xl">⏱️</span>
+            <div>
+              <h3 className="font-bold text-base text-zinc-900">
+                {initialLog ? "Edytuj wpis obecności" : "Wpisz godziny pracy"}
+              </h3>
+              <p className="text-xs text-zinc-500">
+                {initialLog ? "Korekta godzin lub notatki do zmiany" : "Rejestracja faktycznego czasu pracy na zmianie"}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-zinc-400 hover:text-zinc-700 text-lg p-1 rounded-lg"
+          >
+            ✕
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-4 sm:p-5 space-y-4">
+          {/* Szybki wybór menadżera */}
+          {currentUserId && !initialLog && (
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant={userId === currentUserId ? "default" : "outline"}
+                className={`text-xs h-7 gap-1 font-semibold ${
+                  userId === currentUserId ? "bg-zinc-900 text-white" : ""
+                }`}
+                onClick={() => setUserId(currentUserId)}
+              >
+                <span>⭐</span>
+                <span>Ty ({currentUserName || "Menadżer"})</span>
+              </Button>
+              <span className="text-xs text-zinc-400">lub wybierz z listy:</span>
+            </div>
+          )}
+
+          {/* Pracownik */}
+          <div className="space-y-1">
+            <Label className="text-xs font-semibold text-zinc-700">
+              Pracownik / Menadżer *
+            </Label>
+            <select
+              value={userId}
+              onChange={(e) => setUserId(e.target.value)}
+              className="w-full h-9 rounded-md border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-800"
+              required
+            >
+              {staff.map((m) => {
+                const isMe = m.user_id === currentUserId
+                const name = m.users?.full_name || m.users?.email?.split("@")[0] || "Pracownik"
+                return (
+                  <option key={m.user_id} value={m.user_id}>
+                    {isMe ? `⭐ ${name} (Ty - Menadżer)` : `${name} (${m.role})`}
+                  </option>
+                )
+              })}
+            </select>
+          </div>
+
+          {/* Data pracy */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs font-semibold text-zinc-700">Data zmiany *</Label>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setWorkDate(defaultDate)}
+                  className="text-[11px] font-semibold text-indigo-600 hover:underline"
+                >
+                  Dzisiaj
+                </button>
+                <span className="text-zinc-300">|</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const d = new Date()
+                    d.setDate(d.getDate() - 1)
+                    setWorkDate(d.toISOString().slice(0, 10))
+                  }}
+                  className="text-[11px] font-semibold text-indigo-600 hover:underline"
+                >
+                  Wczoraj
+                </button>
+              </div>
+            </div>
+            <Input
+              type="date"
+              value={workDate}
+              onChange={(e) => setWorkDate(e.target.value)}
+              className="h-9 text-xs"
+              required
+            />
+          </div>
+
+          {/* Godziny pracy */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold text-zinc-700">Godzina wejścia *</Label>
+              <Input
+                type="time"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+                className="h-9 text-xs font-mono font-bold"
+                required
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold text-zinc-700">Godzina wyjścia *</Label>
+              <Input
+                type="time"
+                value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+                className="h-9 text-xs font-mono font-bold"
+                required
+              />
+            </div>
+          </div>
+
+          {/* Podgląd czasu */}
+          <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-between">
+            <span className="text-xs font-medium text-blue-900">Przepracowany czas:</span>
+            <span className="text-base font-black text-blue-950 font-mono">
+              🕒 {durationHours > 0 ? `${durationHours.toFixed(1)} h` : "—"}
+            </span>
+          </div>
+
+          {/* Notatka */}
+          <div className="space-y-1">
+            <Label className="text-xs font-semibold text-zinc-700">
+              Notatka do zmiany (opcjonalnie)
+            </Label>
+            <Input
+              type="text"
+              placeholder="np. Zmiana managerska, inwentaryzacja, zamknięcie..."
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              className="h-9 text-xs"
+            />
+          </div>
+
+          {/* Przyciski */}
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100">
+            <Button type="button" variant="outline" size="sm" onClick={onClose} disabled={saving}>
+              Anuluj
+            </Button>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={saving || durationHours <= 0}
+              className="bg-zinc-900 text-white hover:bg-zinc-800 font-bold"
+            >
+              {saving ? "Zapisywanie..." : initialLog ? "Zapisz zmiany" : "Zapisz godziny"}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+
 export function AttendanceManagerModule({
   restaurantId,
   staff,
   roles,
+  currentUserId,
+  currentUserName,
 }: {
   restaurantId: string | null
   staff: StaffMember[]
   roles: RestaurantRole[]
+  currentUserId?: string | null
+  currentUserName?: string | null
 }) {
   const [selectedMonth, setSelectedMonth] = useState<string>(() => {
     const now = new Date()
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
   })
+  const effectiveStaff = useMemo(() => {
+    if (!currentUserId) return staff
+    const exists = staff.some((s) => s.user_id === currentUserId)
+    if (exists) return staff
+    return [
+      {
+        user_id: currentUserId,
+        role: "manager",
+        hourly_rate: 0,
+        users: {
+          full_name: currentUserName || "Menadżer",
+          email: null,
+        },
+      },
+      ...staff,
+    ]
+  }, [staff, currentUserId, currentUserName])
+
+  const [isLogModalOpen, setIsLogModalOpen] = useState(false)
+  const [editingLog, setEditingLog] = useState<AttendanceLog | null>(null)
+  const [modalTargetUserId, setModalTargetUserId] = useState<string | undefined>(undefined)
+
+  const [quickUserId, setQuickUserId] = useState<string>(() => currentUserId || staff[0]?.user_id || "")
+  const [quickWorkDate, setQuickWorkDate] = useState<string>(() => {
+    const now = new Date()
+    const yyyy = now.getFullYear()
+    const mm = String(now.getMonth() + 1).padStart(2, "0")
+    const dd = String(now.getDate()).padStart(2, "0")
+    return `${yyyy}-${mm}-${dd}`
+  })
+  const [quickStartTime, setQuickStartTime] = useState<string>("10:00")
+  const [quickEndTime, setQuickEndTime] = useState<string>("18:00")
+  const [quickNote, setQuickNote] = useState<string>("")
+  const [quickSaving, setQuickSaving] = useState(false)
+
+  useEffect(() => {
+    if (currentUserId && !quickUserId) {
+      setQuickUserId(currentUserId)
+    }
+  }, [currentUserId, quickUserId])
+
   const [todayStr] = useState<string>(() => {
     const now = new Date()
     const yyyy = now.getFullYear()
@@ -1417,7 +1738,10 @@ export function AttendanceManagerModule({
   }
 
   const getMemberName = (userId: string) => {
-    const found = staff.find((s) => s.user_id === userId)
+    if (currentUserId && userId === currentUserId) {
+      return `${currentUserName || "Menadżer"} (Ty)`
+    }
+    const found = effectiveStaff.find((s) => s.user_id === userId)
     if (!found) return "Pracownik"
     return found.users?.full_name || found.users?.email?.split("@")[0] || "Pracownik"
   }
@@ -1826,6 +2150,100 @@ export function AttendanceManagerModule({
     }
   }
 
+  const handleOpenLogModal = (logToEdit?: AttendanceLog | null, targetUserId?: string) => {
+    setEditingLog(logToEdit || null)
+    setModalTargetUserId(targetUserId || (logToEdit ? logToEdit.user_id : currentUserId || undefined))
+    setIsLogModalOpen(true)
+  }
+
+  const handleSaveAttendanceLog = async (payload: {
+    id?: string
+    user_id: string
+    work_date: string
+    start_time: string
+    end_time: string
+    hours_worked: number
+    note: string | null
+  }) => {
+    if (!restaurantId) return
+
+    if (payload.id) {
+      const { data, error } = await supabase
+        .from("attendance_logs")
+        .update({
+          user_id: payload.user_id,
+          work_date: payload.work_date,
+          start_time: payload.start_time,
+          end_time: payload.end_time,
+          hours_worked: payload.hours_worked,
+          note: payload.note,
+        })
+        .eq("id", payload.id)
+        .select()
+
+      if (error) {
+        showToast("Błąd aktualizacji wpisu: " + error.message, "error")
+        return
+      }
+
+      setLogs((prev) =>
+        prev.map((l) => (l.id === payload.id ? (data[0] as AttendanceLog) : l))
+      )
+      showToast(`Zaktualizowano godziny (${payload.hours_worked} h).`, "success")
+    } else {
+      const { data, error } = await supabase
+        .from("attendance_logs")
+        .insert([
+          {
+            restaurant_id: restaurantId,
+            user_id: payload.user_id,
+            work_date: payload.work_date,
+            start_time: payload.start_time,
+            end_time: payload.end_time,
+            hours_worked: payload.hours_worked,
+            note: payload.note,
+          },
+        ])
+        .select()
+
+      if (error) {
+        showToast("Błąd zapisu obecności: " + error.message, "error")
+        return
+      }
+
+      if (data && data[0]) {
+        setLogs((prev) => [data[0] as AttendanceLog, ...prev])
+      }
+      const memberName = getMemberName(payload.user_id)
+      showToast(`Zapisano godziny (${payload.hours_worked} h) dla: ${memberName}`, "success")
+    }
+  }
+
+  const handleQuickSaveAttendance = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!restaurantId || !quickUserId || !quickWorkDate || !quickStartTime || !quickEndTime) return
+    const dur = calculateShiftDurationHours(quickStartTime, quickEndTime)
+    if (dur <= 0 || dur > 24) {
+      showToast("Sprawdź wpisane godziny.", "error")
+      return
+    }
+
+    setQuickSaving(true)
+    try {
+      await handleSaveAttendanceLog({
+        user_id: quickUserId,
+        work_date: quickWorkDate,
+        start_time: quickStartTime,
+        end_time: quickEndTime,
+        hours_worked: dur,
+        note: quickNote.trim() || null,
+      })
+      setQuickNote("")
+    } finally {
+      setQuickSaving(false)
+    }
+  }
+
   const handleDeleteAttendanceLog = async (id: string) => {
     const confirmed = await askConfirm("Czy na pewno chcesz usunąć ten wpis obecności?", "Usuwanie wpisu")
     if (!confirmed) return
@@ -1875,6 +2293,15 @@ export function AttendanceManagerModule({
 
               <Button
                 type="button"
+                onClick={() => handleOpenLogModal(null, currentUserId || undefined)}
+                className="bg-zinc-900 hover:bg-zinc-800 text-white font-bold gap-1.5"
+              >
+                <span>⏱️</span>
+                <span>Wpisz godziny pracy</span>
+              </Button>
+
+              <Button
+                type="button"
                 variant="outline"
                 onClick={() => setIsManualBonusModalOpen(true)}
               >
@@ -1902,7 +2329,7 @@ export function AttendanceManagerModule({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {staff.map((member) => {
+              {effectiveStaff.map((member) => {
                 const summary = calculateUserMonthlyPayroll({
                   userId: member.user_id,
                   userRole: member.role,
@@ -1923,9 +2350,19 @@ export function AttendanceManagerModule({
                           style={{ backgroundColor: roleColor }}
                         />
                         <div>
-                          <span className="font-bold text-zinc-900">
-                            {getMemberName(member.user_id)}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-zinc-900">
+                              {getMemberName(member.user_id)}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenLogModal(null, member.user_id)}
+                              className="text-[10px] font-semibold text-indigo-600 hover:text-indigo-800 hover:underline"
+                              title="Wpisz godziny dla tej osoby"
+                            >
+                              + Wpisz
+                            </button>
+                          </div>
                           <span className="block text-[11px] text-zinc-400">
                             {member.role}
                           </span>
@@ -2289,25 +2726,132 @@ export function AttendanceManagerModule({
               </CardDescription>
             </div>
 
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-zinc-500">Filtruj osobę:</span>
-              <select
-                value={filterUserId}
-                onChange={(e) => setFilterUserId(e.target.value)}
-                className="h-9 rounded-md border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-800"
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => handleOpenLogModal(null, currentUserId || undefined)}
+                className="h-9 text-xs font-bold bg-zinc-900 hover:bg-zinc-800 text-white gap-1.5"
               >
-                <option value="all">Wszyscy pracownicy</option>
-                {staff.map((m) => (
-                  <option key={m.user_id} value={m.user_id}>
-                    {getMemberName(m.user_id)} ({m.role})
-                  </option>
-                ))}
-              </select>
+                <span>+</span>
+                <span>Wpisz godziny</span>
+              </Button>
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-zinc-500">Filtruj:</span>
+                <select
+                  value={filterUserId}
+                  onChange={(e) => setFilterUserId(e.target.value)}
+                  className="h-9 rounded-md border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-800"
+                >
+                  <option value="all">Wszyscy pracownicy</option>
+                  {effectiveStaff.map((m) => {
+                    const isMe = m.user_id === currentUserId
+                    const name = m.users?.full_name || m.users?.email?.split("@")[0] || "Pracownik"
+                    return (
+                      <option key={m.user_id} value={m.user_id}>
+                        {isMe ? `⭐ ${name} (Ty - Menadżer)` : `${name} (${m.role})`}
+                      </option>
+                    )
+                  })}
+                </select>
+              </div>
             </div>
           </div>
         </CardHeader>
 
-        <CardContent>
+        <CardContent className="space-y-4">
+          {/* SZYBKIE WPISANIE GODZIN */}
+          <div className="p-3.5 rounded-xl border border-dashed border-zinc-300 bg-zinc-50/70 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-base">⏱️</span>
+                <span className="text-xs font-bold text-zinc-800">
+                  Szybkie wpisanie godzin obecności
+                </span>
+              </div>
+              {currentUserId && quickUserId !== currentUserId && (
+                <button
+                  type="button"
+                  onClick={() => setQuickUserId(currentUserId)}
+                  className="text-[11px] font-bold text-indigo-600 hover:underline"
+                >
+                  ⭐ Przełącz na: Ty ({currentUserName || "Menadżer"})
+                </button>
+              )}
+            </div>
+
+            <form onSubmit={handleQuickSaveAttendance} className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end">
+              <div className="sm:col-span-3 space-y-1">
+                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Osoba</span>
+                <select
+                  value={quickUserId}
+                  onChange={(e) => setQuickUserId(e.target.value)}
+                  className="w-full h-8 rounded-md border border-zinc-200 bg-white px-2.5 text-xs font-medium text-zinc-800"
+                >
+                  {effectiveStaff.map((m) => {
+                    const isMe = m.user_id === currentUserId
+                    const name = m.users?.full_name || m.users?.email?.split("@")[0] || "Pracownik"
+                    return (
+                      <option key={m.user_id} value={m.user_id}>
+                        {isMe ? `⭐ ${name} (Ty - Menadżer)` : `${name} (${m.role})`}
+                      </option>
+                    )
+                  })}
+                </select>
+              </div>
+
+              <div className="sm:col-span-2 space-y-1">
+                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Data</span>
+                <Input
+                  type="date"
+                  value={quickWorkDate}
+                  onChange={(e) => setQuickWorkDate(e.target.value)}
+                  className="h-8 text-xs bg-white"
+                  required
+                />
+              </div>
+
+              <div className="sm:col-span-2 space-y-1">
+                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Od</span>
+                <Input
+                  type="time"
+                  value={quickStartTime}
+                  onChange={(e) => setQuickStartTime(e.target.value)}
+                  className="h-8 text-xs font-mono font-bold bg-white"
+                  required
+                />
+              </div>
+
+              <div className="sm:col-span-2 space-y-1">
+                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Do</span>
+                <Input
+                  type="time"
+                  value={quickEndTime}
+                  onChange={(e) => setQuickEndTime(e.target.value)}
+                  className="h-8 text-xs font-mono font-bold bg-white"
+                  required
+                />
+              </div>
+
+              <div className="sm:col-span-3 flex items-center gap-1.5">
+                <span className="text-xs font-mono font-black text-blue-900 bg-blue-100 px-2 py-1.5 rounded shrink-0">
+                  {calculateShiftDurationHours(quickStartTime, quickEndTime) > 0
+                    ? `${calculateShiftDurationHours(quickStartTime, quickEndTime).toFixed(1)} h`
+                    : "0 h"}
+                </span>
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={quickSaving || calculateShiftDurationHours(quickStartTime, quickEndTime) <= 0}
+                  className="h-8 text-xs font-bold bg-zinc-900 text-white hover:bg-zinc-800 flex-1"
+                >
+                  {quickSaving ? "Zapis..." : "+ Zapisz"}
+                </Button>
+              </div>
+            </form>
+          </div>
+
           {filteredLogs.length === 0 ? (
             <div className="text-center py-10 border-2 border-dashed rounded-xl text-sm text-zinc-500">
               Brak wpisanych obecności w wybranym miesiącu.
@@ -2346,15 +2890,26 @@ export function AttendanceManagerModule({
                       )}
                     </div>
 
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      size="sm"
-                      className="h-8 text-xs shrink-0"
-                      onClick={() => handleDeleteAttendanceLog(log.id)}
-                    >
-                      Usuń wpis
-                    </Button>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs font-semibold hover:bg-zinc-100"
+                        onClick={() => handleOpenLogModal(log)}
+                      >
+                        ✏️ Edytuj
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        className="h-8 text-xs shrink-0"
+                        onClick={() => handleDeleteAttendanceLog(log.id)}
+                      >
+                        Usuń wpis
+                      </Button>
+                    </div>
                   </div>
                 )
               })}
@@ -2376,12 +2931,28 @@ export function AttendanceManagerModule({
       <ManualBonusModal
         isOpen={isManualBonusModalOpen}
         onClose={() => setIsManualBonusModalOpen(false)}
-        staff={staff}
+        staff={effectiveStaff}
         defaultDate={todayStr}
         manualBonuses={monthManual}
         onAddManualBonus={handleAddManualBonus}
         onDeleteManualBonus={handleDeleteManualBonus}
         getMemberName={getMemberName}
+      />
+
+      <AttendanceLogModal
+        isOpen={isLogModalOpen}
+        onClose={() => {
+          setIsLogModalOpen(false)
+          setEditingLog(null)
+          setModalTargetUserId(undefined)
+        }}
+        staff={effectiveStaff}
+        currentUserId={currentUserId}
+        currentUserName={currentUserName}
+        defaultDate={todayStr}
+        initialLog={editingLog}
+        targetUserId={modalTargetUserId}
+        onSave={handleSaveAttendanceLog}
       />
 
       <RevenueFieldsSettingsModal

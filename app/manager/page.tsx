@@ -1374,6 +1374,8 @@ function ManagerDashboard() {
                 restaurantId={activeRestaurantId}
                 staff={staff}
                 roles={roles}
+                currentUserId={currentUserId}
+                currentUserName={userName}
               />
             </TabsContent>
 
