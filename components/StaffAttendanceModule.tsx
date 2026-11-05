@@ -13,6 +13,7 @@ import {
   DailyRevenue,
   RevenueField,
   ManualBonus,
+  getPreviousDayFieldValue,
   calculateUserMonthlyPayroll,
   formatBonusRuleSentence,
 } from "@/components/AttendanceManagerModule"
@@ -180,14 +181,39 @@ export function StaffAttendanceModule({
 
   const previewHours = calculateShiftDurationHours(startTime, endTime)
 
-  const breakdownSum = useMemo(() => {
-    let sum = 0
-    Object.values(revBreakdown).forEach((val) => {
-      const n = parseFloat(val) || 0
-      sum += n
+  // Inteligentna kalkulacja utargu: Pozycje wliczane minus wczorajszy zasyp. Raport fiskalny osobno.
+  const breakdownCalc = useMemo(() => {
+    let positiveSum = 0
+    let deductionSum = 0
+    const parts: string[] = []
+
+    revenueFields.forEach((f) => {
+      const val = parseFloat(revBreakdown[f.name] || "") || 0
+
+      // Czy wlicza się do sumy utargu całkowitego?
+      if (f.include_in_total !== false) {
+        if (val > 0) {
+          positiveSum += val
+          parts.push(`${f.name} (+${val.toFixed(0)} zł)`)
+        }
+        if (f.deduct_previous_day) {
+          const yesterdayVal = getPreviousDayFieldValue(f.name, workDate, revenues)
+          if (yesterdayVal > 0) {
+            deductionSum += yesterdayVal
+            parts.push(`wczorajszy ${f.name} (-${yesterdayVal.toFixed(0)} zł)`)
+          }
+        }
+      }
     })
-    return Math.round(sum * 100) / 100
-  }, [revBreakdown])
+
+    const calculatedTotal = Math.max(0, Math.round((positiveSum - deductionSum) * 100) / 100)
+    return {
+      positiveSum,
+      deductionSum,
+      calculatedTotal,
+      formulaText: parts.length > 0 ? parts.join(" + ").replace(/ \+ wczorajszy/g, " - wczorajszy") : "",
+    }
+  }, [revBreakdown, revenueFields, workDate, revenues])
 
   const handleSaveAttendance = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -404,14 +430,14 @@ export function StaffAttendanceModule({
                       Podstawa premii
                     </span>
                   </Label>
-                  {breakdownSum > 0 && (
+                  {breakdownCalc.calculatedTotal > 0 && (
                     <button
                       type="button"
-                      onClick={() => setDailyRevenueInput(String(breakdownSum))}
+                      onClick={() => setDailyRevenueInput(String(breakdownCalc.calculatedTotal))}
                       className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 hover:underline flex items-center gap-1"
-                      title="Wstaw sumę pozycji składowych jako utarg całkowity"
+                      title="Wstaw wyliczony utarg z wliczanych pozycji minus wczorajszy zasyp"
                     >
-                      <span>↙ Suma pozycji: {breakdownSum.toFixed(2)} zł</span>
+                      <span>↙ Wstaw: {breakdownCalc.calculatedTotal.toFixed(2)} zł</span>
                     </button>
                   )}
                 </div>
@@ -427,42 +453,75 @@ export function StaffAttendanceModule({
                   className="bg-white h-10 text-sm font-bold placeholder:text-xs placeholder:font-normal border-emerald-300 focus-visible:ring-emerald-500"
                 />
 
-                {/* ROZBICIE NA SKŁADOWE (NP. KARTY, GRUBE, ZASYP) */}
+                {/* ROZBICIE NA SKŁADOWE (NP. KARTY, GRUBE, ZASYP, RAPORT FISKALNY) */}
                 {revenueFields.length > 0 && (
                   <div className="pt-2 border-t border-emerald-200/70 space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-[11px] font-bold text-emerald-900">
-                        📋 Rozbicie raportu dziennego (opcjonalnie):
+                        📋 Rozbicie raportu dziennego:
                       </span>
-                      {breakdownSum > 0 && (
+                      {breakdownCalc.calculatedTotal > 0 && (
                         <span className="text-[11px] font-bold text-emerald-800">
-                          Suma: {breakdownSum.toFixed(2)} zł
+                          Wyliczony utarg: {breakdownCalc.calculatedTotal.toFixed(2)} zł
                         </span>
                       )}
                     </div>
 
+                    {/* PODGLĄD WZORU */}
+                    {breakdownCalc.formulaText && (
+                      <div className="px-2 py-1 rounded bg-white/80 border border-emerald-200 text-[10px] text-emerald-900 font-mono truncate">
+                        Wzór: {breakdownCalc.formulaText}
+                      </div>
+                    )}
+
                     <div className="grid grid-cols-2 gap-2">
-                      {revenueFields.map((field) => (
-                        <div key={field.id} className="p-2 rounded-lg bg-white border border-emerald-200/80 space-y-1">
-                          <Label className="text-[10px] font-bold text-zinc-700 block truncate" title={field.name}>
-                            {field.name}
-                          </Label>
-                          <Input
-                            type="number"
-                            step="any"
-                            min="0"
-                            placeholder="0 zł"
-                            value={revBreakdown[field.name] || ""}
-                            onChange={(e) =>
-                              setRevBreakdown((prev) => ({
-                                ...prev,
-                                [field.name]: e.target.value,
-                              }))
-                            }
-                            className="h-7 text-xs font-bold bg-zinc-50 focus:bg-white"
-                          />
-                        </div>
-                      ))}
+                      {revenueFields.map((field) => {
+                        const isControl = field.include_in_total === false
+                        const yesterdayVal = field.deduct_previous_day
+                          ? getPreviousDayFieldValue(field.name, workDate, revenues)
+                          : 0
+
+                        return (
+                          <div
+                            key={field.id}
+                            className={`p-2 rounded-lg border space-y-1 ${
+                              isControl ? "bg-zinc-50/70 border-zinc-200" : "bg-white border-emerald-200/80"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-1">
+                              <Label className="text-[10px] font-bold text-zinc-800 block truncate" title={field.name}>
+                                {field.name}
+                              </Label>
+                              {isControl && (
+                                <span className="text-[8px] font-bold px-1 rounded bg-zinc-200 text-zinc-600">
+                                  Kontrolna
+                                </span>
+                              )}
+                            </div>
+
+                            <Input
+                              type="number"
+                              step="any"
+                              min="0"
+                              placeholder="0 zł"
+                              value={revBreakdown[field.name] || ""}
+                              onChange={(e) =>
+                                setRevBreakdown((prev) => ({
+                                  ...prev,
+                                  [field.name]: e.target.value,
+                                }))
+                              }
+                              className="h-7 text-xs font-bold bg-zinc-50 focus:bg-white"
+                            />
+
+                            {field.deduct_previous_day && yesterdayVal > 0 && (
+                              <p className="text-[9px] text-amber-800 font-medium">
+                                Wczorajszy: -{yesterdayVal.toFixed(0)} zł
+                              </p>
+                            )}
+                          </div>
+                        )
+                      })}
                     </div>
                   </div>
                 )}

@@ -4,6 +4,8 @@ export type RevenueField = {
   name: string
   is_active: boolean
   sort_order: number
+  include_in_total?: boolean // czy wlicza się do sumy utargu całkowitego (np. Karty=true, Raport fiskalny=false)
+  deduct_previous_day?: boolean // czy odejmowana jest wartość z dnia poprzedniego (jak Zasyp początkowy)
   created_at?: string
 }
 

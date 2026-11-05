@@ -3,7 +3,7 @@
 -- Data: 2026-11-05
 -- Opis: Pozwala managerowi konfigurować dodatkowe pozycje raportu utargu
 --       (np. Karty, Gotówka / Grube, Zasyp, Raport fiskalny) per dany lokal,
---       z zachowaniem kwoty bazowej utargu (amount) do liczenia premii.
+--       z opcją wliczania do utargu całkowitego oraz odejmowania wczorajszego zasypu.
 -- ============================================================================
 
 -- 1. Tabela pól konfiguracyjnych dla raportu utargu w lokalu
@@ -13,8 +13,14 @@ CREATE TABLE IF NOT EXISTS restaurant_revenue_fields (
   name text NOT NULL,
   is_active boolean DEFAULT true,
   sort_order int DEFAULT 0,
+  include_in_total boolean DEFAULT true,
+  deduct_previous_day boolean DEFAULT false,
   created_at timestamptz DEFAULT now()
 );
+
+-- Jeśli tabela już istniała wcześniej, dodaj brakujące kolumny
+ALTER TABLE restaurant_revenue_fields ADD COLUMN IF NOT EXISTS include_in_total boolean DEFAULT true;
+ALTER TABLE restaurant_revenue_fields ADD COLUMN IF NOT EXISTS deduct_previous_day boolean DEFAULT false;
 
 -- Indeks dla szybkiego pobierania pól per lokal wg kolejności
 CREATE INDEX IF NOT EXISTS idx_restaurant_revenue_fields_venue 
@@ -40,21 +46,25 @@ CREATE POLICY "allow_all_anon_restaurant_revenue_fields" ON restaurant_revenue_f
 ALTER TABLE daily_revenues ADD COLUMN IF NOT EXISTS breakdown jsonb DEFAULT '{}'::jsonb;
 
 -- 3. Domyślne sugerowane pozycje dla istniejących lokali (jeśli lokal nie ma jeszcze zdefiniowanych pól)
-INSERT INTO restaurant_revenue_fields (restaurant_id, name, sort_order)
-SELECT r.id, 'Karty', 1 FROM restaurants r
+INSERT INTO restaurant_revenue_fields (restaurant_id, name, sort_order, include_in_total, deduct_previous_day)
+SELECT r.id, 'Karty', 1, true, false FROM restaurants r
 WHERE NOT EXISTS (SELECT 1 FROM restaurant_revenue_fields rf WHERE rf.restaurant_id = r.id AND rf.name = 'Karty');
 
-INSERT INTO restaurant_revenue_fields (restaurant_id, name, sort_order)
-SELECT r.id, 'Gotówka / Grube', 2 FROM restaurants r
+INSERT INTO restaurant_revenue_fields (restaurant_id, name, sort_order, include_in_total, deduct_previous_day)
+SELECT r.id, 'Gotówka / Grube', 2, true, false FROM restaurants r
 WHERE NOT EXISTS (SELECT 1 FROM restaurant_revenue_fields rf WHERE rf.restaurant_id = r.id AND rf.name = 'Gotówka / Grube');
 
-INSERT INTO restaurant_revenue_fields (restaurant_id, name, sort_order)
-SELECT r.id, 'Zasyp', 3 FROM restaurants r
+INSERT INTO restaurant_revenue_fields (restaurant_id, name, sort_order, include_in_total, deduct_previous_day)
+SELECT r.id, 'Zasyp', 3, true, true FROM restaurants r
 WHERE NOT EXISTS (SELECT 1 FROM restaurant_revenue_fields rf WHERE rf.restaurant_id = r.id AND rf.name = 'Zasyp');
 
-INSERT INTO restaurant_revenue_fields (restaurant_id, name, sort_order)
-SELECT r.id, 'Raport fiskalny', 4 FROM restaurants r
+INSERT INTO restaurant_revenue_fields (restaurant_id, name, sort_order, include_in_total, deduct_previous_day)
+SELECT r.id, 'Raport fiskalny', 4, false, false FROM restaurants r
 WHERE NOT EXISTS (SELECT 1 FROM restaurant_revenue_fields rf WHERE rf.restaurant_id = r.id AND rf.name = 'Raport fiskalny');
+
+-- Aktualizacja istniejących rekordów jeśli już były wstawione bez flag
+UPDATE restaurant_revenue_fields SET include_in_total = false WHERE name ILIKE '%fiskaln%';
+UPDATE restaurant_revenue_fields SET deduct_previous_day = true WHERE name ILIKE '%zasyp%';
 
 -- 4. Odświeżenie schematu PostgREST w Supabase
 NOTIFY pgrst, 'reload schema';

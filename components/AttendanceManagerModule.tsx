@@ -68,6 +68,8 @@ export type RevenueField = {
   name: string
   is_active: boolean
   sort_order: number
+  include_in_total?: boolean
+  deduct_previous_day?: boolean
 }
 
 export type DailyRevenue = {
@@ -943,7 +945,30 @@ function ManualBonusModal({
   return <ManualBonusModalDialog {...props} />
 }
 
-const DEFAULT_REVENUE_FIELD_NAMES = ["Karty", "Gotówka / Grube", "Zasyp", "Raport fiskalny"]
+export const DEFAULT_REVENUE_FIELD_PRESETS: {
+  name: string
+  include_in_total: boolean
+  deduct_previous_day: boolean
+}[] = [
+  { name: "Karty", include_in_total: true, deduct_previous_day: false },
+  { name: "Gotówka / Grube", include_in_total: true, deduct_previous_day: false },
+  { name: "Zasyp", include_in_total: true, deduct_previous_day: true },
+  { name: "Raport fiskalny", include_in_total: false, deduct_previous_day: false },
+]
+
+export const getPreviousDayFieldValue = (
+  fieldName: string,
+  targetDate: string,
+  revenuesList: DailyRevenue[]
+): number => {
+  const prior = revenuesList
+    .filter((r) => r.work_date < targetDate && r.breakdown && typeof r.breakdown[fieldName] === "number")
+    .sort((a, b) => b.work_date.localeCompare(a.work_date))
+  if (prior.length > 0 && prior[0].breakdown) {
+    return Number(prior[0].breakdown[fieldName]) || 0
+  }
+  return 0
+}
 
 // ============================================================================
 // POP-UP 3: KONFIGURACJA POZYCJI UTARGU / RAPORTU LOKALU
@@ -960,24 +985,39 @@ function RevenueFieldsSettingsModal({
   isOpen: boolean
   onClose: () => void
   fields: RevenueField[]
-  onAddField: (name: string) => Promise<void>
+  onAddField: (name: string, includeInTotal?: boolean, deductPreviousDay?: boolean) => Promise<void>
   onUpdateField: (id: string, updates: Partial<RevenueField>) => Promise<void>
   onDeleteField: (id: string, name: string) => Promise<void>
   onLoadSuggested: () => Promise<void>
 }) {
   const [newFieldName, setNewFieldName] = useState("")
+  const [newIncludeInTotal, setNewIncludeInTotal] = useState(true)
+  const [newDeductPreviousDay, setNewDeductPreviousDay] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editName, setEditName] = useState("")
   const [saving, setSaving] = useState(false)
 
   if (!isOpen) return null
 
+  const handleNameChange = (val: string) => {
+    setNewFieldName(val)
+    if (val.toLowerCase().includes("zasyp")) {
+      setNewDeductPreviousDay(true)
+      setNewIncludeInTotal(true)
+    } else if (val.toLowerCase().includes("fiskaln")) {
+      setNewIncludeInTotal(false)
+      setNewDeductPreviousDay(false)
+    }
+  }
+
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!newFieldName.trim()) return
     setSaving(true)
-    await onAddField(newFieldName.trim())
+    await onAddField(newFieldName.trim(), newIncludeInTotal, newDeductPreviousDay)
     setNewFieldName("")
+    setNewIncludeInTotal(true)
+    setNewDeductPreviousDay(false)
     setSaving(false)
   }
 
@@ -1005,7 +1045,7 @@ function RevenueFieldsSettingsModal({
               <span>Ustawienia Pozycji Raportu Utargu</span>
             </h2>
             <p className="text-xs text-zinc-500 mt-0.5">
-              Skonfiguruj dodatkowe pozycje raportu dziennego (np. Karty, Gotówka / Grube, Zasyp, Raport fiskalny).
+              Skonfiguruj pozycje raportu, wliczanie do utargu całkowitego oraz odejmowanie wczorajszego zasypu.
             </p>
           </div>
           <button
@@ -1019,24 +1059,54 @@ function RevenueFieldsSettingsModal({
 
         <div className="p-5 overflow-y-auto space-y-5">
           {/* INFORMACJA O BAZOWYM UTARGU */}
-          <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
-            <strong>ℹ️ Zasada działania:</strong> Pole <strong>&quot;Utarg całkowity&quot;</strong> jest zawsze polem bazowym i nadrzędnym do naliczania automatycznych premii zespołu. Poniższe pozycje pozwalają obsłudze i managerowi szczegółowo rozliczać składniki obrotu lokalu (karty, gotówkę, zasyp i inne).
+          <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed space-y-1">
+            <p>
+              <strong>ℹ️ Zasada działania wzoru:</strong> Utarg całkowity liczy się ze wzoru:{" "}
+              <code className="bg-amber-100/80 px-1.5 py-0.5 rounded font-mono font-bold">
+                Utarg = Karty + Gotówka/Grube + Zasyp - Zasyp_wczorajszy
+              </code>.
+            </p>
+            <p className="text-[11px] text-amber-800">
+              Pozycje kontrolne (np. <strong>Raport fiskalny</strong>) stoją osobno i nie doliczają się do sumy utargu, służąc do weryfikacji kasy.
+            </p>
           </div>
 
           {/* FORMULARZ DODAWANIA NOWEJ POZYCJI */}
-          <form onSubmit={handleAdd} className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-200 space-y-2">
+          <form onSubmit={handleAdd} className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-200 space-y-3">
             <Label className="text-xs font-bold text-zinc-700">Dodaj nową pozycję raportu</Label>
             <div className="flex gap-2">
               <Input
-                placeholder="np. Karty, Gotówka / Grube, Zasyp, Pyszne.pl, Vouchery..."
+                placeholder="np. Karty, Gotówka / Grube, Zasyp, Raport fiskalny, Vouchery..."
                 value={newFieldName}
-                onChange={(e) => setNewFieldName(e.target.value)}
+                onChange={(e) => handleNameChange(e.target.value)}
                 className="h-9 text-xs bg-white"
                 required
               />
               <Button type="submit" size="sm" disabled={saving || !newFieldName.trim()} className="h-9 text-xs shrink-0 font-bold">
                 + Dodaj pozycję
               </Button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4 pt-1">
+              <label className="flex items-center gap-1.5 text-xs font-medium text-zinc-800 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newIncludeInTotal}
+                  onChange={(e) => setNewIncludeInTotal(e.target.checked)}
+                  className="rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4"
+                />
+                <span>Wliczaj do utargu całkowitego</span>
+              </label>
+
+              <label className="flex items-center gap-1.5 text-xs font-medium text-zinc-800 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newDeductPreviousDay}
+                  onChange={(e) => setNewDeductPreviousDay(e.target.checked)}
+                  className="rounded border-zinc-300 text-amber-600 focus:ring-amber-500 h-4 w-4"
+                />
+                <span>Odejmuj wartość z dnia poprzedniego (jak Zasyp początkowy)</span>
+              </label>
             </div>
           </form>
 
@@ -1077,7 +1147,7 @@ function RevenueFieldsSettingsModal({
                 {fields.map((f, idx) => (
                   <div
                     key={f.id}
-                    className="p-3 flex items-center justify-between gap-3 hover:bg-zinc-50/70 transition-colors"
+                    className="p-3 flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 hover:bg-zinc-50/70 transition-colors"
                   >
                     <div className="flex items-center gap-2.5 min-w-0 flex-1">
                       <span className="w-5 h-5 rounded-full bg-zinc-100 text-zinc-500 text-[10px] font-bold flex items-center justify-center shrink-0">
@@ -1116,25 +1186,62 @@ function RevenueFieldsSettingsModal({
                           <p className={`text-xs font-bold truncate ${f.is_active ? "text-zinc-900" : "text-zinc-400 line-through"}`}>
                             {f.name}
                           </p>
-                          <p className="text-[10px] text-zinc-400">
-                            {f.is_active ? "Aktywna pozycja" : "Wyłączona (ukryta w formularzu)"}
-                          </p>
+                          <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                            <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
+                              f.include_in_total !== false ? "bg-emerald-50 text-emerald-800" : "bg-zinc-100 text-zinc-600"
+                            }`}>
+                              {f.include_in_total !== false ? "➕ Wliczana do utargu" : "👁️ Pozycja kontrolna (osobno)"}
+                            </span>
+                            {f.deduct_previous_day && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-50 text-amber-800 border border-amber-200">
+                                🔄 Odejmuje wczorajszy stan
+                              </span>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
 
                     {editingId !== f.id && (
-                      <div className="flex items-center gap-1.5 shrink-0">
+                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                        {/* PRZEŁĄCZNIK WLICZANIA DO SUMY */}
+                        <button
+                          type="button"
+                          onClick={() => onUpdateField(f.id, { include_in_total: f.include_in_total === false })}
+                          className={`px-2 py-1 rounded text-[10px] font-bold border transition-colors ${
+                            f.include_in_total !== false
+                              ? "bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100"
+                              : "bg-zinc-100 text-zinc-600 border-zinc-300 hover:bg-zinc-200"
+                          }`}
+                          title="Przełącz czy ta pozycja wlicza się do kalkulacji utargu całkowitego"
+                        >
+                          {f.include_in_total !== false ? "Wliczana" : "Kontrolna"}
+                        </button>
+
+                        {/* PRZEŁĄCZNIK ODEJMOWANIA POPRZEDNIEGO DNIA */}
+                        <button
+                          type="button"
+                          onClick={() => onUpdateField(f.id, { deduct_previous_day: !f.deduct_previous_day })}
+                          className={`px-2 py-1 rounded text-[10px] font-bold border transition-colors ${
+                            f.deduct_previous_day
+                              ? "bg-amber-100 text-amber-900 border-amber-300"
+                              : "bg-white text-zinc-500 border-zinc-200 hover:border-zinc-400"
+                          }`}
+                          title="Przełącz odejmowanie stanu z dnia poprzedniego (wczorajszego zasypu)"
+                        >
+                          {f.deduct_previous_day ? "- Wczorajszy: WŁ" : "- Wczorajszy: WYŁ"}
+                        </button>
+
                         <Button
                           type="button"
                           variant="ghost"
                           size="sm"
                           onClick={() => onUpdateField(f.id, { is_active: !f.is_active })}
                           className={`h-7 px-2 text-[11px] font-bold ${
-                            f.is_active ? "text-emerald-700 bg-emerald-50 hover:bg-emerald-100" : "text-zinc-500 bg-zinc-100 hover:bg-zinc-200"
+                            f.is_active ? "text-zinc-700 hover:bg-zinc-100" : "text-zinc-400 hover:bg-zinc-100"
                           }`}
                         >
-                          {f.is_active ? "Włączona" : "Wyłączona"}
+                          {f.is_active ? "Aktywna" : "Ukryta"}
                         </Button>
 
                         <Button
@@ -1175,7 +1282,7 @@ function RevenueFieldsSettingsModal({
             onClick={onLoadSuggested}
             className="text-xs text-zinc-600 hover:text-zinc-900"
           >
-            + Przywróć sugerowane standardowe
+            + Załaduj sugerowane standardowe
           </Button>
 
           <Button type="button" onClick={onClose} size="sm" className="font-bold">
@@ -1290,12 +1397,14 @@ export function AttendanceManagerModule({
         setRevenueFields(fieldsRes.data as RevenueField[])
       } else {
         setRevenueFields(
-          DEFAULT_REVENUE_FIELD_NAMES.map((name, idx) => ({
+          DEFAULT_REVENUE_FIELD_PRESETS.map((p, idx) => ({
             id: `local-${idx}`,
             restaurant_id: restaurantId,
-            name,
+            name: p.name,
             is_active: true,
             sort_order: idx + 1,
+            include_in_total: p.include_in_total,
+            deduct_previous_day: p.deduct_previous_day,
           }))
         )
       }
@@ -1440,14 +1549,43 @@ export function AttendanceManagerModule({
     }
   }
 
-  const breakdownSum = useMemo(() => {
-    let sum = 0
-    Object.values(revBreakdown).forEach((val) => {
-      const n = parseFloat(val) || 0
-      sum += n
-    })
-    return Math.round(sum * 100) / 100
-  }, [revBreakdown])
+  // Inteligentna kalkulacja utargu: Pozycje wliczane (Karty, Grube, Zasyp) minus Zasyp z wczoraj. Raport fiskalny osobno.
+  const breakdownCalc = useMemo(() => {
+    let positiveSum = 0
+    let deductionSum = 0
+    const parts: string[] = []
+
+    revenueFields
+      .filter((f) => f.is_active)
+      .forEach((f) => {
+        const val = parseFloat(revBreakdown[f.name] || "") || 0
+
+        // Czy pozycja wlicza się do sumy utargu całkowitego?
+        if (f.include_in_total !== false) {
+          if (val > 0) {
+            positiveSum += val
+            parts.push(`${f.name} (+${val.toFixed(0)} zł)`)
+          }
+
+          // Jeśli odejmowany ma być stan z dnia poprzedniego (np. Zasyp)
+          if (f.deduct_previous_day) {
+            const yesterdayVal = getPreviousDayFieldValue(f.name, revDate, revenues)
+            if (yesterdayVal > 0) {
+              deductionSum += yesterdayVal
+              parts.push(`wczorajszy ${f.name} (-${yesterdayVal.toFixed(0)} zł)`)
+            }
+          }
+        }
+      })
+
+    const calculatedTotal = Math.max(0, Math.round((positiveSum - deductionSum) * 100) / 100)
+    return {
+      positiveSum,
+      deductionSum,
+      calculatedTotal,
+      formulaText: parts.length > 0 ? parts.join(" + ").replace(/ \+ wczorajszy/g, " - wczorajszy") : "",
+    }
+  }, [revBreakdown, revenueFields, revDate, revenues])
 
   const handleSaveDailyRevenue = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -1531,9 +1669,13 @@ export function AttendanceManagerModule({
     showToast(`Usunięto utarg z dnia ${date}`, "info")
   }
 
-  const handleAddRevenueField = async (name: string) => {
+  const handleAddRevenueField = async (
+    name: string,
+    includeInTotal: boolean = true,
+    deductPreviousDay: boolean = false
+  ) => {
     if (!restaurantId || !name.trim()) return
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("restaurant_revenue_fields")
       .insert([
         {
@@ -1541,9 +1683,28 @@ export function AttendanceManagerModule({
           name: name.trim(),
           sort_order: revenueFields.length + 1,
           is_active: true,
+          include_in_total: includeInTotal,
+          deduct_previous_day: deductPreviousDay,
         },
       ])
       .select()
+
+    // Fallback if columns not yet added to DB
+    if (error && (error.code === "42703" || error.message?.includes("include_in_total"))) {
+      const fb = await supabase
+        .from("restaurant_revenue_fields")
+        .insert([
+          {
+            restaurant_id: restaurantId,
+            name: name.trim(),
+            sort_order: revenueFields.length + 1,
+            is_active: true,
+          },
+        ])
+        .select()
+      data = fb.data
+      error = fb.error
+    }
 
     if (error) {
       setRevenueFields((prev) => [
@@ -1554,11 +1715,18 @@ export function AttendanceManagerModule({
           name: name.trim(),
           sort_order: prev.length + 1,
           is_active: true,
+          include_in_total: includeInTotal,
+          deduct_previous_day: deductPreviousDay,
         },
       ])
       showToast(`Dodano pozycję "${name}" (stan lokalny)`, "info")
     } else if (data && data[0]) {
-      setRevenueFields((prev) => [...prev, data[0] as RevenueField])
+      const created: RevenueField = {
+        ...(data[0] as RevenueField),
+        include_in_total: includeInTotal,
+        deduct_previous_day: deductPreviousDay,
+      }
+      setRevenueFields((prev) => [...prev, created])
       showToast(`Dodano pozycję "${name}" do raportu utargu.`, "success")
     }
   }
@@ -1589,13 +1757,15 @@ export function AttendanceManagerModule({
 
   const handleLoadSuggestedFields = async () => {
     if (!restaurantId) return
-    const toInsert = DEFAULT_REVENUE_FIELD_NAMES
-      .filter((s) => !revenueFields.some((f) => f.name.toLowerCase() === s.toLowerCase()))
-      .map((name, idx) => ({
+    const toInsert = DEFAULT_REVENUE_FIELD_PRESETS
+      .filter((s) => !revenueFields.some((f) => f.name.toLowerCase() === s.name.toLowerCase()))
+      .map((preset, idx) => ({
         restaurant_id: restaurantId,
-        name,
+        name: preset.name,
         sort_order: revenueFields.length + idx + 1,
         is_active: true,
+        include_in_total: preset.include_in_total,
+        deduct_previous_day: preset.deduct_previous_day,
       }))
 
     if (toInsert.length === 0) {
@@ -1603,13 +1773,33 @@ export function AttendanceManagerModule({
       return
     }
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("restaurant_revenue_fields")
       .insert(toInsert)
       .select()
 
+    if (error && (error.code === "42703" || error.message?.includes("include_in_total"))) {
+      const stripped = toInsert.map(({ name, sort_order, is_active, restaurant_id }) => ({
+        restaurant_id,
+        name,
+        sort_order,
+        is_active,
+      }))
+      const fb = await supabase.from("restaurant_revenue_fields").insert(stripped).select()
+      data = fb.data
+      error = fb.error
+    }
+
     if (!error && data) {
-      setRevenueFields((prev) => [...prev, ...(data as RevenueField[])])
+      const mapped = (data as RevenueField[]).map((d) => {
+        const foundPreset = DEFAULT_REVENUE_FIELD_PRESETS.find((p) => p.name.toLowerCase() === d.name.toLowerCase())
+        return {
+          ...d,
+          include_in_total: foundPreset ? foundPreset.include_in_total : true,
+          deduct_previous_day: foundPreset ? foundPreset.deduct_previous_day : false,
+        }
+      })
+      setRevenueFields((prev) => [...prev, ...mapped])
       showToast(`Dodano ${data.length} standardowych pozycji.`, "success")
     } else {
       const localItems = toInsert.map((item, idx) => ({
@@ -1847,14 +2037,14 @@ export function AttendanceManagerModule({
                       Pole bazowe (premie)
                     </span>
                   </Label>
-                  {breakdownSum > 0 && (
+                  {breakdownCalc.calculatedTotal > 0 && (
                     <button
                       type="button"
-                      onClick={() => setRevAmount(String(breakdownSum))}
+                      onClick={() => setRevAmount(String(breakdownCalc.calculatedTotal))}
                       className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 hover:underline flex items-center gap-1"
-                      title="Wstaw sumę pozycji składowych jako utarg całkowity"
+                      title="Wstaw wyliczony utarg (wliczane pozycje minus wczorajszy zasyp)"
                     >
-                      <span>↙ Suma pozycji: {breakdownSum.toFixed(2)} zł</span>
+                      <span>↙ Wstaw wyliczony utarg: {breakdownCalc.calculatedTotal.toFixed(2)} zł</span>
                     </button>
                   )}
                 </div>
@@ -1871,41 +2061,77 @@ export function AttendanceManagerModule({
               </div>
             </div>
 
-            {/* ROZBICIE NA SKŁADOWE (KARTY, GRUBE, ZASYP I INNE) */}
+            {/* ROZBICIE NA SKŁADOWE (KARTY, GRUBE, ZASYP, RAPORT FISKALNY I INNE) */}
             {revenueFields.filter((f) => f.is_active).length > 0 && (
               <div className="pt-2 border-t border-zinc-200/70 space-y-2.5">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
                   <span className="text-xs font-bold text-zinc-700 flex items-center gap-1">
-                    <span>📋 Pozycje składowe raportu (opcjonalnie):</span>
+                    <span>📋 Składniki raportu dziennego:</span>
                   </span>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-zinc-600">
-                      Suma pozycji: <strong>{breakdownSum.toFixed(2)} zł</strong>
+                    <span className="text-xs font-semibold text-zinc-700">
+                      Wyliczony utarg: <strong className="text-emerald-700">{breakdownCalc.calculatedTotal.toFixed(2)} zł</strong>
                     </span>
-                    {breakdownSum > 0 && (
+                    {breakdownCalc.calculatedTotal > 0 && (
                       <Button
                         type="button"
                         variant="secondary"
                         size="sm"
-                        onClick={() => setRevAmount(String(breakdownSum))}
-                        className="h-6 px-2 text-[11px] font-bold"
+                        onClick={() => setRevAmount(String(breakdownCalc.calculatedTotal))}
+                        className="h-6 px-2 text-[11px] font-bold bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border border-emerald-300"
                       >
-                        Przepisz do całości ➔
+                        Wstaw do całości ➔
                       </Button>
                     )}
                   </div>
                 </div>
+
+                {/* PODGLĄD WZORU NA ŻYWO */}
+                {breakdownCalc.formulaText && (
+                  <div className="px-2.5 py-1.5 rounded-lg bg-zinc-100/80 border border-zinc-200 text-[11px] text-zinc-600 font-mono flex items-center gap-1.5 overflow-x-auto">
+                    <span className="font-bold text-zinc-800">Wzór:</span>
+                    <span>{breakdownCalc.formulaText} = <strong>{breakdownCalc.calculatedTotal.toFixed(2)} zł</strong></span>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                   {revenueFields
                     .filter((f) => f.is_active)
                     .map((field) => {
                       const val = revBreakdown[field.name] || ""
+                      const isControlOnly = field.include_in_total === false
+                      const yesterdayVal = field.deduct_previous_day
+                        ? getPreviousDayFieldValue(field.name, revDate, revenues)
+                        : 0
+
                       return (
-                        <div key={field.id} className="p-2.5 rounded-lg bg-white border border-zinc-200 space-y-1 shadow-2xs">
-                          <Label className="text-[11px] font-semibold text-zinc-700 block truncate" title={field.name}>
-                            {field.name}
-                          </Label>
+                        <div
+                          key={field.id}
+                          className={`p-2.5 rounded-lg border space-y-1.5 shadow-2xs ${
+                            isControlOnly
+                              ? "bg-zinc-50/70 border-zinc-200"
+                              : "bg-white border-zinc-200"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-1">
+                            <Label className="text-[11px] font-bold text-zinc-800 block truncate" title={field.name}>
+                              {field.name}
+                            </Label>
+                            {isControlOnly ? (
+                              <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-zinc-200 text-zinc-700 shrink-0" title="Nie dolicza się do sumy utargu całkowitego">
+                                Kontrolna
+                              </span>
+                            ) : field.deduct_previous_day ? (
+                              <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-amber-100 text-amber-900 shrink-0" title="Odejmuje stan z dnia poprzedniego">
+                                - Wczoraj
+                              </span>
+                            ) : (
+                              <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-emerald-100 text-emerald-800 shrink-0">
+                                + Do utargu
+                              </span>
+                            )}
+                          </div>
+
                           <Input
                             type="number"
                             step="any"
@@ -1918,8 +2144,19 @@ export function AttendanceManagerModule({
                                 [field.name]: e.target.value,
                               }))
                             }
-                            className="h-8 text-xs font-semibold bg-zinc-50 focus:bg-white"
+                            className="h-8 text-xs font-bold bg-zinc-50 focus:bg-white"
                           />
+
+                          {field.deduct_previous_day && (
+                            <p className="text-[10px] text-amber-800/90 font-medium leading-tight">
+                              Wczorajszy stan: -{yesterdayVal.toFixed(0)} zł
+                            </p>
+                          )}
+                          {isControlOnly && (
+                            <p className="text-[10px] text-zinc-400 font-medium leading-tight">
+                              Stoi osobno (kontrola kasy)
+                            </p>
+                          )}
                         </div>
                       )
                     })}
