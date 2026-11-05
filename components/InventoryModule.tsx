@@ -1,4 +1,4 @@
-﻿"use client"
+"use client"
 
 import { useEffect, useState, useRef } from "react"
 import Image from "next/image"
@@ -382,6 +382,32 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
   const [products, setProducts] = useState<Product[]>([])
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null)
   
+  // Widok: kafelki ("grid") lub lista ("list")
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid")
+  // Wyszukiwarka produktów
+  const [searchQuery, setSearchQuery] = useState("")
+
+  // Odczyt preferencji widoku z localStorage
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("inventory_view_mode")
+      if (saved === "list" || saved === "grid") {
+        setViewMode(saved)
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  const handleSetViewMode = (mode: "grid" | "list") => {
+    setViewMode(mode)
+    try {
+      localStorage.setItem("inventory_view_mode", mode)
+    } catch {
+      // ignore
+    }
+  }
+
   // Widok wszystkich braków (stan 0 lub poniżej progu)
   const [showShortagesOnly, setShowShortagesOnly] = useState(false)
   
@@ -745,10 +771,260 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
   // Wszystkie produkty w "Brakach" (stan 0 lub poniżej progu)
   const shortageProducts = sortProductsList(products.filter(isProductShortage))
 
+  // Produkty pasujące do wyszukiwarki
+  const searchedProducts = searchQuery.trim() !== ""
+    ? sortProductsList(
+        products.filter((p) => {
+          const match = p.name.toLowerCase().includes(searchQuery.trim().toLowerCase())
+          if (selectedCategory) return match && p.category_id === selectedCategory.id
+          if (showShortagesOnly) return match && isProductShortage(p)
+          return match
+        })
+      )
+    : []
+
   // Produkty w aktualnie wybranej kategorii
   const categoryProducts = selectedCategory
     ? sortProductsList(products.filter(p => p.category_id === selectedCategory.id))
     : []
+
+  // Segmented control: Kafelki / Lista
+  const renderViewModeToggle = () => (
+    <div className="inline-flex items-center rounded-lg border border-zinc-200 bg-zinc-100 p-0.5 shadow-2xs">
+      <button
+        type="button"
+        onClick={() => handleSetViewMode("grid")}
+        className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md transition-all ${
+          viewMode === "grid"
+            ? "bg-white text-zinc-900 shadow-2xs font-bold"
+            : "text-zinc-600 hover:text-zinc-900"
+        }`}
+        title="Widok kafelków"
+      >
+        <span>▦</span>
+        <span className="hidden sm:inline">Kafelki</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => handleSetViewMode("list")}
+        className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md transition-all ${
+          viewMode === "list"
+            ? "bg-white text-zinc-900 shadow-2xs font-bold"
+            : "text-zinc-600 hover:text-zinc-900"
+        }`}
+        title="Widok listy"
+      >
+        <span>☰</span>
+        <span className="hidden sm:inline">Lista</span>
+      </button>
+    </div>
+  )
+
+  // Widok tabeli/listy produktów
+  const renderProductListView = (productsToRender: Product[], showCategoryBadge = false) => {
+    return (
+      <div className="rounded-xl border border-zinc-200 bg-white overflow-hidden shadow-2xs">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr className="border-b border-zinc-200 bg-zinc-50/90 text-[11px] font-bold text-zinc-500 uppercase tracking-wider">
+                <th className="py-2.5 px-3 w-12 text-center">Foto</th>
+                <th className="py-2.5 px-4 min-w-[200px]">Produkt</th>
+                <th className="py-2.5 px-3 text-center w-24">Jednostka</th>
+                <th className="py-2.5 px-3 text-center w-36">Próg min.</th>
+                <th className="py-2.5 px-4 text-center w-56">Stan magazynowy</th>
+                <th className="py-2.5 px-3 text-right w-16">Akcje</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-200/80">
+              {productsToRender.map((prod) => {
+                const isZero = Number(prod.quantity) <= 0
+                const isBelowThreshold = !isZero && Number(prod.quantity) < Number(prod.min_quantity)
+
+                return (
+                  <tr
+                    key={prod.id}
+                    className={`transition-colors ${
+                      isZero
+                        ? "bg-red-50/40 hover:bg-red-50/70 border-l-4 border-l-red-500"
+                        : isBelowThreshold
+                        ? "bg-amber-50/40 hover:bg-amber-50/70 border-l-4 border-l-amber-500"
+                        : "hover:bg-zinc-50/70 border-l-4 border-l-transparent"
+                    }`}
+                  >
+                    {/* Foto */}
+                    <td className="py-2 px-3 text-center">
+                      <label
+                        className="relative w-9 h-9 rounded-lg bg-zinc-100 border border-zinc-200 overflow-hidden flex items-center justify-center cursor-pointer group mx-auto shrink-0 shadow-2xs"
+                        title="Kliknij, aby zmienić zdjęcie"
+                      >
+                        {prod.image_url ? (
+                          <Image
+                            src={prod.image_url}
+                            alt={prod.name}
+                            fill
+                            sizes="40px"
+                            className="object-cover"
+                            unoptimized
+                          />
+                        ) : (
+                          <span className="text-sm">🍾</span>
+                        )}
+                        <span className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-[10px] transition-opacity">
+                          📷
+                        </span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) =>
+                            handleUpdateExistingProductImage(prod.id, e.target.files?.[0] || null)
+                          }
+                        />
+                      </label>
+                    </td>
+
+                    {/* Produkt + Badges */}
+                    <td className="py-2.5 px-4">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-bold text-zinc-900 text-sm">{prod.name}</span>
+                        {isZero && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-red-600 text-white shadow-2xs">
+                            BRAK (0)
+                          </span>
+                        )}
+                        {isBelowThreshold && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-amber-500 text-white shadow-2xs">
+                            PONIŻEJ PROGU
+                          </span>
+                        )}
+                        {showCategoryBadge && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-100 text-zinc-600 border border-zinc-200">
+                            📁 {getCategoryName(prod.category_id)}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* Jednostka */}
+                    <td className="py-2.5 px-3 text-center">
+                      <span className="px-2 py-0.5 rounded bg-zinc-100 text-zinc-700 font-semibold text-[11px] border border-zinc-200">
+                        {prod.unit}
+                      </span>
+                    </td>
+
+                    {/* Próg minimalny */}
+                    <td className="py-2.5 px-3 text-center">
+                      <div className="inline-flex items-center justify-center gap-1">
+                        <Input
+                          type="number"
+                          step="any"
+                          min="0"
+                          value={prod.min_quantity}
+                          onChange={(e) => handleMinQuantityChangeLocal(prod.id, e.target.value)}
+                          onBlur={(e) =>
+                            handleSaveMinQuantityToDb(prod.id, parseFloat(e.target.value) || 0)
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") e.currentTarget.blur()
+                          }}
+                          className="h-7 w-16 px-1.5 text-center text-xs font-semibold bg-white"
+                          title="Kliknij, aby edytować próg minimalny"
+                        />
+                        <span className="text-zinc-400 text-[11px]">{prod.unit}</span>
+                      </div>
+                    </td>
+
+                    {/* Stan magazynowy */}
+                    <td className="py-2.5 px-4 text-center">
+                      <div className="inline-flex items-center justify-center gap-1">
+                        {!isZero ? (
+                          <button
+                            type="button"
+                            onClick={() => handleSaveQuantityToDb(prod.id, 0)}
+                            title="Wyzeruj stan (0)"
+                            className="h-7 px-1.5 rounded border border-zinc-200 bg-white text-zinc-500 hover:text-red-600 hover:border-red-300 text-[10px] font-bold shadow-2xs"
+                          >
+                            0
+                          </button>
+                        ) : (
+                          <div className="w-5" />
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleSaveQuantityToDb(prod.id, Number((prod.quantity - 1).toFixed(2)))
+                          }
+                          className="w-7 h-7 rounded border border-zinc-200 bg-white hover:bg-zinc-100 active:scale-95 text-xs font-bold shadow-2xs"
+                        >
+                          -
+                        </button>
+
+                        <Input
+                          type="number"
+                          step="any"
+                          min="0"
+                          value={prod.quantity}
+                          onChange={(e) => handleQuantityChangeLocal(prod.id, e.target.value)}
+                          onBlur={(e) =>
+                            handleSaveQuantityToDb(prod.id, parseFloat(e.target.value) || 0)
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") e.currentTarget.blur()
+                          }}
+                          className="h-7 w-16 px-1.5 text-center text-xs font-black bg-white"
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleSaveQuantityToDb(prod.id, Number((prod.quantity + 1).toFixed(2)))
+                          }
+                          className="w-7 h-7 rounded border border-zinc-200 bg-white hover:bg-zinc-100 active:scale-95 text-xs font-bold shadow-2xs"
+                        >
+                          +
+                        </button>
+
+                        <span className="text-zinc-600 text-[11px] font-medium min-w-[24px]">
+                          {prod.unit}
+                        </span>
+                      </div>
+                    </td>
+
+                    {/* Akcje */}
+                    <td className="py-2.5 px-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteProduct(prod.id)}
+                        className="text-xs text-zinc-400 hover:text-red-600 px-2 py-1 rounded transition-colors font-semibold"
+                      >
+                        Usuń
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    )
+  }
+
+  // Kontener produktów: wybór pomiędzy Kafelkami a Listą
+  const renderProductsContainer = (productsToRender: Product[], showCategoryBadge = false) => {
+    if (productsToRender.length === 0) {
+      return null
+    }
+    return viewMode === "list"
+      ? renderProductListView(productsToRender, showCategoryBadge)
+      : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+          {productsToRender.map(prod => renderProductCard(prod, showCategoryBadge))}
+        </div>
+      )
+  }
 
   // Wspólny renderer kafelka produktu
   const renderProductCard = (prod: Product, showCategoryBadge = false) => {
@@ -906,7 +1182,92 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
   return (
     <div className="space-y-6">
       {/* WIDOK 1: GŁÓWNA STRONA KATEGORII */}
-      {!selectedCategory && !showShortagesOnly && (
+      {/* WIDOK: WYNIKI WYSZUKIWANIA PRODUKTÓW */}
+      {searchQuery.trim() !== "" && (
+        <Card>
+          <CardHeader>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="text-xs font-semibold text-zinc-500 hover:text-zinc-900 inline-flex items-center gap-1 mb-1"
+                >
+                  ← Wróć do widoku ({selectedCategory ? selectedCategory.name : showShortagesOnly ? "Braki" : "Kategorie"})
+                </button>
+                <CardTitle className="text-xl">
+                  🔍 Wyniki wyszukiwania dla „{searchQuery}” ({searchedProducts.length})
+                </CardTitle>
+                <CardDescription>
+                  {selectedCategory
+                    ? `Przeszukano kategorię „${selectedCategory.name}”.`
+                    : showShortagesOnly
+                    ? "Przeszukano braki magazynowe."
+                    : "Przeszukano wszystkie produkty w lokalu."}
+                </CardDescription>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5">
+                {/* Pole wyszukiwarki z czyszczeniem */}
+                <div className="relative w-full sm:w-56">
+                  <Input
+                    placeholder="Wyszukaj produkt..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="h-9 text-xs pl-8 pr-7"
+                    autoFocus
+                  />
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 text-xs">
+                    🔍
+                  </span>
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery("")}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700 text-xs font-bold"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+
+                {/* Sortowanie */}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-zinc-500">Sortuj:</span>
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as SortOption)}
+                    className="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-xs font-medium text-zinc-800"
+                  >
+                    <option value="smart_asc">Braki → Jednostka → Ilość rosnąco → A-Z</option>
+                    <option value="smart_desc">Braki → Jednostka → Ilość malejąco → A-Z</option>
+                    <option value="name_asc">Tylko alfabetycznie (A–Z)</option>
+                  </select>
+                </div>
+
+                {/* Przełącznik widoku: Kafelki / Lista */}
+                {renderViewModeToggle()}
+              </div>
+            </div>
+          </CardHeader>
+
+          <CardContent>
+            {searchedProducts.length === 0 ? (
+              <div className="text-center py-12 space-y-2 border-2 border-dashed rounded-xl text-sm text-zinc-500">
+                <p>Nie znaleziono produktów pasujących do „{searchQuery}”.</p>
+                <Button variant="outline" size="sm" onClick={() => setSearchQuery("")}>
+                  Wyczyść filtr wyszukiwania
+                </Button>
+              </div>
+            ) : (
+              renderProductsContainer(searchedProducts, !selectedCategory)
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* WIDOK 1: GŁÓWNA STRONA KATEGORII */}
+      {!selectedCategory && !showShortagesOnly && searchQuery.trim() === "" && (
         <Card>
           <CardHeader>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -917,6 +1278,28 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
                 </CardDescription>
               </div>
               <div className="flex flex-wrap items-center gap-2.5">
+                {/* Wyszukiwarka z poziomu głównego */}
+                <div className="relative w-full sm:w-56">
+                  <Input
+                    placeholder="Wyszukaj produkt..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="h-9 text-xs pl-8 pr-7"
+                  />
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 text-xs">
+                    🔍
+                  </span>
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery("")}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700 text-xs font-bold"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+
                 {/* PRZYCISK 1 KLIKNIĘCIA: BRAKI (STAN 0 ORAZ PONIŻEJ PROGU) */}
                 <Button
                   type="button"
@@ -996,7 +1379,7 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
       )}
 
       {/* WIDOK 2: BRAKI (STAN 0 ORAZ PONIŻEJ PROGU) */}
-      {showShortagesOnly && (
+      {showShortagesOnly && searchQuery.trim() === "" && (
         <Card className="border-red-200">
           <CardHeader>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -1015,9 +1398,47 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
                   Produkty wyzerowane oraz te, których ilość spadła poniżej ustalonego progu minimalnego.
                 </CardDescription>
               </div>
-              <Button variant="outline" onClick={() => setShowShortagesOnly(false)}>
-                Powrót do kategorii
-              </Button>
+              <div className="flex flex-wrap items-center gap-2.5">
+                <div className="relative w-full sm:w-48">
+                  <Input
+                    placeholder="Szukaj w brakach..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="h-9 text-xs pl-8 pr-7"
+                  />
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 text-xs">
+                    🔍
+                  </span>
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery("")}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700 text-xs font-bold"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-zinc-500">Sortuj:</span>
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as SortOption)}
+                    className="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-xs font-medium text-zinc-800"
+                  >
+                    <option value="smart_asc">Braki → Jednostka → Ilość rosnąco → A-Z</option>
+                    <option value="smart_desc">Braki → Jednostka → Ilość malejąco → A-Z</option>
+                    <option value="name_asc">Tylko alfabetycznie (A–Z)</option>
+                  </select>
+                </div>
+
+                {renderViewModeToggle()}
+
+                <Button variant="outline" onClick={() => setShowShortagesOnly(false)}>
+                  Powrót do kategorii
+                </Button>
+              </div>
             </div>
           </CardHeader>
           <CardContent>
@@ -1028,16 +1449,14 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
                 </p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                {shortageProducts.map(prod => renderProductCard(prod, true))}
-              </div>
+              renderProductsContainer(shortageProducts, true)
             )}
           </CardContent>
         </Card>
       )}
 
       {/* WIDOK 3: WNĘTRZE WYBRANEJ KATEGORII + SORTOWANIE */}
-      {selectedCategory && !showShortagesOnly && (
+      {selectedCategory && !showShortagesOnly && searchQuery.trim() === "" && (
         <Card>
           <CardHeader>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -1056,7 +1475,29 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
               </div>
 
               <div className="flex flex-wrap items-center gap-2.5">
-                {/* WYBÓR SORTOWANIA */}
+                {/* Wyszukiwarka w kategorii */}
+                <div className="relative w-full sm:w-48">
+                  <Input
+                    placeholder="Szukaj w kategorii..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="h-9 text-xs pl-8 pr-7"
+                  />
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 text-xs">
+                    🔍
+                  </span>
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery("")}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700 text-xs font-bold"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+
+                {/* Wybór sortowania */}
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs text-zinc-500">Sortuj:</span>
                   <select
@@ -1069,6 +1510,9 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
                     <option value="name_asc">Tylko alfabetycznie (A–Z)</option>
                   </select>
                 </div>
+
+                {/* Przełącznik widoku: Kafelki / Lista */}
+                {renderViewModeToggle()}
 
                 <Button onClick={() => setIsProductModalOpen(true)}>
                   + Dodaj produkty
@@ -1087,9 +1531,7 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
                 </Button>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                {categoryProducts.map(prod => renderProductCard(prod, false))}
-              </div>
+              renderProductsContainer(categoryProducts, false)
             )}
           </CardContent>
         </Card>

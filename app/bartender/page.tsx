@@ -308,6 +308,27 @@ function BartenderDashboard() {
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null)
   const [showShortagesOnly, setShowShortagesOnly] = useState<boolean>(false)
   const [productSearch, setProductSearch] = useState<string>("")
+  const [productViewMode, setProductViewMode] = useState<"grid" | "list">("grid")
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("bartender_product_view_mode")
+      if (saved === "list" || saved === "grid") {
+        setProductViewMode(saved)
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  const handleSetProductViewMode = (mode: "grid" | "list") => {
+    setProductViewMode(mode)
+    try {
+      localStorage.setItem("bartender_product_view_mode", mode)
+    } catch {
+      // ignore
+    }
+  }
   const [sortBy, setSortBy] = useState<"smart_asc" | "smart_desc" | "name_asc">("smart_asc")
 
   const [loading, setLoading] = useState<boolean>(true)
@@ -750,6 +771,198 @@ function BartenderDashboard() {
     : []
 
   const myRoleColor = getRoleColor(userRole)
+
+  const renderStaffProductViewModeToggle = () => (
+    <div className="inline-flex items-center rounded-lg border border-zinc-200 bg-zinc-100 p-0.5 shadow-2xs">
+      <button
+        type="button"
+        onClick={() => handleSetProductViewMode("grid")}
+        className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md transition-all ${
+          productViewMode === "grid"
+            ? "bg-white text-zinc-900 shadow-2xs font-bold"
+            : "text-zinc-600 hover:text-zinc-900"
+        }`}
+        title="Widok kafelków"
+      >
+        <span>▦</span>
+        <span className="hidden sm:inline">Kafelki</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => handleSetProductViewMode("list")}
+        className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md transition-all ${
+          productViewMode === "list"
+            ? "bg-white text-zinc-900 shadow-2xs font-bold"
+            : "text-zinc-600 hover:text-zinc-900"
+        }`}
+        title="Widok listy"
+      >
+        <span>☰</span>
+        <span className="hidden sm:inline">Lista</span>
+      </button>
+    </div>
+  )
+
+  const renderStaffProductListView = (productsToRender: Product[], showCategoryBadge = false) => {
+    return (
+      <div className="rounded-xl border border-zinc-200 bg-white overflow-hidden shadow-2xs">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr className="border-b border-zinc-200 bg-zinc-50/90 text-[11px] font-bold text-zinc-500 uppercase tracking-wider">
+                <th className="py-2.5 px-3 w-12 text-center">Foto</th>
+                <th className="py-2.5 px-4 min-w-[200px]">Produkt</th>
+                <th className="py-2.5 px-3 text-center w-24">Jednostka</th>
+                <th className="py-2.5 px-3 text-center w-32">Próg min.</th>
+                <th className="py-2.5 px-4 text-center w-56">Stan</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-200/80">
+              {productsToRender.map((prod) => {
+                const isZero = Number(prod.quantity) <= 0
+                const isBelowThreshold = !isZero && Number(prod.quantity) < Number(prod.min_quantity)
+
+                return (
+                  <tr
+                    key={prod.id}
+                    className={`transition-colors ${
+                      isZero
+                        ? "bg-red-50/40 hover:bg-red-50/70 border-l-4 border-l-red-500"
+                        : isBelowThreshold
+                        ? "bg-amber-50/40 hover:bg-amber-50/70 border-l-4 border-l-amber-500"
+                        : "hover:bg-zinc-50/70 border-l-4 border-l-transparent"
+                    }`}
+                  >
+                    {/* Foto */}
+                    <td className="py-2 px-3 text-center">
+                      <div className="relative w-9 h-9 rounded-lg bg-zinc-100 border border-zinc-200 overflow-hidden flex items-center justify-center mx-auto shrink-0 shadow-2xs">
+                        {prod.image_url ? (
+                          <Image
+                            src={prod.image_url}
+                            alt={prod.name}
+                            fill
+                            sizes="40px"
+                            className="object-cover"
+                            unoptimized
+                          />
+                        ) : (
+                          <span className="text-sm">🍾</span>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* Produkt + Badges */}
+                    <td className="py-2.5 px-4">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-bold text-zinc-900 text-sm">{prod.name}</span>
+                        {isZero && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-red-600 text-white shadow-2xs">
+                            BRAK (0)
+                          </span>
+                        )}
+                        {isBelowThreshold && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-amber-500 text-white shadow-2xs">
+                            PONIŻEJ PROGU
+                          </span>
+                        )}
+                        {showCategoryBadge && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-100 text-zinc-600 border border-zinc-200">
+                            📁 {getCategoryName(prod.category_id)}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* Jednostka */}
+                    <td className="py-2.5 px-3 text-center">
+                      <span className="px-2 py-0.5 rounded bg-zinc-100 text-zinc-700 font-semibold text-[11px] border border-zinc-200">
+                        {prod.unit}
+                      </span>
+                    </td>
+
+                    {/* Próg min. */}
+                    <td className="py-2.5 px-3 text-center text-zinc-500 font-medium">
+                      {prod.min_quantity > 0 ? `${prod.min_quantity} ${prod.unit}` : "—"}
+                    </td>
+
+                    {/* Stan magazynowy */}
+                    <td className="py-2.5 px-4 text-center">
+                      <div className="inline-flex items-center justify-center gap-1">
+                        {!isZero ? (
+                          <button
+                            type="button"
+                            onClick={() => handleSaveQuantityToDb(prod.id, 0)}
+                            title="Wyzeruj stan (0)"
+                            className="h-8 px-2 rounded-md border border-zinc-300 bg-white text-zinc-600 hover:text-red-600 hover:border-red-300 font-bold text-xs shadow-2xs active:scale-95 transition-all"
+                          >
+                            0
+                          </button>
+                        ) : (
+                          <div className="w-6" />
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleSaveQuantityToDb(prod.id, Number((prod.quantity - 1).toFixed(2)))
+                          }
+                          className="w-8 h-8 rounded-lg border border-zinc-300 bg-white hover:bg-zinc-100 active:scale-95 text-base font-black shrink-0 shadow-2xs flex items-center justify-center transition-all"
+                        >
+                          -
+                        </button>
+
+                        <Input
+                          type="number"
+                          step="any"
+                          min="0"
+                          value={prod.quantity}
+                          onChange={(e) => handleQuantityChangeLocal(prod.id, e.target.value)}
+                          onBlur={(e) =>
+                            handleSaveQuantityToDb(prod.id, parseFloat(e.target.value) || 0)
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") e.currentTarget.blur()
+                          }}
+                          className="h-8 w-16 px-1.5 text-center text-xs font-black bg-white"
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleSaveQuantityToDb(prod.id, Number((prod.quantity + 1).toFixed(2)))
+                          }
+                          className="w-8 h-8 rounded-lg border border-zinc-300 bg-white hover:bg-zinc-100 active:scale-95 text-base font-black shrink-0 shadow-2xs flex items-center justify-center transition-all"
+                        >
+                          +
+                        </button>
+
+                        <span className="text-zinc-600 text-xs font-semibold min-w-[28px]">
+                          {prod.unit}
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    )
+  }
+
+  const renderStaffProductsContainer = (productsToRender: Product[], showCategoryBadge = false) => {
+    if (productsToRender.length === 0) {
+      return null
+    }
+    return productViewMode === "list"
+      ? renderStaffProductListView(productsToRender, showCategoryBadge)
+      : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+          {productsToRender.map((prod) => renderStaffProductCard(prod, showCategoryBadge))}
+        </div>
+      )
+  }
 
   const renderStaffProductCard = (prod: Product, showCategoryBadge = false) => {
     const isZero = Number(prod.quantity) <= 0
@@ -1367,8 +1580,14 @@ function BartenderDashboard() {
                   {(selectedCategory ||
                     showShortagesOnly ||
                     productSearch.trim() !== "") && (
-                    <div className="mt-4 pt-3 border-t flex items-center justify-end gap-2">
-                      <span className="text-xs text-zinc-500">Sortuj:</span>
+                    <div className="mt-4 pt-3 border-t flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs text-zinc-500">Widok:</span>
+                        {renderStaffProductViewModeToggle()}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-zinc-500">Sortuj:</span>
                       <select
                         value={sortBy}
                         onChange={(e) => setSortBy(e.target.value as "smart_asc" | "smart_desc" | "name_asc")}
@@ -1383,7 +1602,8 @@ function BartenderDashboard() {
                         <option value="name_asc">Tylko alfabetycznie (A–Z)</option>
                       </select>
                     </div>
-                  )}
+                  </div>
+                )}
                 </CardHeader>
 
                 <CardContent>
@@ -1393,11 +1613,7 @@ function BartenderDashboard() {
                         Nie znaleziono produktu pasującego do „{productSearch}”.
                       </div>
                     ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                        {searchedProducts.map((prod) =>
-                          renderStaffProductCard(prod, true)
-                        )}
-                      </div>
+                      renderStaffProductsContainer(searchedProducts, true)
                     )
                   ) : showShortagesOnly ? (
                     shortageProducts.length === 0 ? (
@@ -1407,11 +1623,7 @@ function BartenderDashboard() {
                         </p>
                       </div>
                     ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                        {shortageProducts.map((prod) =>
-                          renderStaffProductCard(prod, true)
-                        )}
-                      </div>
+                      renderStaffProductsContainer(shortageProducts, true)
                     )
                   ) : selectedCategory ? (
                     categoryProducts.length === 0 ? (
@@ -1419,11 +1631,7 @@ function BartenderDashboard() {
                         Brak produktów w tej kategorii.
                       </div>
                     ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                        {categoryProducts.map((prod) =>
-                          renderStaffProductCard(prod, false)
-                        )}
-                      </div>
+                      renderStaffProductsContainer(categoryProducts, false)
                     )
                   ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
