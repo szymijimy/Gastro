@@ -37,6 +37,8 @@ export type BonusRuleType =
   | "overtime_per_hour"
   | "hours_fixed_bonus"
 
+export type BonusScheduleType = "all" | "weekdays" | "specific_dates"
+
 export type BonusRule = {
   id: string
   restaurant_id: string
@@ -47,6 +49,9 @@ export type BonusRule = {
   param_z: number
   assigned_role: string | null
   is_active: boolean
+  schedule_type?: BonusScheduleType | null
+  applicable_days?: number[] | null // 1=Pon, 2=Wt, 3=Śr, 4=Czw, 5=Pt, 6=Sob, 0=Nd
+  applicable_dates?: string[] | null // np. ['2026-12-31']
 }
 
 export type ManualBonus = {

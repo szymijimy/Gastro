@@ -31,6 +31,8 @@ export type BonusRuleType =
   | "overtime_per_hour"
   | "hours_fixed_bonus"
 
+export type BonusScheduleType = "all" | "weekdays" | "specific_dates"
+
 export type BonusRule = {
   id: string
   restaurant_id: string
@@ -41,6 +43,9 @@ export type BonusRule = {
   param_z: number
   assigned_role: string | null
   is_active: boolean
+  schedule_type?: BonusScheduleType | null
+  applicable_days?: number[] | null // 1=Pon, 2=Wt, 3=Śr, 4=Czw, 5=Pt, 6=Sob, 0=Nd
+  applicable_dates?: string[] | null // np. ['2026-12-31']
 }
 
 export type AttendanceLog = {
@@ -84,23 +89,57 @@ export type ManualBonus = {
   reason: string
 }
 
+const WEEKDAY_SHORT_LABELS: Record<number, string> = {
+  1: "Pon",
+  2: "Wt",
+  3: "Śr",
+  4: "Czw",
+  5: "Pt",
+  6: "Sob",
+  0: "Nd",
+}
+
+export const formatBonusRuleScheduleLabel = (rule: BonusRule): string => {
+  if (rule.schedule_type === "weekdays" && rule.applicable_days && rule.applicable_days.length > 0) {
+    if (rule.applicable_days.length === 7) return "Cały tydzień"
+    const daysOrder = [1, 2, 3, 4, 5, 6, 0]
+    const matched = daysOrder.filter((d) => rule.applicable_days?.includes(d)).map((d) => WEEKDAY_SHORT_LABELS[d])
+    return `Dni: ${matched.join(", ")}`
+  }
+  if (rule.schedule_type === "specific_dates" && rule.applicable_dates && rule.applicable_dates.length > 0) {
+    return `Daty: ${rule.applicable_dates.join(", ")}`
+  }
+  return "Wszystkie dni"
+}
+
 export const formatBonusRuleSentence = (rule: BonusRule): string => {
   const x = Number(rule.param_x) || 0
   const y = Number(rule.param_y) || 0
   const z = Number(rule.param_z) || 0
 
+  let base = ""
   switch (rule.rule_type) {
     case "revenue_total_step":
-      return `Powyżej ${x} zł utargu dnia: od każdych ${y} zł nadwyżki → +${z} zł`
+      base = `Powyżej ${x} zł utargu dnia: od każdych ${y} zł nadwyżki → +${z} zł`
+      break
     case "revenue_per_worker_step":
-      return `Powyżej ${x} zł utargu na pracownika w pracy: od każdych ${y} zł → +${z} zł`
+      base = `Powyżej ${x} zł utargu na pracownika w pracy: od każdych ${y} zł → +${z} zł`
+      break
     case "overtime_per_hour":
-      return `Powyżej ${x} przepracowanych godzin w mies.: +${y} zł za każdą dodatkową godzinę`
+      base = `Powyżej ${x} przepracowanych godzin w mies.: +${y} zł za każdą dodatkową godzinę`
+      break
     case "hours_fixed_bonus":
-      return `Powyżej ${x} przepracowanych godzin w mies.: stały dodatek +${y} zł`
+      base = `Powyżej ${x} przepracowanych godzin w mies.: stały dodatek +${y} zł`
+      break
     default:
-      return rule.name
+      base = rule.name
   }
+
+  const sched = formatBonusRuleScheduleLabel(rule)
+  if (sched !== "Wszystkie dni") {
+    return `${base} (${sched})`
+  }
+  return base
 }
 
 export function calculateUserMonthlyPayroll({
@@ -161,7 +200,17 @@ export function calculateUserMonthlyPayroll({
       monthAllLogs.filter((l) => l.work_date === dateStr).map((l) => l.user_id)
     ).size || 1
 
+    const [y, m, d] = dateStr.split("-").map(Number)
+    const dayOfWeek = new Date(y, m - 1, d).getDay() // 0=Nd, 1=Pon, ...
+
     applicableRules.forEach((rule) => {
+      // SPRAWDZENIE CZY REGUŁA MA ZASTOSOWANIE DLA DANEGO DNIA (DNI TYGODNIA LUB KONKRETNE DATY)
+      if (rule.schedule_type === "weekdays" && rule.applicable_days && rule.applicable_days.length > 0) {
+        if (!rule.applicable_days.includes(dayOfWeek)) return
+      } else if (rule.schedule_type === "specific_dates" && rule.applicable_dates && rule.applicable_dates.length > 0) {
+        if (!rule.applicable_dates.includes(dateStr)) return
+      }
+
       const X = Number(rule.param_x) || 0
       const Y = Number(rule.param_y) || 0
       const Z = Number(rule.param_z) || 0
@@ -188,17 +237,33 @@ export function calculateUserMonthlyPayroll({
   })
 
   applicableRules.forEach((rule) => {
+    // Obliczamy godziny pracownika z uwzględnieniem filtra dni, jeśli dotyczy
+    let relevantHours = totalHours
+    if (rule.schedule_type === "weekdays" && rule.applicable_days && rule.applicable_days.length > 0) {
+      relevantHours = userLogs
+        .filter((l) => {
+          const [y, m, d] = l.work_date.split("-").map(Number)
+          const dow = new Date(y, m - 1, d).getDay()
+          return rule.applicable_days!.includes(dow)
+        })
+        .reduce((sum, l) => sum + (Number(l.hours_worked) || 0), 0)
+    } else if (rule.schedule_type === "specific_dates" && rule.applicable_dates && rule.applicable_dates.length > 0) {
+      relevantHours = userLogs
+        .filter((l) => rule.applicable_dates!.includes(l.work_date))
+        .reduce((sum, l) => sum + (Number(l.hours_worked) || 0), 0)
+    }
+
     const X = Number(rule.param_x) || 0
     const Y = Number(rule.param_y) || 0
 
-    if (rule.rule_type === "overtime_per_hour" && totalHours > X) {
-      const extraHours = totalHours - X
+    if (rule.rule_type === "overtime_per_hour" && relevantHours > X) {
+      const extraHours = relevantHours - X
       const amt = extraHours * Y
       if (amt > 0) {
         autoBonusPay += amt
         addTriggered(rule.name, amt)
       }
-    } else if (rule.rule_type === "hours_fixed_bonus" && totalHours > X) {
+    } else if (rule.rule_type === "hours_fixed_bonus" && relevantHours > X) {
       if (Y > 0) {
         autoBonusPay += Y
         addTriggered(rule.name, Y)
@@ -229,6 +294,16 @@ export function calculateUserMonthlyPayroll({
 // ============================================================================
 // POP-UP 1: KREATOR ZASAD PREMIOWANIA
 // ============================================================================
+const WEEKDAYS_CONFIG = [
+  { day: 1, label: "Pon", full: "Poniedziałek" },
+  { day: 2, label: "Wt", full: "Wtorek" },
+  { day: 3, label: "Śr", full: "Środa" },
+  { day: 4, label: "Czw", full: "Czwartek" },
+  { day: 5, label: "Pt", full: "Piątek" },
+  { day: 6, label: "Sob", full: "Sobota" },
+  { day: 0, label: "Nd", full: "Niedziela" },
+]
+
 function BonusRulesModal({
   isOpen,
   onClose,
@@ -252,6 +327,13 @@ function BonusRulesModal({
   const [paramX, setParamX] = useState("5000")
   const [paramY, setParamY] = useState("500")
   const [paramZ, setParamZ] = useState("20")
+
+  // ZAKRES DNI / KALENDARZ
+  const [scheduleType, setScheduleType] = useState<BonusScheduleType>("all")
+  const [applicableDays, setApplicableDays] = useState<number[]>([1, 2, 3, 4, 5, 6, 0])
+  const [applicableDates, setApplicableDates] = useState<string[]>([])
+  const [newSpecificDate, setNewSpecificDate] = useState<string>("")
+
   const [saving, setSaving] = useState(false)
 
   if (!isOpen) return null
@@ -277,9 +359,37 @@ function BonusRulesModal({
     }
   }
 
+  const toggleDay = (d: number) => {
+    setApplicableDays((prev) =>
+      prev.includes(d) ? prev.filter((item) => item !== d) : [...prev, d]
+    )
+  }
+
+  const handleAddSpecificDate = () => {
+    if (!newSpecificDate) return
+    if (!applicableDates.includes(newSpecificDate)) {
+      setApplicableDates((prev) => [...prev, newSpecificDate].sort())
+    }
+    setNewSpecificDate("")
+  }
+
+  const handleRemoveSpecificDate = (dToRemove: string) => {
+    setApplicableDates((prev) => prev.filter((d) => d !== dToRemove))
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim()) return
+
+    if (scheduleType === "weekdays" && applicableDays.length === 0) {
+      showToast("Wybierz przynajmniej jeden dzień tygodnia", "info")
+      return
+    }
+
+    if (scheduleType === "specific_dates" && applicableDates.length === 0) {
+      showToast("Dodaj przynajmniej jedną datę z kalendarza", "info")
+      return
+    }
 
     setSaving(true)
     await onCreateRule({
@@ -289,9 +399,13 @@ function BonusRulesModal({
       param_y: parseFloat(paramY) || 0,
       param_z: parseFloat(paramZ) || 0,
       assigned_role: assignedRole === "all" ? null : assignedRole,
+      schedule_type: scheduleType,
+      applicable_days: scheduleType === "weekdays" ? applicableDays : null,
+      applicable_dates: scheduleType === "specific_dates" ? applicableDates : null,
     })
     setSaving(false)
     setName("")
+    setApplicableDates([])
   }
 
   return (
@@ -416,6 +530,152 @@ function BonusRulesModal({
               )}
             </div>
 
+            {/* SEKCJA ZAKRESU DNI (DNI TYGODNIA / KALENDARZ) */}
+            <div className="p-3.5 rounded-xl bg-white border border-zinc-200 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <Label className="text-xs font-bold text-zinc-900 flex items-center gap-1.5">
+                  <span>📅 Dni obowiązywania reguły premiowania</span>
+                </Label>
+
+                {/* PRZEŁĄCZNIK TRYBU DNI */}
+                <div className="inline-flex rounded-lg border border-zinc-200 bg-zinc-100 p-0.5 shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={() => setScheduleType("all")}
+                    className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${
+                      scheduleType === "all" ? "bg-white text-zinc-900 shadow-2xs" : "text-zinc-600 hover:text-zinc-900"
+                    }`}
+                  >
+                    🌍 Wszystkie dni
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScheduleType("weekdays")}
+                    className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${
+                      scheduleType === "weekdays" ? "bg-white text-zinc-900 shadow-2xs" : "text-zinc-600 hover:text-zinc-900"
+                    }`}
+                  >
+                    📆 Dni tygodnia
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScheduleType("specific_dates")}
+                    className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${
+                      scheduleType === "specific_dates" ? "bg-white text-zinc-900 shadow-2xs" : "text-zinc-600 hover:text-zinc-900"
+                    }`}
+                  >
+                    🎯 Konkretne daty
+                  </button>
+                </div>
+              </div>
+
+              {/* OPCJA 1: DNI TYGODNIA */}
+              {scheduleType === "weekdays" && (
+                <div className="space-y-2.5 pt-1 animate-in fade-in duration-100">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-semibold text-zinc-500 mr-1">Szybki wybór:</span>
+                    <button
+                      type="button"
+                      onClick={() => setApplicableDays([1, 2, 3, 4])}
+                      className="px-2 py-0.5 rounded text-[11px] font-bold bg-zinc-100 hover:bg-zinc-200 text-zinc-700"
+                    >
+                      Pon – Czw (W tygodniu)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setApplicableDays([5, 6, 0])}
+                      className="px-2 py-0.5 rounded text-[11px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200"
+                    >
+                      Pt – Nd (Weekend)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setApplicableDays([6, 0])}
+                      className="px-2 py-0.5 rounded text-[11px] font-bold bg-zinc-100 hover:bg-zinc-200 text-zinc-700"
+                    >
+                      Sob – Nd
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setApplicableDays([1, 2, 3, 4, 5, 6, 0])}
+                      className="px-2 py-0.5 rounded text-[11px] font-bold bg-zinc-100 hover:bg-zinc-200 text-zinc-700"
+                    >
+                      Wszystkie 7 dni
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
+                    {WEEKDAYS_CONFIG.map((item) => {
+                      const isSelected = applicableDays.includes(item.day)
+                      return (
+                        <button
+                          key={item.day}
+                          type="button"
+                          onClick={() => toggleDay(item.day)}
+                          className={`py-2 px-1 rounded-lg border text-center transition-all flex flex-col items-center justify-center ${
+                            isSelected
+                              ? "bg-indigo-600 text-white border-indigo-600 shadow-2xs font-bold"
+                              : "bg-white text-zinc-700 border-zinc-200 hover:border-zinc-400 font-medium"
+                          }`}
+                        >
+                          <span className="text-xs">{item.label}</span>
+                          <span className="text-[9px] opacity-80 hidden sm:inline">{item.full.slice(0, 3)}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* OPCJA 2: KONKRETNE DATY W KALENDARZU */}
+              {scheduleType === "specific_dates" && (
+                <div className="space-y-2.5 pt-1 animate-in fade-in duration-100">
+                  <div className="flex gap-2">
+                    <Input
+                      type="date"
+                      value={newSpecificDate}
+                      onChange={(e) => setNewSpecificDate(e.target.value)}
+                      className="h-9 text-xs bg-zinc-50 w-44 font-semibold"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleAddSpecificDate}
+                      disabled={!newSpecificDate}
+                      className="h-9 text-xs font-bold"
+                    >
+                      + Dodaj datę do reguły
+                    </Button>
+                  </div>
+
+                  {applicableDates.length === 0 ? (
+                    <p className="text-xs text-zinc-400 italic">
+                      Nie wybrano jeszcze żadnych konkretnych dat. Wskaż datę powyżej i kliknij dodaj (np. Sylwester, Halloween, data imprezy).
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {applicableDates.map((dStr) => (
+                        <span
+                          key={dStr}
+                          className="px-2.5 py-1 rounded-md text-xs font-bold bg-amber-50 text-amber-900 border border-amber-300 flex items-center gap-1.5"
+                        >
+                          <span>📅 {dStr}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveSpecificDate(dStr)}
+                            className="hover:text-red-700 font-bold ml-1"
+                            title="Usuń tę datę"
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             <div className="flex justify-end">
               <Button type="submit" size="sm" disabled={saving}>
                 {saving ? "Zapisywanie..." : "+ Dodaj tę zasadę"}
@@ -441,10 +701,19 @@ function BonusRulesModal({
                     }`}
                   >
                     <div className="space-y-0.5">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="font-bold text-sm text-zinc-900">{r.name}</span>
                         <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-zinc-100 text-zinc-700">
                           {r.assigned_role ? `🏷️ ${r.assigned_role}` : "👥 Wszyscy"}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold border ${
+                          r.schedule_type === "weekdays"
+                            ? "bg-indigo-50 text-indigo-800 border-indigo-200"
+                            : r.schedule_type === "specific_dates"
+                            ? "bg-amber-50 text-amber-800 border-amber-300"
+                            : "bg-zinc-100 text-zinc-600 border-zinc-200"
+                        }`}>
+                          {formatBonusRuleScheduleLabel(r)}
                         </span>
                       </div>
                       <p className="text-xs text-emerald-800 font-medium">
@@ -1052,17 +1321,36 @@ export function AttendanceManagerModule({
     newRule: Omit<BonusRule, "id" | "restaurant_id" | "is_active">
   ) => {
     if (!restaurantId) return
-    const { data, error } = await supabase
+
+    let { data, error } = await supabase
       .from("bonus_rules")
       .insert([{ ...newRule, restaurant_id: restaurantId, is_active: true }])
       .select()
+
+    // Graceful fallback jeśli kolumny schedule_type / applicable_days jeszcze nie ma w bazie
+    if (error && (error.code === "42703" || error.message?.includes("schedule_type") || error.message?.includes("applicable_days"))) {
+      const { schedule_type, applicable_days, applicable_dates, ...legacyRule } = newRule as any
+      const fallbackRes = await supabase
+        .from("bonus_rules")
+        .insert([{ ...legacyRule, restaurant_id: restaurantId, is_active: true }])
+        .select()
+      data = fallbackRes.data
+      error = fallbackRes.error
+    }
 
     if (error) {
       showToast("Błąd tworzenia reguły premiowania: " + error.message, "error")
       return
     }
+
     if (data && data[0]) {
-      setRules((prev) => [data[0] as BonusRule, ...prev])
+      const created: BonusRule = {
+        ...(data[0] as BonusRule),
+        schedule_type: newRule.schedule_type || "all",
+        applicable_days: newRule.applicable_days || null,
+        applicable_dates: newRule.applicable_dates || null,
+      }
+      setRules((prev) => [created, ...prev])
       showToast("Utworzono nową zasadę premiowania", "success")
     }
   }
