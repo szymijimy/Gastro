@@ -3,7 +3,9 @@
 -- Data: 2026-11-05
 -- Opis: Tworzy tabelę restaurant_reservations, pozwalającą pracownikom i managerom
 --       dodawać rezerwacje (data, godzina, ilość osób, kontakt, stolik, notatki)
---       oraz odznaczać przybycie gości (is_arrived, arrived_at, arrived_by_user_id).
+--       oraz oznaczać status przybycia gości:
+--       'pending' (oczekuje), 'arrived' (pojawili się), 'no_show' (nie pojawili się), 'cancelled' (anulowano),
+--       wraz z faktyczną godziną przyjścia (actual_arrival_time), czasem oznaczenia (arrived_at) i pracownikiem (arrived_by_user_id).
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS restaurant_reservations (
@@ -16,6 +18,8 @@ CREATE TABLE IF NOT EXISTS restaurant_reservations (
   phone text,
   table_info text,
   notes text,
+  status text NOT NULL DEFAULT 'pending', -- 'pending' | 'arrived' | 'no_show' | 'cancelled'
+  actual_arrival_time text, -- format 'HH:MM'
   is_arrived boolean DEFAULT false,
   arrived_at timestamptz,
   arrived_by_user_id uuid REFERENCES users(id) ON DELETE SET NULL,

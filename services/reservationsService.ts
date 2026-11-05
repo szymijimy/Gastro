@@ -1,5 +1,10 @@
 import { supabase } from "@/lib/supabase"
-import type { Reservation, CreateReservationInput, UpdateReservationInput } from "@/types/reservations"
+import type {
+  Reservation,
+  ReservationStatus,
+  CreateReservationInput,
+  UpdateReservationInput,
+} from "@/types/reservations"
 
 export async function fetchReservations(
   restaurantId: string,
@@ -29,40 +34,67 @@ export async function fetchReservations(
     throw new Error(error.message)
   }
 
-  return (data || []).map((row: any) => ({
-    id: row.id,
-    restaurant_id: row.restaurant_id,
-    reservation_date: row.reservation_date,
-    reservation_time: row.reservation_time,
-    customer_name: row.customer_name,
-    guest_count: Number(row.guest_count) || 2,
-    phone: row.phone || null,
-    table_info: row.table_info || null,
-    notes: row.notes || null,
-    is_arrived: Boolean(row.is_arrived),
-    arrived_at: row.arrived_at || null,
-    arrived_by_user_id: row.arrived_by_user_id || null,
-    created_by_user_id: row.created_by_user_id || null,
-    created_at: row.created_at,
-    arrived_by_name: row.arrived_user?.full_name || null,
-    created_by_name: row.created_user?.full_name || null,
-  }))
+  return (data || []).map((row: any) => {
+    // Określenie statusu z obsługą wstecznej kompatybilności dla wcześniejszego is_arrived
+    let status: ReservationStatus = "pending"
+    if (row.status === "arrived" || row.status === "no_show" || row.status === "cancelled" || row.status === "pending") {
+      status = row.status
+    } else if (row.is_arrived) {
+      status = "arrived"
+    }
+
+    const actualArrivalTime =
+      row.actual_arrival_time || (status === "arrived" ? row.reservation_time : null)
+
+    return {
+      id: row.id,
+      restaurant_id: row.restaurant_id,
+      reservation_date: row.reservation_date,
+      reservation_time: row.reservation_time,
+      customer_name: row.customer_name,
+      guest_count: Number(row.guest_count) || 2,
+      phone: row.phone || null,
+      table_info: row.table_info || null,
+      notes: row.notes || null,
+      status,
+      actual_arrival_time: actualArrivalTime,
+      is_arrived: status === "arrived",
+      arrived_at: row.arrived_at || null,
+      arrived_by_user_id: row.arrived_by_user_id || null,
+      created_by_user_id: row.created_by_user_id || null,
+      created_at: row.created_at,
+      arrived_by_name: row.arrived_user?.full_name || null,
+      created_by_name: row.created_user?.full_name || null,
+    }
+  })
 }
 
 export async function addReservation(input: CreateReservationInput): Promise<Reservation> {
+  const status: ReservationStatus = input.status || "pending"
+  const isArrived = status === "arrived"
+  const actualArrivalTime = isArrived ? input.actual_arrival_time || input.reservation_time : (input.actual_arrival_time || null)
+  const now = isArrived ? new Date().toISOString() : null
+
+  const insertPayload: Record<string, any> = {
+    restaurant_id: input.restaurant_id,
+    reservation_date: input.reservation_date,
+    reservation_time: input.reservation_time,
+    customer_name: input.customer_name.trim(),
+    guest_count: Math.max(1, input.guest_count),
+    phone: input.phone?.trim() || null,
+    table_info: input.table_info?.trim() || null,
+    notes: input.notes?.trim() || null,
+    created_by_user_id: input.created_by_user_id || null,
+    status,
+    is_arrived: isArrived,
+    arrived_at: now,
+    arrived_by_user_id: isArrived ? input.created_by_user_id || null : null,
+    actual_arrival_time: actualArrivalTime,
+  }
+
   const { data, error } = await supabase
     .from("restaurant_reservations")
-    .insert([{
-      restaurant_id: input.restaurant_id,
-      reservation_date: input.reservation_date,
-      reservation_time: input.reservation_time,
-      customer_name: input.customer_name.trim(),
-      guest_count: Math.max(1, input.guest_count),
-      phone: input.phone?.trim() || null,
-      table_info: input.table_info?.trim() || null,
-      notes: input.notes?.trim() || null,
-      created_by_user_id: input.created_by_user_id || null,
-    }])
+    .insert([insertPayload])
     .select(`
       *,
       created_user:users!created_by_user_id(full_name)
@@ -74,6 +106,8 @@ export async function addReservation(input: CreateReservationInput): Promise<Res
     throw new Error(error.message)
   }
 
+  const createdStatus: ReservationStatus = data.status || (data.is_arrived ? "arrived" : "pending")
+
   return {
     id: data.id,
     restaurant_id: data.restaurant_id,
@@ -84,7 +118,9 @@ export async function addReservation(input: CreateReservationInput): Promise<Res
     phone: data.phone || null,
     table_info: data.table_info || null,
     notes: data.notes || null,
-    is_arrived: Boolean(data.is_arrived),
+    status: createdStatus,
+    actual_arrival_time: data.actual_arrival_time || (createdStatus === "arrived" ? data.reservation_time : null),
+    is_arrived: createdStatus === "arrived",
     arrived_at: data.arrived_at || null,
     arrived_by_user_id: data.arrived_by_user_id || null,
     created_by_user_id: data.created_by_user_id || null,
@@ -106,7 +142,16 @@ export async function updateReservation(
   if (patch.phone !== undefined) updatePayload.phone = patch.phone?.trim() || null
   if (patch.table_info !== undefined) updatePayload.table_info = patch.table_info?.trim() || null
   if (patch.notes !== undefined) updatePayload.notes = patch.notes?.trim() || null
-  if (patch.is_arrived !== undefined) updatePayload.is_arrived = patch.is_arrived
+  if (patch.status !== undefined) {
+    updatePayload.status = patch.status
+    updatePayload.is_arrived = patch.status === "arrived"
+  } else if (patch.is_arrived !== undefined) {
+    updatePayload.is_arrived = patch.is_arrived
+    updatePayload.status = patch.is_arrived ? "arrived" : "pending"
+  }
+  if (patch.actual_arrival_time !== undefined) {
+    updatePayload.actual_arrival_time = patch.actual_arrival_time?.trim() || null
+  }
   if (patch.arrived_at !== undefined) updatePayload.arrived_at = patch.arrived_at
   if (patch.arrived_by_user_id !== undefined) updatePayload.arrived_by_user_id = patch.arrived_by_user_id
 
@@ -121,34 +166,74 @@ export async function updateReservation(
   }
 }
 
-export async function toggleReservationArrived(
+export async function setReservationStatus(
   id: string,
-  currentArrived: boolean,
+  newStatus: ReservationStatus,
+  currentReservation: {
+    reservation_time: string
+    actual_arrival_time?: string | null
+  },
   userId?: string
-): Promise<{ is_arrived: boolean; arrived_at: string | null; arrived_by_user_id: string | null }> {
-  const nextArrived = !currentArrived
-  const now = nextArrived ? new Date().toISOString() : null
-  const arrivedUserId = nextArrived ? userId || null : null
+): Promise<{
+  status: ReservationStatus
+  is_arrived: boolean
+  arrived_at: string | null
+  arrived_by_user_id: string | null
+  actual_arrival_time: string | null
+}> {
+  const isPending = newStatus === "pending"
+  const now = !isPending ? new Date().toISOString() : null
+  const arrivedUserId = !isPending ? userId || null : null
+
+  let actualTime: string | null = null
+  if (newStatus === "arrived") {
+    actualTime = currentReservation.actual_arrival_time || currentReservation.reservation_time
+  }
+
+  const payload: Record<string, any> = {
+    status: newStatus,
+    is_arrived: newStatus === "arrived",
+    arrived_at: now,
+    arrived_by_user_id: arrivedUserId,
+    actual_arrival_time: actualTime,
+  }
 
   const { error } = await supabase
     .from("restaurant_reservations")
-    .update({
-      is_arrived: nextArrived,
-      arrived_at: now,
-      arrived_by_user_id: arrivedUserId,
-    })
+    .update(payload)
     .eq("id", id)
 
   if (error) {
-    console.error("Błąd oznaczania przybycia:", error)
+    console.error("Błąd zmiany statusu rezerwacji:", error)
     throw new Error(error.message)
   }
 
   return {
-    is_arrived: nextArrived,
+    status: newStatus,
+    is_arrived: newStatus === "arrived",
     arrived_at: now,
     arrived_by_user_id: arrivedUserId,
+    actual_arrival_time: actualTime,
   }
+}
+
+export async function toggleReservationArrived(
+  id: string,
+  currentArrived: boolean,
+  currentReservation: {
+    reservation_time: string
+    actual_arrival_time?: string | null
+  },
+  userId?: string
+): Promise<{
+  status: ReservationStatus
+  is_arrived: boolean
+  arrived_at: string | null
+  arrived_by_user_id: string | null
+  actual_arrival_time: string | null
+}> {
+  const nextStatus: ReservationStatus = currentArrived ? "pending" : "arrived"
+  return setReservationStatus(id, nextStatus, currentReservation, userId)
 }
 
 export async function deleteReservation(id: string): Promise<void> {

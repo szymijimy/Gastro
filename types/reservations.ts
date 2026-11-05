@@ -1,3 +1,5 @@
+export type ReservationStatus = "pending" | "arrived" | "no_show" | "cancelled"
+
 export type Reservation = {
   id: string
   restaurant_id: string
@@ -8,8 +10,10 @@ export type Reservation = {
   phone: string | null
   table_info: string | null
   notes: string | null
+  status: ReservationStatus
+  actual_arrival_time: string | null // format 'HH:MM'
   is_arrived: boolean
-  arrived_at: string | null
+  arrived_at: string | null // znacznik czasu kiedy oznaczono status
   arrived_by_user_id: string | null
   created_by_user_id: string | null
   created_at: string
@@ -26,6 +30,8 @@ export type CreateReservationInput = {
   phone?: string | null
   table_info?: string | null
   notes?: string | null
+  status?: ReservationStatus
+  actual_arrival_time?: string | null
   created_by_user_id?: string | null
 }
 
