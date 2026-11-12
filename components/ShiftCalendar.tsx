@@ -230,7 +230,18 @@ export function ShiftCalendar({
         `)
         .in("restaurant_id", venueIds)
         .order("reservation_date", { ascending: true })
-        .order("reservation_time", { ascending: true }),
+        .order("reservation_time", { ascending: true })
+        .then(async (res) => {
+          if (res.error && (res.error.message?.includes("relation") || res.error.message?.includes("arrived_user") || res.error.code === "PGRST200")) {
+            return supabase
+              .from("restaurant_reservations")
+              .select("*")
+              .in("restaurant_id", venueIds)
+              .order("reservation_date", { ascending: true })
+              .order("reservation_time", { ascending: true })
+          }
+          return res
+        }),
       ...venueIds.map((vId) =>
         supabase
           .rpc("get_restaurant_teammates", { p_restaurant_id: vId })
@@ -396,23 +407,26 @@ export function ShiftCalendar({
     const vCmp = compareVenues(a.restaurant_id, b.restaurant_id)
     if (vCmp !== 0) return vCmp
 
-    const tCmp = a.start_time.localeCompare(b.start_time)
+    const tCmp = (a.start_time || "").localeCompare(b.start_time || "")
     if (tCmp !== 0) return tCmp
 
     const personA = getPersonDetails(a.user_id, a.restaurant_id).name
     const personB = getPersonDetails(b.user_id, b.restaurant_id).name
-    return personA.localeCompare(personB, "pl")
+    return (personA || "").localeCompare(personB || "", "pl")
   }
 
-  // Porównywarka rezerwacji: 1) Lokal, 2) Godzina wejścia, 3) Osoba (Klient)
+  // Porównywarka rezerwacji: 1) Lokal, 2) Godzina wejścia, 3) Liczba osób, 4) Osoba (Klient)
   const compareReservations = (a: Reservation, b: Reservation) => {
     const vCmp = compareVenues(a.restaurant_id, b.restaurant_id)
     if (vCmp !== 0) return vCmp
 
-    const tCmp = a.reservation_time.localeCompare(b.reservation_time)
+    const tCmp = (a.reservation_time || "").localeCompare(b.reservation_time || "")
     if (tCmp !== 0) return tCmp
 
-    return a.customer_name.localeCompare(b.customer_name, "pl")
+    const guestDiff = (Number(b.guest_count) || 0) - (Number(a.guest_count) || 0)
+    if (guestDiff !== 0) return guestDiff
+
+    return (a.customer_name || "").localeCompare(b.customer_name || "", "pl")
   }
 
   // Zapis nowego koloru lokalu (przez Managera)
@@ -572,7 +586,7 @@ export function ShiftCalendar({
 
       const rows = monthDates.map((dateStr) => {
         const [y, m, d] = dateStr.split("-").map(Number)
-        const weekday = new Date(y, m - 1, d)
+        const weekday = new Date(y, m - 1, d, 12, 0, 0)
           .toLocaleDateString("pl-PL", { weekday: "short" })
           .replace(".", "")
 

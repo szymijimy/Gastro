@@ -329,29 +329,32 @@ export function ReservationsModule({
 
     // Jednolite sortowanie we wszystkich zakładkach i filtrach:
     // Zawsze ściśle po dacie sugerowanej przez rezerwację (chronologicznie rosnąco),
-    // a w obrębie tego samego dnia po planowanej godzinie przyjścia.
+    // a w obrębie tego samego dnia po planowanej godzinie przyjścia, następnie liczbie osób i nazwisku.
     return list.sort((a, b) => {
-      const dateComparison = a.reservation_date.localeCompare(b.reservation_date)
+      const dateComparison = (a.reservation_date || "").localeCompare(b.reservation_date || "")
       if (dateComparison !== 0) return dateComparison
 
-      const timeComparison = a.reservation_time.localeCompare(b.reservation_time)
+      const timeComparison = (a.reservation_time || "").localeCompare(b.reservation_time || "")
       if (timeComparison !== 0) return timeComparison
 
-      return a.customer_name.localeCompare(b.customer_name)
+      const guestDiff = (Number(b.guest_count) || 0) - (Number(a.guest_count) || 0)
+      if (guestDiff !== 0) return guestDiff
+
+      return (a.customer_name || "").localeCompare(b.customer_name || "", "pl")
     })
   }, [reservations, dateFilter, todayStr, tomorrowStr, selectedDate, statusFilter, searchQuery])
 
   // Statystyki dla aktualnego widoku
   const stats = useMemo(() => {
     const total = filteredReservations.length
-    const totalGuests = filteredReservations.reduce((sum, r) => sum + r.guest_count, 0)
+    const totalGuests = filteredReservations.reduce((sum, r) => sum + (Number(r.guest_count) || 0), 0)
     const arrivedCount = filteredReservations.filter((r) => r.status === "arrived").length
     const noShowCount = filteredReservations.filter((r) => r.status === "no_show").length
     const cancelledCount = filteredReservations.filter((r) => r.status === "cancelled").length
     const pendingCount = filteredReservations.filter((r) => r.status === "pending").length
     const arrivedGuests = filteredReservations
       .filter((r) => r.status === "arrived")
-      .reduce((sum, r) => sum + r.guest_count, 0)
+      .reduce((sum, r) => sum + (Number(r.guest_count) || 0), 0)
 
     return {
       total,
@@ -793,10 +796,19 @@ export function ReservationsModule({
                               >
                                 <span>Zaznaczone:</span>
                                 <strong>
-                                  {new Date(r.arrived_at).toLocaleTimeString("pl-PL", {
-                                    hour: "2-digit",
-                                    minute: "2-digit",
-                                  })}
+                                  {(() => {
+                                    try {
+                                      const d = new Date(r.arrived_at)
+                                      return isNaN(d.getTime())
+                                        ? ""
+                                        : d.toLocaleTimeString("pl-PL", {
+                                            hour: "2-digit",
+                                            minute: "2-digit",
+                                          })
+                                    } catch {
+                                      return ""
+                                    }
+                                  })()}
                                 </strong>
                                 {r.arrived_by_name && (
                                   <span className="text-zinc-500 font-normal">

@@ -7,4 +7,6 @@ export type Announcement = {
   visible_from: string | null
   visible_until: string | null
   created_at: string
+  image_url: string | null
+  keep_in_history: boolean
 }

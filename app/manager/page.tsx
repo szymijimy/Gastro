@@ -22,8 +22,10 @@ import type { RestaurantRole } from "@/types/restaurant"
 import {
   fetchAnnouncements,
   createAnnouncement,
+  updateAnnouncement,
   toggleAnnouncementPin,
   deleteAnnouncement,
+  uploadAnnouncementImage,
 } from "@/services/announcementsService"
 import { useTasks } from "@/hooks/useTasks"
 import { PriorityIcon } from "@/components/PriorityIcon"
@@ -564,7 +566,15 @@ function ManagerDashboard() {
   const [newAnnouncementPinned, setNewAnnouncementPinned] = useState(false)
   const [newAnnouncementFrom, setNewAnnouncementFrom] = useState("")
   const [newAnnouncementUntil, setNewAnnouncementUntil] = useState("")
+  const [newAnnouncementKeepInHistory, setNewAnnouncementKeepInHistory] = useState(false)
+  const [announcementImageFile, setAnnouncementImageFile] = useState<File | null>(null)
+  const [announcementImagePreview, setAnnouncementImagePreview] = useState<string | null>(null)
+  const [existingImageUrl, setExistingImageUrl] = useState<string | null>(null)
+  const [isUploadingImage, setIsUploadingImage] = useState(false)
+  const [editingAnnouncementId, setEditingAnnouncementId] = useState<string | null>(null)
   const [selectedAnnouncementModal, setSelectedAnnouncementModal] = useState<Announcement | null>(null)
+  const [fullScreenImageModalUrl, setFullScreenImageModalUrl] = useState<string | null>(null)
+  const announcementFileInputRef = useRef<HTMLInputElement>(null)
 
   const [todoActiveTab, setTodoActiveTab] = useState<"list" | "analytics">("list")
   const tasks = useTasks(activeRestaurantId, todayStr, currentUserId)
@@ -1041,7 +1051,63 @@ function ManagerDashboard() {
   }
 
   // --- TABLICA OGŁOSZEŃ ---
-  const handleCreateAnnouncement = async (e: React.FormEvent) => {
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!file.type.startsWith("image/")) {
+      showToast("Wybierz poprawny plik graficzny (JPG, PNG, WebP itp.)", "error")
+      return
+    }
+    setAnnouncementImageFile(file)
+    const previewUrl = URL.createObjectURL(file)
+    setAnnouncementImagePreview(previewUrl)
+  }
+
+  const handleClearSelectedImage = () => {
+    if (announcementImagePreview && announcementImagePreview.startsWith("blob:")) {
+      URL.revokeObjectURL(announcementImagePreview)
+    }
+    setAnnouncementImageFile(null)
+    setAnnouncementImagePreview(null)
+    setExistingImageUrl(null)
+    if (announcementFileInputRef.current) {
+      announcementFileInputRef.current.value = ""
+    }
+  }
+
+  const handleStartEditAnnouncement = (item: Announcement, e?: React.MouseEvent) => {
+    e?.stopPropagation()
+    setEditingAnnouncementId(item.id)
+    setNewAnnouncementTitle(item.title)
+    setNewAnnouncementContent(item.content)
+    setNewAnnouncementPinned(item.is_pinned)
+    setNewAnnouncementFrom(item.visible_from || "")
+    setNewAnnouncementUntil(item.visible_until || "")
+    setNewAnnouncementKeepInHistory(Boolean(item.keep_in_history))
+    setAnnouncementImageFile(null)
+    setExistingImageUrl(item.image_url || null)
+    setAnnouncementImagePreview(item.image_url || null)
+    if (selectedAnnouncementModal) {
+      setSelectedAnnouncementModal(null)
+    }
+    const formElement = document.getElementById("announcement-form-card")
+    if (formElement) {
+      formElement.scrollIntoView({ behavior: "smooth", block: "start" })
+    }
+  }
+
+  const handleCancelEditAnnouncement = () => {
+    setEditingAnnouncementId(null)
+    setNewAnnouncementTitle("")
+    setNewAnnouncementContent("")
+    setNewAnnouncementPinned(false)
+    setNewAnnouncementFrom("")
+    setNewAnnouncementUntil("")
+    setNewAnnouncementKeepInHistory(false)
+    handleClearSelectedImage()
+  }
+
+  const handleSaveAnnouncement = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!activeRestaurantId || !newAnnouncementTitle.trim() || !newAnnouncementContent.trim()) return
 
@@ -1050,29 +1116,75 @@ function ManagerDashboard() {
       return
     }
 
-    const { data, error } = await createAnnouncement({
-      restaurantId: activeRestaurantId,
-      title: newAnnouncementTitle,
-      content: newAnnouncementContent,
-      isPinned: newAnnouncementPinned,
-      visibleFrom: newAnnouncementFrom || null,
-      visibleUntil: newAnnouncementUntil || null,
-    })
+    setIsUploadingImage(true)
+    try {
+      let finalImageUrl: string | null = existingImageUrl
 
-    if (error) {
-      showToast("Błąd dodawania ogłoszenia: " + error, "error")
-      return
-    }
+      if (announcementImageFile) {
+        // Skalowanie i upload do storage (max 1200px, WebP 0.8)
+        const uploadedUrl = await uploadAnnouncementImage(announcementImageFile, activeRestaurantId)
+        if (uploadedUrl) {
+          finalImageUrl = uploadedUrl
+        } else {
+          showToast("Ostrzeżenie: Nie udało się przetworzyć zdjęcia, zapisuję ogłoszenie bez zdjęcia.", "info")
+        }
+      }
 
-    if (data) {
-      const updated = [data, ...announcements].sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned))
-      setAnnouncements(updated)
-      setNewAnnouncementTitle("")
-      setNewAnnouncementContent("")
-      setNewAnnouncementPinned(false)
-      setNewAnnouncementFrom("")
-      setNewAnnouncementUntil("")
-      showToast("Opublikowano nowe ogłoszenie", "success")
+      if (editingAnnouncementId) {
+        // Tryb aktualizacji istniejącego ogłoszenia
+        const { data, error } = await updateAnnouncement({
+          id: editingAnnouncementId,
+          title: newAnnouncementTitle,
+          content: newAnnouncementContent,
+          isPinned: newAnnouncementPinned,
+          visibleFrom: newAnnouncementFrom || null,
+          visibleUntil: newAnnouncementUntil || null,
+          imageUrl: finalImageUrl,
+          keepInHistory: newAnnouncementKeepInHistory,
+        })
+
+        if (error) {
+          showToast("Błąd aktualizacji ogłoszenia: " + error, "error")
+          return
+        }
+
+        if (data) {
+          const updated = announcements
+            .map((a) => (a.id === editingAnnouncementId ? data : a))
+            .sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned))
+          setAnnouncements(updated)
+          handleCancelEditAnnouncement()
+          showToast("Zaktualizowano ogłoszenie", "success")
+        }
+      } else {
+        // Tryb publikacji nowego ogłoszenia
+        const { data, error } = await createAnnouncement({
+          restaurantId: activeRestaurantId,
+          title: newAnnouncementTitle,
+          content: newAnnouncementContent,
+          isPinned: newAnnouncementPinned,
+          visibleFrom: newAnnouncementFrom || null,
+          visibleUntil: newAnnouncementUntil || null,
+          imageUrl: finalImageUrl,
+          keepInHistory: newAnnouncementKeepInHistory,
+        })
+
+        if (error) {
+          showToast("Błąd dodawania ogłoszenia: " + error, "error")
+          return
+        }
+
+        if (data) {
+          const updated = [data, ...announcements].sort(
+            (a, b) => Number(b.is_pinned) - Number(a.is_pinned)
+          )
+          setAnnouncements(updated)
+          handleCancelEditAnnouncement()
+          showToast("Opublikowano nowe ogłoszenie", "success")
+        }
+      }
+    } finally {
+      setIsUploadingImage(false)
     }
   }
 
@@ -1093,17 +1205,20 @@ function ManagerDashboard() {
     }
   }
 
-  const handleDeleteAnnouncement = async (id: string, e: React.MouseEvent) => {
+  const handleDeleteAnnouncement = async (item: Announcement, e: React.MouseEvent) => {
     e.stopPropagation()
     const confirmed = await askConfirm("Czy na pewno chcesz usunąć to ogłoszenie?", "Usuwanie ogłoszenia")
     if (!confirmed) return
 
-    const { error } = await deleteAnnouncement(id)
+    const { error } = await deleteAnnouncement(item.id, item.image_url)
 
     if (!error) {
-      setAnnouncements(announcements.filter(a => a.id !== id))
-      if (selectedAnnouncementModal?.id === id) {
+      setAnnouncements(announcements.filter(a => a.id !== item.id))
+      if (selectedAnnouncementModal?.id === item.id) {
         setSelectedAnnouncementModal(null)
+      }
+      if (editingAnnouncementId === item.id) {
+        handleCancelEditAnnouncement()
       }
       showToast("Ogłoszenie zostało usunięte", "info")
     }
@@ -1674,14 +1789,27 @@ function ManagerDashboard() {
             {/* 6. ZAKŁADKA: TABLICA OGŁOSZEŃ */}
             <TabsContent value="announcements" keepMounted className="mt-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <Card className="col-span-1 h-fit">
+                <Card id="announcement-form-card" className="col-span-1 h-fit">
                   <CardHeader>
-                    <CardTitle>Nowe Ogłoszenie</CardTitle>
-                    <CardDescription>Opublikuj komunikat dla zespołu.</CardDescription>
+                    <div className="flex items-center justify-between">
+                      <CardTitle>
+                        {editingAnnouncementId ? "Edycja Ogłoszenia" : "Nowe Ogłoszenie"}
+                      </CardTitle>
+                      {editingAnnouncementId && (
+                        <span className="px-2 py-0.5 text-[10px] font-semibold bg-blue-100 text-blue-800 rounded">
+                          Tryb edycji
+                        </span>
+                      )}
+                    </div>
+                    <CardDescription>
+                      {editingAnnouncementId
+                        ? "Zaktualizuj treść, daty, zdjęcie lub retencję ogłoszenia."
+                        : "Opublikuj komunikat dla zespołu."}
+                    </CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <form onSubmit={handleCreateAnnouncement} className="space-y-4">
-                      <div className="space-y-2">
+                    <form onSubmit={handleSaveAnnouncement} className="space-y-4">
+                      <div className="space-y-1.5">
                         <Label>Tytuł ogłoszenia</Label>
                         <Input 
                           placeholder="Wpisz tytuł..." 
@@ -1690,7 +1818,7 @@ function ManagerDashboard() {
                           required 
                         />
                       </div>
-                      <div className="space-y-2">
+                      <div className="space-y-1.5">
                         <Label>Treść</Label>
                         <textarea 
                           rows={4}
@@ -1700,6 +1828,51 @@ function ManagerDashboard() {
                           required
                           className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         />
+                      </div>
+
+                      {/* ZDJĘCIE OGŁOSZENIA / PLAKAT */}
+                      <div className="space-y-1.5">
+                        <Label className="text-xs font-semibold text-zinc-700">Zdjęcie lub plakat (opcjonalnie)</Label>
+                        {announcementImagePreview ? (
+                          <div className="relative rounded-lg overflow-hidden border border-zinc-200 bg-zinc-50 p-2">
+                            <div className="relative max-h-48 w-full overflow-hidden rounded bg-black/5 flex items-center justify-center">
+                              <img
+                                src={announcementImagePreview}
+                                alt="Podgląd ogłoszenia"
+                                className="max-h-48 w-full object-contain rounded"
+                              />
+                            </div>
+                            <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                              <span className="font-medium text-emerald-600">✓ WebP (max 1200px)</span>
+                              <button
+                                type="button"
+                                onClick={handleClearSelectedImage}
+                                className="text-red-600 hover:text-red-700 font-semibold cursor-pointer"
+                              >
+                                Usuń zdjęcie
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div>
+                            <input
+                              ref={announcementFileInputRef}
+                              type="file"
+                              accept="image/*"
+                              onChange={handleImageSelect}
+                              className="hidden"
+                              id="announcement-image-input"
+                            />
+                            <label
+                              htmlFor="announcement-image-input"
+                              className="flex flex-col items-center justify-center border-2 border-dashed border-zinc-300 hover:border-zinc-400 rounded-lg p-4 cursor-pointer bg-zinc-50 hover:bg-zinc-100 transition-colors text-center"
+                            >
+                              <span className="text-2xl mb-1">🖼️</span>
+                              <span className="text-xs font-semibold text-zinc-700">Wybierz plik graficzny</span>
+                              <span className="text-[11px] text-zinc-400">Automatyczne skalowanie do 1200px (WebP 0.8)</span>
+                            </label>
+                          </div>
+                        )}
                       </div>
 
                       <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 space-y-3">
@@ -1723,16 +1896,51 @@ function ManagerDashboard() {
                         </div>
                       </div>
 
-                      <label className="flex items-center gap-2 text-sm text-zinc-700 cursor-pointer select-none">
-                        <input 
-                          type="checkbox" 
-                          checked={newAnnouncementPinned}
-                          onChange={e => setNewAnnouncementPinned(e.target.checked)}
-                          className="rounded border-zinc-300"
-                        />
-                        Przypnij na górze tablicy 📌
-                      </label>
-                      <Button type="submit" className="w-full">Opublikuj ogłoszenie</Button>
+                      <div className="space-y-2 pt-1">
+                        <label className="flex items-center gap-2 text-sm text-zinc-700 cursor-pointer select-none">
+                          <input 
+                            type="checkbox" 
+                            checked={newAnnouncementPinned}
+                            onChange={e => setNewAnnouncementPinned(e.target.checked)}
+                            className="rounded border-zinc-300"
+                          />
+                          Przypnij na górze tablicy 📌
+                        </label>
+
+                        <label className="flex items-start gap-2 text-sm text-zinc-700 cursor-pointer select-none">
+                          <input 
+                            type="checkbox" 
+                            checked={newAnnouncementKeepInHistory}
+                            onChange={e => setNewAnnouncementKeepInHistory(e.target.checked)}
+                            className="mt-0.5 rounded border-zinc-300"
+                          />
+                          <div className="flex flex-col">
+                            <span className="font-medium text-zinc-800">Zachowaj w historii po wygaśnięciu</span>
+                            <span className="text-[11px] text-zinc-500 leading-snug">
+                              Jeśli odznaczone, po 30 dniach od wygaśnięcia ogłoszenie zostanie automatycznie usunięte.
+                            </span>
+                          </div>
+                        </label>
+                      </div>
+
+                      <div className="flex items-center gap-2 pt-2">
+                        <Button type="submit" disabled={isUploadingImage} className="flex-1">
+                          {isUploadingImage
+                            ? "Przetwarzanie zdjęcia..."
+                            : editingAnnouncementId
+                            ? "Zapisz zmiany"
+                            : "Opublikuj ogłoszenie"}
+                        </Button>
+                        {editingAnnouncementId && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={handleCancelEditAnnouncement}
+                          >
+                            Anuluj
+                          </Button>
+                        )}
+                      </div>
                     </form>
                   </CardContent>
                 </Card>
@@ -1741,7 +1949,7 @@ function ManagerDashboard() {
                   <CardHeader>
                     <CardTitle>Tablica Ogłoszeń</CardTitle>
                     <CardDescription>
-                      Kliknij w ogłoszenie, aby otworzyć pełną treść.
+                      Kliknij w ogłoszenie, aby otworzyć pełną treść i powiększyć zdjęcie.
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
@@ -1772,10 +1980,22 @@ function ManagerDashboard() {
                                     <span className={`px-2 py-0.5 text-[11px] font-medium border rounded-full ${visBadge.className}`}>
                                       {visBadge.label}
                                     </span>
+                                    {item.keep_in_history && (
+                                      <span className="px-2 py-0.5 text-[11px] font-medium bg-purple-50 text-purple-700 border border-purple-200 rounded-full">
+                                        💾 W historii
+                                      </span>
+                                    )}
                                   </div>
                                   <h3 className="font-bold text-zinc-900 pt-0.5">{item.title}</h3>
                                 </div>
                                 <div className="flex items-center gap-2 shrink-0">
+                                  <Button 
+                                    variant="outline" 
+                                    size="sm"
+                                    onClick={(e) => handleStartEditAnnouncement(item, e)}
+                                  >
+                                    Edytuj
+                                  </Button>
                                   <Button 
                                     variant="outline" 
                                     size="sm"
@@ -1786,12 +2006,24 @@ function ManagerDashboard() {
                                   <Button 
                                     variant="destructive" 
                                     size="sm"
-                                    onClick={(e) => handleDeleteAnnouncement(item.id, e)}
+                                    onClick={(e) => handleDeleteAnnouncement(item, e)}
                                   >
                                     Usuń
                                   </Button>
                                 </div>
                               </div>
+
+                              {item.image_url && (
+                                <div className="mt-3 relative w-full h-44 sm:h-52 rounded-lg overflow-hidden border border-zinc-200 bg-zinc-100">
+                                  <img
+                                    src={item.image_url}
+                                    alt={item.title}
+                                    className="w-full h-full object-cover"
+                                    loading="lazy"
+                                  />
+                                </div>
+                              )}
+
                               <p className="mt-2.5 text-sm text-zinc-700 whitespace-pre-wrap line-clamp-3">
                                 {item.content}
                               </p>
@@ -2099,33 +2331,100 @@ function ManagerDashboard() {
           onClick={() => setSelectedAnnouncementModal(null)}
         >
           <div
-            className="bg-white rounded-xl shadow-xl border w-full max-w-2xl overflow-hidden"
+            className="bg-white rounded-xl shadow-xl border w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-4 px-6 py-4 border-b bg-zinc-50">
               <div className="space-y-1">
-                <h2 className="text-xl font-bold text-zinc-900">
+                <div className="flex flex-wrap items-center gap-2">
+                  {selectedAnnouncementModal.is_pinned && (
+                    <span className="px-2.5 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-800 rounded-full">
+                      📌 Przypięte
+                    </span>
+                  )}
+                  {selectedAnnouncementModal.visible_until && (
+                    <span className="px-2.5 py-0.5 text-[11px] font-medium bg-zinc-100 text-zinc-600 rounded-full">
+                      Aktualne do: {selectedAnnouncementModal.visible_until}
+                    </span>
+                  )}
+                  {selectedAnnouncementModal.keep_in_history && (
+                    <span className="px-2.5 py-0.5 text-[11px] font-medium bg-purple-50 text-purple-700 rounded-full">
+                      💾 Zachowane w historii
+                    </span>
+                  )}
+                </div>
+                <h2 className="text-xl font-bold text-zinc-900 pt-1">
                   {selectedAnnouncementModal.title}
                 </h2>
+                <p className="text-xs text-zinc-400">
+                  Opublikowano:{" "}
+                  {new Date(selectedAnnouncementModal.created_at).toLocaleString("pl-PL", {
+                    dateStyle: "long",
+                    timeStyle: "short",
+                  })}
+                </p>
               </div>
               <button
                 type="button"
                 onClick={() => setSelectedAnnouncementModal(null)}
-                className="text-zinc-400 hover:text-zinc-700 text-2xl font-bold leading-none px-2"
+                className="text-zinc-400 hover:text-zinc-700 text-2xl font-bold leading-none px-2 cursor-pointer"
               >
                 ×
               </button>
             </div>
 
-            <div className="p-6 max-h-[65vh] overflow-y-auto">
+            <div className="p-6 overflow-y-auto space-y-4">
+              {selectedAnnouncementModal.image_url && (
+                <div className="rounded-xl overflow-hidden border border-zinc-200 bg-zinc-900/5 flex items-center justify-center p-1">
+                  <img
+                    src={selectedAnnouncementModal.image_url}
+                    alt={selectedAnnouncementModal.title}
+                    className="w-full max-h-[45vh] object-contain rounded-lg cursor-zoom-in hover:opacity-95 transition-opacity"
+                    onClick={() => setFullScreenImageModalUrl(selectedAnnouncementModal.image_url)}
+                    title="Kliknij, aby powiększyć zdjęcie"
+                  />
+                </div>
+              )}
               <p className="text-sm text-zinc-800 whitespace-pre-wrap leading-relaxed">
                 {selectedAnnouncementModal.content}
               </p>
             </div>
 
-            <div className="px-6 py-4 bg-zinc-50 border-t flex items-center justify-end">
-              <Button onClick={() => setSelectedAnnouncementModal(null)}>Zamknij</Button>
+            <div className="px-6 py-4 bg-zinc-50 border-t flex items-center justify-between">
+              <Button
+                variant="outline"
+                onClick={() => handleStartEditAnnouncement(selectedAnnouncementModal)}
+              >
+                Edytuj ogłoszenie
+              </Button>
+              <Button onClick={() => setSelectedAnnouncementModal(null)}>
+                Zamknij
+              </Button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* LIGHTBOX PEŁNOEKRANOWY DLA ZDJĘĆ OGŁOSZEŃ */}
+      {fullScreenImageModalUrl && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 p-4 backdrop-blur-xs"
+          onClick={() => setFullScreenImageModalUrl(null)}
+        >
+          <div className="relative max-w-4xl max-h-[90vh]">
+            <button
+              type="button"
+              onClick={() => setFullScreenImageModalUrl(null)}
+              className="absolute -top-10 right-0 text-white text-3xl font-bold hover:text-zinc-300 cursor-pointer"
+            >
+              ×
+            </button>
+            <img
+              src={fullScreenImageModalUrl}
+              alt="Powiększone zdjęcie ogłoszenia"
+              className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            />
           </div>
         </div>
       )}

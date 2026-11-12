@@ -25,10 +25,11 @@ export const calculateShiftDurationHours = (startTime: string, endTime: string):
   const [sh, sm] = startTime.split(":").map(Number)
   const [eh, em] = endTime.split(":").map(Number)
   if (isNaN(sh) || isNaN(sm) || isNaN(eh) || isNaN(em)) return 0
+  if (sh === eh && sm === em) return 0
 
   const startMins = sh * 60 + sm
   let endMins = eh * 60 + em
-  if (endMins <= startMins) {
+  if (endMins < startMins) {
     endMins += 24 * 60
   }
 
@@ -37,9 +38,10 @@ export const calculateShiftDurationHours = (startTime: string, endTime: string):
 }
 
 export const formatLogDate = (dateStr: string): string => {
-  if (!dateStr) return ""
+  if (!dateStr || !dateStr.includes("-")) return dateStr || ""
   const [y, m, d] = dateStr.split("-").map(Number)
-  const dateObj = new Date(y, m - 1, d)
+  const dateObj = new Date(y, m - 1, d, 12, 0, 0)
+  if (isNaN(dateObj.getTime())) return dateStr
   const weekday = dateObj.toLocaleDateString("pl-PL", { weekday: "short" }).replace(".", "")
   const capitalizedWeekday = weekday.charAt(0).toUpperCase() + weekday.slice(1)
   const monthShort = dateObj.toLocaleDateString("pl-PL", { month: "short" }).replace(".", "")

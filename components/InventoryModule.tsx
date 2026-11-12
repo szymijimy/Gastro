@@ -536,7 +536,9 @@ export function InventoryModule({ restaurantId }: { restaurantId: string | null 
     const index = imageUrl.indexOf(marker)
     if (index === -1) return
 
-    const filePath = imageUrl.substring(index + marker.length)
+    const rawPath = imageUrl.substring(index + marker.length)
+    const filePath = rawPath.split("?")[0].split("#")[0]
+    if (!filePath) return
     await supabase.storage.from("product-images").remove([filePath])
   }
 

@@ -188,8 +188,9 @@ const getDefaultOperatingHours = (): Record<number, OperatingHourConfig> => {
 }
 
 const getDayOfWeekNumber = (dateStr: string): number => {
+  if (!dateStr || !dateStr.includes("-")) return 0
   const [y, m, d] = dateStr.split("-").map(Number)
-  return new Date(y, m - 1, d).getDay()
+  return new Date(y, m - 1, d, 12, 0, 0).getDay()
 }
 
 const toDatetimeLocalStr = (isoStr: string | null): string => {
@@ -208,11 +209,11 @@ const getDatesInRange = (startStr: string, endStr: string): string[] => {
   if (!startStr || !endStr) return []
   const [sy, sm, sd] = startStr.split("-").map(Number)
   const [ey, em, ed] = endStr.split("-").map(Number)
-  const cur = new Date(sy, sm - 1, sd)
-  const end = new Date(ey, em - 1, ed)
+  const cur = new Date(sy, sm - 1, sd, 12, 0, 0)
+  const end = new Date(ey, em - 1, ed, 12, 0, 0)
   const dates: string[] = []
   let safety = 0
-  while (cur <= end && safety < 65) {
+  while (cur <= end && safety < 180) {
     const yyyy = cur.getFullYear()
     const mm = String(cur.getMonth() + 1).padStart(2, "0")
     const dd = String(cur.getDate()).padStart(2, "0")
@@ -224,17 +225,20 @@ const getDatesInRange = (startStr: string, endStr: string): string[] => {
 }
 
 const formatDayChip = (dateStr: string) => {
+  if (!dateStr || !dateStr.includes("-")) return { weekday: "", dayMonth: dateStr || "" }
   const [y, m, d] = dateStr.split("-").map(Number)
-  const dateObj = new Date(y, m - 1, d)
+  const dateObj = new Date(y, m - 1, d, 12, 0, 0)
+  if (isNaN(dateObj.getTime())) return { weekday: "", dayMonth: dateStr }
   const weekday = dateObj.toLocaleDateString("pl-PL", { weekday: "short" })
   const dayMonth = dateObj.toLocaleDateString("pl-PL", { day: "2-digit", month: "2-digit" })
   return { weekday: weekday.replace(".", ""), dayMonth }
 }
 
 const formatFullDayTitle = (dateStr: string) => {
-  if (!dateStr) return ""
+  if (!dateStr || !dateStr.includes("-")) return ""
   const [y, m, d] = dateStr.split("-").map(Number)
-  const dateObj = new Date(y, m - 1, d)
+  const dateObj = new Date(y, m - 1, d, 12, 0, 0)
+  if (isNaN(dateObj.getTime())) return dateStr
   return dateObj.toLocaleDateString("pl-PL", {
     weekday: "long",
     day: "numeric",
@@ -1563,7 +1567,15 @@ export function ManagerScheduleModule({
         showToast("Zaktualizowano terminy okresu.", "success")
       }
     } else {
-      const targetVenues = selectedVenueIdsForPeriod.length > 0 ? selectedVenueIdsForPeriod : [restaurantId]
+      const targetVenues =
+        selectedVenueIdsForPeriod.length > 0
+          ? selectedVenueIdsForPeriod
+          : (restaurantId ? [restaurantId] : [])
+
+      if (targetVenues.length === 0) {
+        showToast("Wybierz przynajmniej jeden lokal dla okresu.", "error")
+        return
+      }
 
       const rowsToInsert = targetVenues.map((vId) => ({
         restaurant_id: vId,

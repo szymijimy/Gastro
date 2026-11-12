@@ -177,14 +177,15 @@ export function calculateUserMonthlyPayroll({
     totalHours += Number(log.hours_worked) || 0
   })
 
-  const basePay = totalHours * hourlyRate
+  const safeHourlyRate = Number(hourlyRate) || 0
+  const basePay = totalHours * safeHourlyRate
   let autoBonusPay = 0
   let manualBonusPay = 0
   const triggeredBonuses: { name: string; amount: number }[] = []
 
   const addTriggered = (name: string, amount: number) => {
     const rounded = Math.round(amount * 100) / 100
-    if (rounded <= 0) return
+    if (rounded <= 0 || isNaN(rounded)) return
     const existing = triggeredBonuses.find((b) => b.name === name)
     if (existing) {
       existing.amount = Math.round((existing.amount + rounded) * 100) / 100
@@ -196,6 +197,7 @@ export function calculateUserMonthlyPayroll({
   const workedDates = Array.from(new Set(userLogs.map((l) => l.work_date)))
 
   workedDates.forEach((dateStr) => {
+    if (!dateStr || !dateStr.includes("-")) return
     const revRecord = revenues.find((r) => r.work_date === dateStr)
     const dailyRevenue = Number(revRecord?.amount) || 0
     if (dailyRevenue <= 0) return
@@ -205,7 +207,7 @@ export function calculateUserMonthlyPayroll({
     ).size || 1
 
     const [y, m, d] = dateStr.split("-").map(Number)
-    const dayOfWeek = new Date(y, m - 1, d).getDay() // 0=Nd, 1=Pon, ...
+    const dayOfWeek = new Date(y, m - 1, d, 12, 0, 0).getDay() // 0=Nd, 1=Pon, ...
 
     applicableRules.forEach((rule) => {
       // SPRAWDZENIE CZY REGUŁA MA ZASTOSOWANIE DLA DANEGO DNIA (DNI TYGODNIA LUB KONKRETNE DATY)
@@ -246,8 +248,9 @@ export function calculateUserMonthlyPayroll({
     if (rule.schedule_type === "weekdays" && rule.applicable_days && rule.applicable_days.length > 0) {
       relevantHours = userLogs
         .filter((l) => {
+          if (!l.work_date || !l.work_date.includes("-")) return false
           const [y, m, d] = l.work_date.split("-").map(Number)
-          const dow = new Date(y, m - 1, d).getDay()
+          const dow = new Date(y, m - 1, d, 12, 0, 0).getDay()
           return rule.applicable_days!.includes(dow)
         })
         .reduce((sum, l) => sum + (Number(l.hours_worked) || 0), 0)
@@ -955,8 +958,17 @@ export const getPreviousDayFieldValue = (
   targetDate: string,
   revenuesList: DailyRevenue[]
 ): number => {
+  if (!fieldName || !targetDate || !Array.isArray(revenuesList)) return 0
   const prior = revenuesList
-    .filter((r) => r.work_date < targetDate && r.breakdown && typeof r.breakdown[fieldName] === "number")
+    .filter(
+      (r) =>
+        r &&
+        r.work_date < targetDate &&
+        r.breakdown &&
+        r.breakdown[fieldName] !== undefined &&
+        r.breakdown[fieldName] !== null &&
+        !isNaN(Number(r.breakdown[fieldName]))
+    )
     .sort((a, b) => b.work_date.localeCompare(a.work_date))
   if (prior.length > 0 && prior[0].breakdown) {
     return Number(prior[0].breakdown[fieldName]) || 0
@@ -1297,10 +1309,11 @@ export const calculateShiftDurationHours = (startTime: string, endTime: string):
   const [sh, sm] = startTime.split(":").map(Number)
   const [eh, em] = endTime.split(":").map(Number)
   if (isNaN(sh) || isNaN(sm) || isNaN(eh) || isNaN(em)) return 0
+  if (sh === eh && sm === em) return 0
 
   const startMins = sh * 60 + sm
   let endMins = eh * 60 + em
-  if (endMins <= startMins) {
+  if (endMins < startMins) {
     endMins += 24 * 60
   }
   return Math.round(((endMins - startMins) / 60) * 100) / 100
@@ -1346,8 +1359,8 @@ function AttendanceLogModal({
     if (initialLog) {
       setUserId(initialLog.user_id)
       setWorkDate(initialLog.work_date)
-      setStartTime(initialLog.start_time)
-      setEndTime(initialLog.end_time)
+      setStartTime(initialLog.start_time ? initialLog.start_time.slice(0, 5) : "10:00")
+      setEndTime(initialLog.end_time ? initialLog.end_time.slice(0, 5) : "18:00")
       setNote(initialLog.note || "")
     } else {
       setUserId(targetUserId || currentUserId || staff[0]?.user_id || "")
@@ -2376,7 +2389,7 @@ export function AttendanceManagerModule({
                       {summary.totalHours} h
                     </TableCell>
                     <TableCell className="text-right text-xs text-zinc-500">
-                      {member.hourly_rate} zł/h
+                      {Number(member.hourly_rate) || 0} zł/h
                     </TableCell>
                     <TableCell className="text-right font-medium">
                       {summary.basePay.toFixed(2)} zł
@@ -2641,7 +2654,7 @@ export function AttendanceManagerModule({
                   ).size
 
                   const [y, m, d] = r.work_date.split("-").map(Number)
-                  const weekday = new Date(y, m - 1, d).toLocaleDateString("pl-PL", { weekday: "short" })
+                  const weekday = new Date(y, m - 1, d, 12, 0, 0).toLocaleDateString("pl-PL", { weekday: "short" })
 
                   const breakdownEntries = r.breakdown ? Object.entries(r.breakdown) : []
 

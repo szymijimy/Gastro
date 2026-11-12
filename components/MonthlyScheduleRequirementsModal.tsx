@@ -278,7 +278,7 @@ export function MonthlyScheduleRequirementsModal({
 
     datesInSelectedMonth.forEach((dateStr) => {
       const [y, m, d] = dateStr.split("-").map(Number)
-      const dow = new Date(y, m - 1, d).getDay()
+      const dow = new Date(y, m - 1, d, 12, 0, 0).getDay()
       const cfg = currentWeekly[dow] || {
         day_of_week: dow,
         is_closed: false,
@@ -315,14 +315,14 @@ export function MonthlyScheduleRequirementsModal({
   const handleApplyToAllSameWeekdays = () => {
     if (!activeDayConfig || !selectedDate) return
     const [y, m, d] = selectedDate.split("-").map(Number)
-    const targetDow = new Date(y, m - 1, d).getDay()
+    const targetDow = new Date(y, m - 1, d, 12, 0, 0).getDay()
     const targetPlural = WEEKDAY_NAMES_PL_PLURAL[targetDow] || WEEKDAY_NAMES_PL[targetDow]
 
     setMonthDaysState((prev) => {
       const next = { ...prev }
       datesInSelectedMonth.forEach((dateStr) => {
         const [dy, dm, dd] = dateStr.split("-").map(Number)
-        if (new Date(dy, dm - 1, dd).getDay() === targetDow) {
+        if (new Date(dy, dm - 1, dd, 12, 0, 0).getDay() === targetDow) {
           next[dateStr] = {
             ...activeDayConfig,
             work_date: dateStr,
@@ -362,13 +362,13 @@ export function MonthlyScheduleRequirementsModal({
   // Obliczenie pustych pól na początku kalendarza miesiąca (by poniedziałek był w pierwszej kolumnie)
   const firstDayOfMonthDow = datesInSelectedMonth.length > 0 ? (() => {
     const [y, m] = selectedMonth.split("-").map(Number)
-    const rawDow = new Date(y, m - 1, 1).getDay() // 0 = Nd, 1 = Pn...
+    const rawDow = new Date(y, m - 1, 1, 12, 0, 0).getDay() // 0 = Nd, 1 = Pn...
     return rawDow === 0 ? 6 : rawDow - 1 // 0 = Pn, 6 = Nd
   })() : 0
 
   const activeDowNumber = selectedDate ? (() => {
     const [y, m, d] = selectedDate.split("-").map(Number)
-    return new Date(y, m - 1, d).getDay()
+    return new Date(y, m - 1, d, 12, 0, 0).getDay()
   })() : 1
 
   const currentWeekdayPlural = WEEKDAY_NAMES_PL_PLURAL[activeDowNumber] || WEEKDAY_NAMES_PL[activeDowNumber]
@@ -622,7 +622,7 @@ export function MonthlyScheduleRequirementsModal({
                         <h3 className="text-base font-black text-zinc-900">
                           {(() => {
                             const [y, m, d] = selectedDate.split("-").map(Number)
-                            const dateObj = new Date(y, m - 1, d)
+                            const dateObj = new Date(y, m - 1, d, 12, 0, 0)
                             const weekday = WEEKDAY_NAMES_PL[dateObj.getDay()]
                             return `${weekday}, ${d} ${dateObj.toLocaleDateString("pl-PL", { month: "long" })} ${y}`
                           })()}

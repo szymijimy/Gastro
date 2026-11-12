@@ -298,6 +298,7 @@ function BartenderDashboard() {
   const [teammates, setTeammates] = useState<Teammate[]>([])
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [selectedAnnouncementModal, setSelectedAnnouncementModal] = useState<Announcement | null>(null)
+  const [fullScreenImageModalUrl, setFullScreenImageModalUrl] = useState<string | null>(null)
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [products, setProducts] = useState<Product[]>([])
@@ -1493,6 +1494,16 @@ function BartenderDashboard() {
                               })}
                             </span>
                           </div>
+                          {item.image_url && (
+                            <div className="mt-2.5 relative w-full h-44 sm:h-52 rounded-lg overflow-hidden border border-zinc-200 bg-zinc-100">
+                              <img
+                                src={item.image_url}
+                                alt={item.title}
+                                className="w-full h-full object-cover"
+                                loading="lazy"
+                              />
+                            </div>
+                          )}
                           <p className="mt-2 text-sm text-zinc-700 whitespace-pre-wrap line-clamp-3 leading-relaxed">
                             {item.content}
                           </p>
@@ -1817,7 +1828,7 @@ function BartenderDashboard() {
           onClick={() => setSelectedAnnouncementModal(null)}
         >
           <div
-            className="bg-white rounded-xl shadow-xl border w-full max-w-2xl overflow-hidden"
+            className="bg-white rounded-xl shadow-xl border w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-4 px-6 py-4 border-b bg-zinc-50">
@@ -1851,13 +1862,24 @@ function BartenderDashboard() {
               <button
                 type="button"
                 onClick={() => setSelectedAnnouncementModal(null)}
-                className="text-zinc-400 hover:text-zinc-700 text-2xl font-bold leading-none px-2"
+                className="text-zinc-400 hover:text-zinc-700 text-2xl font-bold leading-none px-2 cursor-pointer"
               >
                 ×
               </button>
             </div>
 
-            <div className="p-6 max-h-[65vh] overflow-y-auto">
+            <div className="p-6 overflow-y-auto space-y-4">
+              {selectedAnnouncementModal.image_url && (
+                <div className="rounded-xl overflow-hidden border border-zinc-200 bg-zinc-900/5 flex items-center justify-center p-1">
+                  <img
+                    src={selectedAnnouncementModal.image_url}
+                    alt={selectedAnnouncementModal.title}
+                    className="w-full max-h-[45vh] object-contain rounded-lg cursor-zoom-in hover:opacity-95 transition-opacity"
+                    onClick={() => setFullScreenImageModalUrl(selectedAnnouncementModal.image_url)}
+                    title="Kliknij, aby powiększyć zdjęcie"
+                  />
+                </div>
+              )}
               <p className="text-sm text-zinc-800 whitespace-pre-wrap leading-relaxed">
                 {selectedAnnouncementModal.content}
               </p>
@@ -1868,6 +1890,30 @@ function BartenderDashboard() {
                 Zamknij
               </Button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* LIGHTBOX PEŁNOEKRANOWY DLA ZDJĘĆ OGŁOSZEŃ */}
+      {fullScreenImageModalUrl && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 p-4 backdrop-blur-xs"
+          onClick={() => setFullScreenImageModalUrl(null)}
+        >
+          <div className="relative max-w-4xl max-h-[90vh]">
+            <button
+              type="button"
+              onClick={() => setFullScreenImageModalUrl(null)}
+              className="absolute -top-10 right-0 text-white text-3xl font-bold hover:text-zinc-300 cursor-pointer"
+            >
+              ×
+            </button>
+            <img
+              src={fullScreenImageModalUrl}
+              alt="Powiększone zdjęcie ogłoszenia"
+              className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            />
           </div>
         </div>
       )}

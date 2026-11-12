@@ -27,7 +27,28 @@ export async function fetchReservations(
     query = query.gte("reservation_date", options.startDate).lte("reservation_date", options.endDate)
   }
 
-  const { data, error } = await query
+  let { data, error } = await query
+
+  if (error && (error.message?.includes("relation") || error.message?.includes("arrived_user") || error.message?.includes("created_user") || error.code === "PGRST200")) {
+    let fallbackQuery = supabase
+      .from("restaurant_reservations")
+      .select("*")
+      .eq("restaurant_id", restaurantId)
+      .order("reservation_date", { ascending: true })
+      .order("reservation_time", { ascending: true })
+
+    if (options?.date) {
+      fallbackQuery = fallbackQuery.eq("reservation_date", options.date)
+    } else if (options?.startDate && options?.endDate) {
+      fallbackQuery = fallbackQuery.gte("reservation_date", options.startDate).lte("reservation_date", options.endDate)
+    }
+
+    const fallbackRes = await fallbackQuery
+    if (!fallbackRes.error) {
+      data = fallbackRes.data
+      error = null
+    }
+  }
 
   if (error) {
     console.error("Błąd pobierania rezerwacji:", error)
@@ -92,7 +113,7 @@ export async function addReservation(input: CreateReservationInput): Promise<Res
     actual_arrival_time: actualArrivalTime,
   }
 
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("restaurant_reservations")
     .insert([insertPayload])
     .select(`
@@ -100,6 +121,16 @@ export async function addReservation(input: CreateReservationInput): Promise<Res
       created_user:users!created_by_user_id(full_name)
     `)
     .single()
+
+  if (error && (error.message?.includes("relation") || error.message?.includes("created_user") || error.code === "PGRST200")) {
+    const fallback = await supabase
+      .from("restaurant_reservations")
+      .insert([insertPayload])
+      .select()
+      .single()
+    data = fallback.data
+    error = fallback.error
+  }
 
   if (error) {
     console.error("Błąd tworzenia rezerwacji:", error)
