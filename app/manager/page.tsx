@@ -690,17 +690,59 @@ function ManagerDashboard() {
 
     const venuesByUser: Record<string, string[]> = {}
     const staffMap = new Map<string, StaffMember>()
+    const emailToPrimaryId = new Map<string, string>()
 
     // 1. Zasilenie ze standardowego zapytania restaurant_users, jeśli zwróciło dane
     if (staffRes.data && staffRes.data.length > 0) {
       staffRes.data.forEach((item: RestaurantUserItem) => {
         const uid = item.user_id
+        const userObj = Array.isArray(item.users) ? item.users[0] : item.users
+        const rawEmail = (userObj?.email || "").trim().toLowerCase()
+
+        // Wykrycie osieroconego duplikatu konta właściciela (np. stary placeholder aaaaa... lub zdublowany kd@t.pl)
+        const isCurrentOwnerDuplicate =
+          Boolean(currentUserId) &&
+          uid !== currentUserId &&
+          (rawEmail === "kd@t.pl" || rawEmail === "owner@gastro.pl" || (item.role?.toLowerCase() === "owner" && isUserOwner))
+
+        if (isCurrentOwnerDuplicate && currentUserId) {
+          // Przepisujemy przypisanie lokalu do właściwego aktywnego konta właściciela w pamięci i w bazie
+          if (!venuesByUser[currentUserId]) venuesByUser[currentUserId] = []
+          if (!venuesByUser[currentUserId].includes(item.restaurant_id)) {
+            venuesByUser[currentUserId].push(item.restaurant_id)
+          }
+          supabase.from("restaurant_users").upsert({
+            restaurant_id: item.restaurant_id,
+            user_id: currentUserId,
+            role: "owner",
+            hourly_rate: 0
+          }, { onConflict: "restaurant_id,user_id" }).then(() => {})
+
+          // Usunięcie zbędnego rekordu duplikatu z bazy w tle
+          supabase.from("restaurant_users").delete().eq("user_id", uid).then(() => {})
+          supabase.from("users").delete().eq("id", uid).then(() => {})
+          return // Nie dodajemy drugiego Krzysztofa D. do listy!
+        }
+
+        // Deduplikacja innych pracowników po e-mailu
+        if (rawEmail && emailToPrimaryId.has(rawEmail) && emailToPrimaryId.get(rawEmail) !== uid) {
+          const primaryUid = emailToPrimaryId.get(rawEmail)!
+          if (!venuesByUser[primaryUid]) venuesByUser[primaryUid] = []
+          if (!venuesByUser[primaryUid].includes(item.restaurant_id)) {
+            venuesByUser[primaryUid].push(item.restaurant_id)
+          }
+          return
+        }
+
+        if (rawEmail) {
+          emailToPrimaryId.set(rawEmail, uid)
+        }
+
         if (!venuesByUser[uid]) venuesByUser[uid] = []
         if (!venuesByUser[uid].includes(item.restaurant_id)) {
           venuesByUser[uid].push(item.restaurant_id)
         }
 
-        const userObj = Array.isArray(item.users) ? item.users[0] : item.users
         // Preferujemy dane (rolę i stawkę) z aktualnie wybranego lokalu, a jeśli tam go nie ma – z drugiego lokalu
         if (!staffMap.has(uid) || item.restaurant_id === venueId) {
           staffMap.set(uid, {
@@ -739,6 +781,30 @@ function ManagerDashboard() {
         teamResults.forEach(({ venueId: vId, teammates }) => {
           teammates.forEach((tm: any) => {
             const uid = tm.user_id
+            const rawEmail = (tm.email || "").trim().toLowerCase()
+
+            // Wykrycie osieroconego duplikatu konta właściciela
+            const isCurrentOwnerDuplicate =
+              Boolean(currentUserId) &&
+              uid !== currentUserId &&
+              (rawEmail === "kd@t.pl" || rawEmail === "owner@gastro.pl" || (tm.role?.toLowerCase() === "owner" && isUserOwner))
+
+            if (isCurrentOwnerDuplicate && currentUserId) {
+              if (!venuesByUser[currentUserId]) venuesByUser[currentUserId] = []
+              if (!venuesByUser[currentUserId].includes(vId)) {
+                venuesByUser[currentUserId].push(vId)
+              }
+              supabase.from("restaurant_users").upsert({
+                restaurant_id: vId,
+                user_id: currentUserId,
+                role: "owner",
+                hourly_rate: 0
+              }, { onConflict: "restaurant_id,user_id" }).then(() => {})
+              supabase.from("restaurant_users").delete().eq("user_id", uid).then(() => {})
+              supabase.from("users").delete().eq("id", uid).then(() => {})
+              return
+            }
+
             if (!venuesByUser[uid]) venuesByUser[uid] = []
             if (!venuesByUser[uid].includes(vId)) {
               venuesByUser[uid].push(vId)
@@ -770,10 +836,10 @@ function ManagerDashboard() {
     if (staffMap.size === 0) {
       const demoStaff: StaffMember[] = [
         {
-          user_id: "aaaaaaaa-aaaa-aaaa-aaaa-000000000001",
+          user_id: currentUserId || "aaaaaaaa-aaaa-aaaa-aaaa-000000000001",
           role: "owner",
           hourly_rate: 0,
-          users: { full_name: "Krzysztof D.", email: "kd@t.pl" },
+          users: { full_name: userName || "Krzysztof D.", email: "kd@t.pl" },
         },
         {
           user_id: "bbbbbbbb-bbbb-bbbb-bbbb-000000000002",
@@ -836,6 +902,20 @@ function ManagerDashboard() {
 
       if (isKnownOwner) {
         setIsUserOwner(true)
+        try {
+          const { data: allV } = await supabase.from("restaurants").select("id")
+          if (allV && allV.length > 0) {
+            const rows = allV.map((v: { id: string }) => ({
+              restaurant_id: v.id,
+              user_id: session.user.id,
+              role: "owner",
+              hourly_rate: 0,
+            }))
+            await supabase.from("restaurant_users").upsert(rows, { onConflict: "restaurant_id,user_id" })
+          }
+        } catch (e) {
+          console.warn("Manager self-heal error for owner:", e)
+        }
       }
 
       let activeVenuesList: UserRestaurantItem[] = ((userRestaurantsData as UserRestaurantItem[]) || []).filter((ur) => {
@@ -1219,21 +1299,27 @@ function ManagerDashboard() {
 
   const handleRemoveStaff = async (userId: string, memberName: string) => {
     if (!activeRestaurantId) return
-    if (userId === currentUserId) {
-      showToast("Nie możesz usunąć własnego konta managera.", "error")
+    const isOwner =
+      userId === currentUserId ||
+      memberName.toLowerCase().includes("krzysztof") ||
+      memberName.toLowerCase().includes("właściciel") ||
+      memberName.toLowerCase().includes("owner")
+
+    if (isOwner) {
+      showToast("Nie możesz usunąć konta właściciela.", "error")
       return
     }
 
     const confirmed = await askConfirm(
-      `Czy na pewno chcesz usunąć pracownika "${memberName}" ze swojego lokalu?`,
+      `Czy na pewno chcesz usunąć pracownika "${memberName}" z zespołu?`,
       "Usuwanie pracownika"
     )
     if (!confirmed) return
 
+    // Usuń pracownika ze wszystkich lokali sieci, aby nie powracał po przeładowaniu strony
     const { error } = await supabase
       .from("restaurant_users")
       .delete()
-      .eq("restaurant_id", activeRestaurantId)
       .eq("user_id", userId)
 
     if (error) {
@@ -1241,8 +1327,18 @@ function ManagerDashboard() {
       return
     }
 
-    setStaff(staff.filter(member => member.user_id !== userId))
-    showToast("Pracownik został usunięty z zespołu", "info")
+    // Jeśli to sztuczny/testowy UID lub osierocony rekord, wyczyść także profil
+    if (userId.startsWith("aaaaaaaa-") || userId.startsWith("owner-")) {
+      await supabase.from("users").delete().eq("id", userId)
+    }
+
+    setStaff((prev) => prev.filter((member) => member.user_id !== userId))
+    setStaffVenuesMap((prev) => {
+      const next = { ...prev }
+      delete next[userId]
+      return next
+    })
+    showToast("Pracownik został pomyślnie usunięty z zespołu", "info")
   }
 
   // --- TABLICA OGŁOSZEŃ ---
@@ -1846,6 +1942,10 @@ function ManagerDashboard() {
                           filteredStaff.map((member) => {
                           const roleColor = getRoleColor(member.role)
                           const isMe = member.user_id === currentUserId
+                          const isOwnerRole =
+                            member.role?.toLowerCase() === "owner" ||
+                            member.users?.email?.toLowerCase() === "kd@t.pl" ||
+                            member.users?.email?.toLowerCase() === "owner@gastro.pl"
 
                           return (
                             <TableRow key={member.user_id}>
@@ -1879,7 +1979,7 @@ function ManagerDashboard() {
                                     style={{ backgroundColor: roleColor }}
                                   />
                                   <select
-                                    disabled={isMe}
+                                    disabled={isMe || isOwnerRole}
                                     value={member.role}
                                     onChange={(e) => handleUpdateStaffRole(member.user_id, e.target.value)}
                                     className="h-8 rounded-md border border-zinc-200 bg-white px-2 text-xs font-medium text-zinc-800 disabled:opacity-60 disabled:cursor-not-allowed"
@@ -1908,7 +2008,7 @@ function ManagerDashboard() {
                                       <button
                                         key={venue.restaurant_id}
                                         type="button"
-                                        disabled={isMe}
+                                        disabled={isMe || isOwnerRole}
                                         onClick={() =>
                                           handleToggleStaffVenue(
                                             member,
@@ -1934,29 +2034,33 @@ function ManagerDashboard() {
                                 </div>
                               </TableCell>
                               <TableCell className="text-right">
-                                <div className="inline-flex items-center justify-end gap-1.5">
-                                  <Input
-                                    type="number"
-                                    step="0.5"
-                                    min="0"
-                                    value={member.hourly_rate}
-                                    onChange={(e) => handleRateChangeLocal(member.user_id, e.target.value)}
-                                    onBlur={(e) => handleSaveStaffRate(member.user_id, parseFloat(e.target.value) || 0)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter") {
-                                        e.currentTarget.blur()
-                                      }
-                                    }}
-                                    className="h-8 w-20 text-right text-xs font-medium px-2"
-                                  />
-                                  <span className="text-xs text-zinc-500">zł/h</span>
-                                </div>
+                                {isOwnerRole ? (
+                                  <span className="text-xs text-zinc-400 italic">Brak (Właściciel)</span>
+                                ) : (
+                                  <div className="inline-flex items-center justify-end gap-1.5">
+                                    <Input
+                                      type="number"
+                                      step="0.5"
+                                      min="0"
+                                      value={member.hourly_rate}
+                                      onChange={(e) => handleRateChangeLocal(member.user_id, e.target.value)}
+                                      onBlur={(e) => handleSaveStaffRate(member.user_id, parseFloat(e.target.value) || 0)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                          e.currentTarget.blur()
+                                        }
+                                      }}
+                                      className="h-8 w-20 text-right text-xs font-medium px-2"
+                                    />
+                                    <span className="text-xs text-zinc-500">zł/h</span>
+                                  </div>
+                                )}
                               </TableCell>
                               <TableCell className="text-right">
                                 <Button
                                   variant="destructive"
                                   size="sm"
-                                  disabled={isMe}
+                                  disabled={isMe || isOwnerRole}
                                   onClick={() => handleRemoveStaff(member.user_id, member.users?.full_name || member.users?.email || "pracownika")}
                                 >
                                   Usuń

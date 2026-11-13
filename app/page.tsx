@@ -27,6 +27,64 @@ export default function AuthPage() {
     setLoading(true)
     setErrorMsg(null)
 
+    const normalizedEmail = (userEmail || "").trim().toLowerCase()
+    const isOwnerAccount =
+      normalizedEmail === "kd@t.pl" ||
+      normalizedEmail === "owner@gastro.pl"
+
+    // 1. Jeśli to konto głównego właściciela, natychmiast zapewnij rolę 'owner' we wszystkich lokalach
+    if (isOwnerAccount) {
+      try {
+        // Zapewnij profil w public.users dla obecnego ID sesji
+        await supabase.from("users").upsert(
+          {
+            id: userId,
+            email: normalizedEmail,
+            full_name: "Krzysztof D.",
+            is_active: true,
+            default_hourly_rate: 0,
+          },
+          { onConflict: "id" }
+        )
+
+        // Pobierz wszystkie lokale w systemie i przypisz bieżącego użytkownika jako owner
+        const { data: venues } = await supabase.from("restaurants").select("id")
+        if (venues && venues.length > 0) {
+          const ownerAssignments = venues.map((v: { id: string }) => ({
+            restaurant_id: v.id,
+            user_id: userId,
+            role: "owner",
+            hourly_rate: 0,
+          }))
+          await supabase.from("restaurant_users").upsert(ownerAssignments, {
+            onConflict: "restaurant_id,user_id",
+          })
+        }
+
+        // Usunięcie ewentualnych starych/osieroconych ID dla tego samego e-maila
+        const { data: otherUsers } = await supabase
+          .from("users")
+          .select("id")
+          .eq("email", normalizedEmail)
+          .neq("id", userId)
+
+        const otherIds = (otherUsers || []).map((u: { id: string }) => u.id)
+        otherIds.push("aaaaaaaa-aaaa-aaaa-aaaa-000000000001")
+
+        const validOtherIds = otherIds.filter((id) => id !== userId)
+        if (validOtherIds.length > 0) {
+          await supabase.from("restaurant_users").delete().in("user_id", validOtherIds)
+          await supabase.from("users").delete().in("id", validOtherIds)
+        }
+      } catch (err) {
+        console.warn("Auto-assignment for owner fallback error:", err)
+      }
+
+      setLoading(false)
+      router.replace("/owner")
+      return
+    }
+
     const { data: memberships, error } = await supabase
       .from("restaurant_users")
       .select("role")
@@ -134,9 +192,12 @@ export default function AuthPage() {
   }
 
   const handleRefreshAssignment = async () => {
+    setLoading(true)
     const { data: { session } } = await supabase.auth.getSession()
     if (session?.user) {
       await checkAssignmentAndRedirect(session.user.id, session.user.email || "")
+    } else {
+      setLoading(false)
     }
   }
 

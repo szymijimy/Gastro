@@ -173,6 +173,24 @@ function OwnerDashboard() {
         setCurrentUserEmail(email)
         setCurrentUserName(resolvedName)
 
+        // Upewnij się, że konto właściciela jest przypisane do lokali jako owner
+        if ((email.toLowerCase() === "kd@t.pl" || email.toLowerCase() === "owner@gastro.pl") && uid) {
+          try {
+            const { data: allVenues } = await supabase.from("restaurants").select("id")
+            if (allVenues && allVenues.length > 0) {
+              const rows = allVenues.map((v: { id: string }) => ({
+                restaurant_id: v.id,
+                user_id: uid,
+                role: "owner",
+                hourly_rate: 0,
+              }))
+              await supabase.from("restaurant_users").upsert(rows, { onConflict: "restaurant_id,user_id" })
+            }
+          } catch (e) {
+            console.warn("Owner self-heal error:", e)
+          }
+        }
+
         // Sprawdź rolę 'owner' w bazie
         const { data: rolesData } = await supabase
           .from("restaurant_users")
@@ -473,9 +491,9 @@ function OwnerDashboard() {
         // Mock demonstracyjny kadry wyłącznie gdy baza jest całkowicie pusta
         setStaffUsers([
           {
-            id: "aaaaaaaa-aaaa-aaaa-aaaa-000000000001",
-            email: "kd@t.pl",
-            full_name: "Krzysztof D.",
+            id: currentUserId || "aaaaaaaa-aaaa-aaaa-aaaa-000000000001",
+            email: currentUserEmail || "kd@t.pl",
+            full_name: currentUserName || "Krzysztof D.",
             is_active: true,
             default_hourly_rate: 0,
             memberships: [
