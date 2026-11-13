@@ -1718,6 +1718,12 @@ export function AttendanceManagerModule({
           .order("sort_order", { ascending: true }),
       ])
 
+      if (logsRes.error) console.error("Błąd pobierania attendance_logs:", logsRes.error)
+      if (rulesRes.error) console.error("Błąd pobierania bonus_rules:", rulesRes.error)
+      if (revRes.error) console.error("Błąd pobierania daily_revenues:", revRes.error)
+      if (manRes.error) console.error("Błąd pobierania manual_bonuses:", manRes.error)
+      if (fieldsRes.error) console.error("Błąd pobierania restaurant_revenue_fields:", fieldsRes.error)
+
       if (logsRes.data) setLogs(logsRes.data as AttendanceLog[])
       if (rulesRes.data) setRules(rulesRes.data as BonusRule[])
       if (revRes.data) {
@@ -1804,12 +1810,15 @@ export function AttendanceManagerModule({
       .update({ is_active: nextState })
       .eq("id", rule.id)
 
-    if (!error) {
-      setRules((prev) =>
-        prev.map((r) => (r.id === rule.id ? { ...r, is_active: nextState } : r))
-      )
-      showToast(nextState ? "Włączono zasadę premiowania" : "Wyłączono zasadę premiowania", "info")
+    if (error) {
+      showToast("Błąd zmiany statusu zasady: " + error.message, "error")
+      return
     }
+
+    setRules((prev) =>
+      prev.map((r) => (r.id === rule.id ? { ...r, is_active: nextState } : r))
+    )
+    showToast(nextState ? "Włączono zasadę premiowania" : "Wyłączono zasadę premiowania", "info")
   }
 
   const handleDeleteRule = async (id: string) => {
@@ -1817,10 +1826,13 @@ export function AttendanceManagerModule({
     if (!confirmed) return
 
     const { error } = await supabase.from("bonus_rules").delete().eq("id", id)
-    if (!error) {
-      setRules((prev) => prev.filter((r) => r.id !== id))
-      showToast("Zasada została usunięta", "info")
+    if (error) {
+      showToast("Błąd usuwania zasady: " + error.message, "error")
+      return
     }
+
+    setRules((prev) => prev.filter((r) => r.id !== id))
+    showToast("Zasada została usunięta", "info")
   }
 
   const handleAddManualBonus = async (
@@ -1858,10 +1870,13 @@ export function AttendanceManagerModule({
     if (!confirmed) return
 
     const { error } = await supabase.from("manual_bonuses").delete().eq("id", id)
-    if (!error) {
-      setManualBonuses((prev) => prev.filter((mb) => mb.id !== id))
-      showToast("Premia została usunięta", "info")
+    if (error) {
+      showToast("Błąd usuwania premii: " + error.message, "error")
+      return
     }
+
+    setManualBonuses((prev) => prev.filter((mb) => mb.id !== id))
+    showToast("Premia została usunięta", "info")
   }
 
   const handleSelectRevDate = (newDate: string) => {
@@ -2262,10 +2277,13 @@ export function AttendanceManagerModule({
     if (!confirmed) return
 
     const { error } = await supabase.from("attendance_logs").delete().eq("id", id)
-    if (!error) {
-      setLogs((prev) => prev.filter((l) => l.id !== id))
-      showToast("Wpis obecności został usunięty", "info")
+    if (error) {
+      showToast("Błąd usuwania wpisu: " + error.message, "error")
+      return
     }
+
+    setLogs((prev) => prev.filter((l) => l.id !== id))
+    showToast("Wpis obecności został usunięty", "info")
   }
 
   if (loading) {

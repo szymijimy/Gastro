@@ -130,6 +130,12 @@ export function StaffAttendanceModule({
           .order("sort_order", { ascending: true }),
       ])
 
+      if (logsRes.error) console.error("Błąd pobierania attendance_logs:", logsRes.error)
+      if (rulesRes.error) console.error("Błąd pobierania bonus_rules:", rulesRes.error)
+      if (revRes.error) console.error("Błąd pobierania daily_revenues:", revRes.error)
+      if (manRes.error) console.error("Błąd pobierania manual_bonuses:", manRes.error)
+      if (fieldsRes.error) console.error("Błąd pobierania restaurant_revenue_fields:", fieldsRes.error)
+
       if (logsRes.data) setAllLogs(logsRes.data as AttendanceLog[])
       if (rulesRes.data) setRules(rulesRes.data as BonusRule[])
       if (revRes.data) {
