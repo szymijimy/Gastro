@@ -76,6 +76,17 @@ export function OwnerFinancialTab({
     return Math.round((summary.total_ksef_cost_net / summary.total_revenue) * 1000) / 10
   }, [summary.total_revenue, summary.total_ksef_cost_net])
 
+  // Obliczenie sumarycznego przychodu całej sieci dla prawidłowych udziałów procentowych
+  const totalNetworkRevenue = useMemo(() => {
+    return summary.venue_breakdown.reduce((acc, v) => acc + (v.revenue || 0), 0)
+  }, [summary.venue_breakdown])
+
+  // Filtrowanie zestawienia lokali w zależności od wybranego widoku
+  const displayedBreakdown = useMemo(() => {
+    if (selectedVenueId === "all") return summary.venue_breakdown
+    return summary.venue_breakdown.filter((vb) => vb.restaurant_id === selectedVenueId)
+  }, [summary.venue_breakdown, selectedVenueId])
+
   const totalCosts = summary.total_labor_cost + summary.total_ksef_cost_net
 
   return (
@@ -372,13 +383,15 @@ export function OwnerFinancialTab({
               Rentowność Poszczególnych Lokali
             </CardTitle>
             <CardDescription className="text-xs">
-              Porównanie efektywności operacyjnej lokali w sieci.
+              {selectedVenueId === "all"
+                ? "Porównanie efektywności operacyjnej lokali w sieci."
+                : "Efektywność operacyjna i rentowność wybranego lokalu."}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {summary.venue_breakdown.map((vb) => {
+            {displayedBreakdown.map((vb) => {
               const venueRevenueShare =
-                summary.total_revenue > 0 ? (vb.revenue / summary.total_revenue) * 100 : 0
+                totalNetworkRevenue > 0 ? (vb.revenue / totalNetworkRevenue) * 100 : 0
               return (
                 <div
                   key={vb.restaurant_id}

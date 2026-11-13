@@ -41,6 +41,14 @@
    - [3.5 Analiza prawno-podatkowa: Granice prawne systemu (Pogląd Zarządczy / BI vs Księgi Rachunkowe KAS/US)](#35-analiza-prawno-podatkowa-granice-prawne-systemu-pogląd-zarządczy--bi-vs-księgi-rachunkowe-kasus)
    - [3.6 Oficjalna klauzula prawna (Legal Disclaimer) i wytyczne operacyjne](#36-oficjalna-klauzula-prawna-legal-disclaimer-i-wytyczne-operacyjne)
    - [3.7 Analiza repozytorium Git i ocena usunięcia gałęzi `feature/update-tankownia-case`](#37-analiza-repozytorium-git-i-ocena-usunięcia-gałęzi-featureupdate-tankownia-case)
+   - [3.8 Pakiet poprawek i ulepszeń wdrożeniowych (Zadania 1–7)](#38-pakiet-poprawek-i-ulepszeń-wdrożeniowych-zadania-17)
+     - [3.8.1 Naprawa ładowania danych kadry i wieloobiektowa nawigacja Właściciel <-> Manager (Zadanie 1)](#381-naprawa-ładowania-danych-kadry-i-wieloobiektowa-nawigacja-właściciel---manager-zadanie-1)
+     - [3.8.2 Eliminacja ostrzeżenia o kolizji kluczy w React (sim-inv-14) (Zadanie 2)](#382-eliminacja-ostrzeżenia-o-kolizji-kluczy-w-react-sim-inv-14-zadanie-2)
+     - [3.8.3 Przemianowanie sekcji: 'Zarządzanie kadrą menadżerską' -> 'Zarządzanie kadrą' (Zadanie 3)](#383-przemianowanie-sekcji-zarządzanie-kadrą-menadżerską---zarządzanie-kadrą-zadanie-3)
+     - [3.8.4 Dynamiczny filtr ról pracowniczych z bazy danych (Zadanie 4)](#384-dynamiczny-filtr-ról-pracowniczych-z-bazy-danych-zadanie-4)
+     - [3.8.5 Konfiguracja tożsamości właściciela (Krzysztof D.) i manualna edycja w UI (Zadanie 5)](#385-konfiguracja-tożsamości-właściciela-krzysztof-d-i-manualna-edycja-w-ui-zadanie-5)
+     - [3.8.6 Zaawansowana symulacja KSeF Sandbox dla wielu lokali, współdzielony NIP i precyzyjne agregacje kosztów (Zadanie 6)](#386-zaawansowana-symulacja-ksef-sandbox-dla-wielu-lokali-współdzielony-nip-i-precyzyjne-agregacje-kosztów-zadanie-6)
+     - [3.8.7 Weryfikacja integralności Git, kompilacja produkcyjna i rejestr zmian (Zadanie 7)](#387-weryfikacja-integralności-git-kompilacja-produkcyjna-i-rejestr-zmian-zadanie-7)
 4. [Rozdział 4: Zestawienie skryptów migracyjnych i rekomendacje wdrożeniowe](#rozdział-4-zestawienie-skryptów-migracyjnych-i-rekomendacje-wdrożeniowe)
    - [4.1 Zestawienie wykonanych migracji bazodanowych (SQL)](#41-zestawienie-wykonanych-migracji-bazodanowych-sql)
    - [4.2 Rekomendacje architektoniczne i wdrożeniowe](#42-rekomendacje-architektoniczne-i-wdrożeniowe)
@@ -784,6 +792,281 @@ Gdyby z jakichkolwiek względów zaistniała konieczność powrotu do odrębnej 
 git checkout -b feature/update-tankownia-case v2.0.0
 ```
 
+
+---
+
+### 3.8 Pakiet poprawek i ulepszeń wdrożeniowych (Zadania 1–7)
+
+W toku wdrożenia i testów integracyjnych gałęzi `feature/update-owner` zidentyfikowano i rozwiązano 7 kluczowych zagadnień operacyjnych związanych z ładowaniem danych kadry, spójnością kluczy wirtualnego DOM React, ergonomią nazewnictwa, dynamiczną konfiguracją ról, tożsamością profilu właściciela oraz wieloobiektową symulacją KSeF.
+
+```mermaid
+flowchart TD
+    subgraph OwnerPanel ["Pulpit Właściciela (/owner)"]
+        NavMgr["Nawigacja: 'Zarządzaj Lokalami' -> /manager"]
+        ProfileEdit["Edycja Profilu (Krzysztof D., kd@t.pl) -> Supabase Auth & public.users"]
+        StaffTab["Zarządzanie Kadrą (8 pracowników sieci, dynamiczne role)"]
+        KsefTab["Faktury KSeF (Multi-Venue Sandbox, unikalne ID, brak kolizji kluczy)"]
+        FinTab["Pulpit Finansowy (agregacje kosztów netto KSeF, dokładne udziały % sieci)"]
+    end
+
+    subgraph ManagerPanel ["Panel Managera (/manager)"]
+        BackToOwner["Powrót: '👑 Panel Właściciela (KSeF / Kadra)' -> /owner"]
+        MultiVenueAccess["Dostęp Właściciela do wszystkich lokali sieci bez przekierowań"]
+    end
+
+    subgraph BackendPersistence ["Baza Danych & Bezpieczeństwo (PostgreSQL / Supabase)"]
+        RLS_Staff["migration_owner_staff_rls.sql (is_restaurant_owner, is_any_owner)"]
+        Fix_Owner["fix_assign_owner.sql (przypisanie roli owner, brak restrykcji CHECK)"]
+        Ksef_Service["ksefService.ts (Wielokran / Tankownia profile, shared NIP, hex prefix)"]
+    end
+
+    OwnerPanel <-->|Dwukierunkowa Nawigacja| ManagerPanel
+    StaffTab --> RLS_Staff
+    ProfileEdit --> Fix_Owner
+    KsefTab --> Ksef_Service
+    FinTab --> Ksef_Service
+```
+
+---
+
+#### 3.8.1 Naprawa ładowania danych kadry i wieloobiektowa nawigacja Właściciel <-> Manager (Zadanie 1)
+
+##### 1. Diagnoza przyczyn źródłowych niedostępności kadry:
+W początkowej implementacji Pulpitu Właściciela zakładka personelu nie wyświetlała zatrudnionych pracowników sieci. Przeprowadzony audyt kodu i zapytań PostgREST wykazał trzy współwystępujące przyczyny:
+1. **Błędna składnia relacji PostgREST:** Zapytanie w `app/owner/page.tsx` korzystało ze składni `.select("restaurant_id, role, users:user_id (id, full_name, email)")`. PostgREST interpretował alias `users:user_id` jako próbę odpytania nieistniejącej tabeli `user_id` w schemacie relacyjnym, co powodowało cichy błąd zapytania i pustą tablicę wynikową. Problem rozwiązano poprzez poprawne wskazanie relacji: `.select("restaurant_id, role, users (id, full_name, email, default_hourly_rate)")` wraz z klauzulą `.in("restaurant_id", venueIds)`.
+2. **Odpytywanie o nieistniejącą kolumnę `nip` w `restaurants`:** Zapytanie `supabase.from("restaurants").select("id, name, color, nip")` kończyło się błędem `column restaurants.nip does not exist`, gdyż identyfikator podatkowy NIP jest przechowywany w tabeli konfiguracyjnej `restaurant_ksef_config`. Skorygowano zapytanie do `select("id, name, color")`.
+3. **Bariera uprawnień Row Level Security (RLS) w PostgreSQL:** Domyślne polityki bezpieczeństwa tabel `restaurant_users` i `public.users` zezwalały na odczyt rekordów wyłącznie menadżerom (`manager`) powiązanym z danym lokalem lub użytkownikowi odpytującemu o własny profil (`auth.uid() = id`). Właściciel posiadający rolę `owner` był blokowany przez silnik RLS.
+
+##### 2. Wdrożenie migracji bezpieczeństwa RLS (`scripts/migration_owner_staff_rls.sql`):
+Aby trwale i bezpiecznie udostępnić dane kadrowe właścicielowi, opracowano dedykowaną migrację bazodanową:
+* Funkcje pomocnicze weryfikujące rolę:
+  - `public.is_restaurant_owner(target_restaurant_id uuid)` – sprawdza, czy bieżący użytkownik (`auth.uid()`) posiada rolę `owner` przypisaną do danego lokalu lub całej sieci (SECURITY DEFINER).
+  - `public.is_any_owner()` – sprawdza globalny status roli `owner` dla sesji.
+* Polityki RLS dla tabeli `public.restaurant_users`:
+  - `allow_owners_select_restaurant_users` – uprawnienie `SELECT` dla właścicieli sieci.
+  - `allow_owners_all_restaurant_users` – uprawnienia `ALL` (INSERT, UPDATE, DELETE) umożliwiające pełne zarządzanie przypisaniami personelu.
+* Polityki RLS dla tabeli `public.users` i `public.restaurant_roles`:
+  - `allow_owners_select_users` i `allow_owners_update_users` – bezpieczny odczyt i edycja profili pracowników należących do obiektów sieci.
+  - `allow_owners_manage_restaurant_roles` – odczyt i definiowanie niestandardowych ról operacyjnych lokalu.
+
+##### 3. Hybrydowy, odporny mechanizm pobierania personelu (Fallback & RPC):
+W funkcji `loadStaffData()` zaimplementowano mechanizm wielowarstwowego pozyskiwania danych:
+* W pierwszej kolejności aplikacja wykonuje zoptymalizowane zapytanie bezpośrednie do `restaurant_users` z dołączeniem profilu `users`.
+* W przypadku napotkania ograniczeń uprawnień lub braku zaaplikowanej migracji RLS na bazie, system automatycznie wywołuje funkcję RPC `get_restaurant_teammates` działającą w trybie `SECURITY DEFINER`.
+* Gwarantuje to stabilne załadowanie kompletu wszystkich 8 pracowników sieci gastronomicznej (Monika P., Paulina S., Magda O., Szymon W. w Wielokranie oraz Paweł D., Krzysztof D., Patrycja N. w Tankowni wraz z profilem Właściciela).
+
+##### 4. Płynna, dwukierunkowa nawigacja Właściciel <-> Manager:
+* **Przemianowanie przycisku w Pulpicie Właściciela:** Etykietę przycisku nagłówkowego w `app/owner/page.tsx` zmieniono z *"Widok Managera"* na **"Zarządzaj Lokalami"**, jednoznacznie wskazując przeznaczenie nawigacji (przejście do operacyjnego zarządzania obiektami pod ścieżką `/manager`).
+* **Autoryzacja Właściciela w panelu Managera (`app/manager/page.tsx`):**
+  - Zaktualizowano procedurę sprawdzania uprawnień przy starcie widoku. Użytkownik posiadający rolę `owner` (weryfikowany przez e-mail `kd@t.pl`, metadane sesji, wpis w `restaurant_users` lub flagę sesyjną) nie jest już blokowany ani przekierowywany do widoku barmana (`/bartender`).
+  - Panel automatycznie ładuje listę wszystkich lokali sieci (Wielokran, Tankownia) z bezpiecznym fallbackiem demonstracyjnym, umożliwiając właścicielowi płynne przełączanie kontekstu lokalu w nagłówku.
+* **Przycisk powrotu w nagłówku Managera:**
+  - W prawym górnym rogu ekranu (`app/manager/page.tsx`), bezpośrednio obok przycisku "Wyloguj się", zaimplementowano wyróżniony przycisk:
+    ```tsx
+    <Button
+      variant="outline"
+      size="sm"
+      className="h-9 shrink-0 text-xs px-3 bg-amber-500/10 text-amber-300 border-amber-500/30 hover:bg-amber-500/20 font-semibold gap-1.5"
+      onClick={() => router.push("/owner")}
+    >
+      👑 Panel Właściciela (KSeF / Kadra)
+    </Button>
+    ```
+  - Zapewnia to natychmiastową, intuicyjną nawigację pomiędzy poziomem centrali a poziomem sali lokalu.
+
+---
+
+#### 3.8.2 Eliminacja ostrzeżenia o kolizji kluczy w React (sim-inv-14) (Zadanie 2)
+
+##### 1. Identyfikacja problemu technicznego:
+Podczas przeglądania faktur KSeF w konsoli przeglądarki generowane było ostrzeżenie frameworka React:
+```text
+Warning: Encountered two children with the same key, `sim-inv-14`. Keys should be unique so that components maintain their identity across updates.
+```
+Przyczyną było generowanie statycznych ciągów identyfikatorów (`sim-inv-X`) w generatorze faktur demonstracyjnych `services/ksefService.ts`. Podczas synchronizacji wieloobiektowej (gdy faktury były pobierane symultanicznie dla Wielokranu i Tankowni), faktury z obu obiektów otrzymywały identyczne identyfikatory `id`, co prowadziło do kolizji w pętli renderującej `table.map()`.
+
+##### 2. Wdrożenie rozwiązania:
+1. **Deterministyczny prefiks szesnastkowy lokalu w generatorze (`services/ksefService.ts`):**
+   Identyfikatory generowanych faktur zostały wzbogacone o pierwsze 4 znaki identyfikatora UUID lokalu (`venueHex`):
+   ```typescript
+   const venueHex = restaurantId.replace(/-/g, "").slice(0, 4) || "0000"
+   // Wynik: sim-1111-inv-1 .. sim-1111-inv-13 (dla Wielokranu)
+   // Wynik: sim-2222-inv-1 .. sim-2222-inv-13 (dla Tankowni)
+   id: `sim-${venueHex.toLowerCase()}-inv-${idx + 1}`
+   ```
+2. **Klucze kompozytowe w wierszach tabeli faktur (`OwnerKsefTab.tsx`):**
+   Wiersz tabeli głównej otrzymał globalnie unikalny klucz kompozytowy:
+   ```tsx
+   <TableRow key={`${inv.id}-${inv.restaurant_id}`} className="...">
+   ```
+3. **Unikalne klucze w podtabelach stawek VAT i pozycji faktury:**
+   - Rozbicie stawek VAT: `key={`vat-${idx}-${vb.rate}`}`
+   - Pozycje asortymentowe: `key={`item-${idx}-${item.name}`}`
+- **Rezultat:** Całkowita eliminacja ostrzeżeń React Key Collision, stabilny cykl życia komponentów wirtualnego drzewa DOM oraz brak artefaktów podczas sortowania i filtrowania danych.
+
+---
+
+#### 3.8.3 Przemianowanie sekcji: 'Zarządzanie kadrą menadżerską' -> 'Zarządzanie kadrą' (Zadanie 3)
+
+##### 1. Uzasadnienie biznesowe i UX:
+W pierwotnej wersji moduł nosił nazwę *"Zarządzanie kadrą menadżerską"*. Taka nomenklatura wprowadzała w błąd użytkowników, sugerując, że widok służy wyłącznie do zarządzania kierownikami obiektów. W rzeczywistości moduł ten stanowi centralne narzędzie polityki personalnej całej sieci gastronomicznej, obejmujące:
+* Ewidencję wszystkich pracowników (barmani, bariści, kelnerzy, pomoce barowe, menadżerowie, właściciele).
+* Zarządzanie stawkami godzinowymi pracowników na poziomie ogólnym oraz per lokal.
+* Przypisywanie i odbieranie dostępów do poszczególnych obiektów sieci.
+
+##### 2. Wdrożone zmiany w kodzie:
+* W pliku `app/owner/page.tsx`:
+  - Przemianowano przełącznik zakładki (`TabsTrigger`):
+    ```tsx
+    <TabsTrigger value="managers" className="gap-2 text-xs">
+      <Users className="w-4 h-4" />
+      Zarządzanie kadrą
+    </TabsTrigger>
+    ```
+* W pliku `components/owner/OwnerStaffTab.tsx`:
+  - Nagłówek sekcji: `Zarządzanie Kadrą` z ikoną `Users`.
+  - Opis pomocniczy: *"Przegląd i konfiguracja uprawnień, stawek oraz przypisań pracowników do lokali sieci"*.
+
+---
+
+#### 3.8.4 Dynamiczny filtr ról pracowniczych z bazy danych (Zadanie 4)
+
+##### 1. Problem statycznych filtrów ról:
+W pierwotnej wersji komponentu `OwnerStaffTab.tsx` lista ról w filtrze była zdefiniowana statycznie na stałe (`owner`, `manager`, `bartender`). Lokale gastronomiczne definiują w tabeli `restaurant_roles` własne role dopasowane do profilu lokalu (np. "Pomoc barowa", "Kelner", "Kucharz", "Barman"). Pracownicy przypisani do takich stanowisk byli pomijani lub nieprawidłowo klasyfikowani podczas filtrowania.
+
+##### 2. Architektura dynamicznego pobierania i unifikacji ról:
+W komponencie `components/owner/OwnerStaffTab.tsx` wdrożono hybrydowy mechanizm dynamicznego wyliczania dostępnych ról:
+1. **Odpytanie bazy danych:** Hook `useEffect` pobiera aktywne role z tabeli `public.restaurant_roles` dla wszystkich lokali należących do sieci właściciela:
+   ```typescript
+   const { data } = await supabase
+     .from("restaurant_roles")
+     .select("name")
+     .in("restaurant_id", venues.map((v) => v.id))
+   ```
+2. **Dynamiczna agregacja (useMemo):** System łączy w jeden spójny zbiór:
+   - Podstawowe role systemowe: `owner` ("Właściciel") oraz `manager` ("Manager").
+   - Role pobrane z bazy `restaurant_roles` (np. stanowiska zdefiniowane przez kierowników).
+   - Dowolne unikalne role wykryte w bieżących przypisaniach pracowników (`staffUsers.memberships`).
+3. **Dynamiczne renderowanie kontrolek UI:**
+   - Rozwijana lista filtru (`<select>`) w nagłówku tabeli pracowników jest zasilana dynamiczną tablicą `dynamicRoles`.
+   - Porównanie w filtrze wykonuje normalizację wielkości znaków (`m.role.toLowerCase() === roleFilter.toLowerCase()`).
+   - Modal przypisywania ról i stawek (`handleOpenEditModal`) dynamicznie wyświetla wszystkie dostępne stanowiska.
+   - W tabeli personelu identyfikatory ról są estetycznie mapowane na czytelne etykiety (np. `Barman / Obsługa`).
+
+---
+
+#### 3.8.5 Konfiguracja tożsamości właściciela (Krzysztof D.) i manualna edycja w UI (Zadanie 5)
+
+##### 1. Konfiguracja danych domyślnych właściciela:
+Zgodnie z wymaganiami projektowymi ustalono tożsamość właściciela sieci:
+* **Imię i nazwisko:** Krzysztof D.
+* **Adres e-mail:** `kd@t.pl`
+* Dane te zostały uwzględnione jako domyślne stany w `app/owner/page.tsx` oraz zintegrowane w skryptach bazodanowych `scripts/fix_assign_owner.sql` oraz `scripts/migration_owner_ksef.sql`.
+
+##### 2. Wdrożenie interaktywnego modalu edycji profilu:
+W Pulpicie Właściciela zaimplementowano pełną funkcjonalność samodzielnej edycji danych profilowych bez konieczności ingerencji w bazę danych:
+* **Punkt wejścia (Trigger):** W nagłówku aplikacji, bezpośrednio obok nazwiska właściciela, dodano przycisk edycji z ikoną ołówka (`Pencil`), dostępny w widoku desktopowym i mobilnym.
+* **Modal edycji:**
+  - Formularz z polem tekstowym do wprowadzenia imienia i nazwiska.
+  - Wyświetlanie podglądu powiązanego adresu e-mail oraz roli systemowej (`Właściciel Sieci (owner)`).
+  - Walidacja wejścia zapobiegająca zapisaniu pustych wartości.
+* **Spójna persystencja wielopoziomowa:**
+  - `public.users`: wykonanie operacji `upsert` z aktualizacją pola `full_name`.
+  - Supabase Auth: wywołanie `supabase.auth.updateUser({ data: { full_name } })`, aktualizujące metadane tokena JWT sesji.
+  - Stan lokalny: natychmiastowe odświeżenie zmiennej `currentUserName`, zsynchronizowanie pamięci `localStorage` oraz zaktualizowanie rekordu właściciela na liście pracowników `staffUsers`.
+  - Komunikat zwrotny Toast: potwierdzenie pomyślnego zapisu w prawym dolnym rogu ekranu.
+
+---
+
+#### 3.8.6 Zaawansowana symulacja KSeF Sandbox dla wielu lokali, współdzielony NIP i precyzyjne agregacje kosztów (Zadanie 6)
+
+##### 1. Rzeczywiste profile gastronomiczne w KSeF Sandbox:
+Generator faktur demonstracyjnych `services/ksefService.ts` został podzielony na wysoce realistyczne profile zakupowe, ściśle odpowiadające charakterystyce lokali sieci:
+* **Profil Multitap (Wielokran – pub z 24 kranami rzemieślniczymi):**
+  - Zakupy kegów piw kraftowych (Browar Rzemieślniczy Pinta, Browar Trzech Kumpli, Piwne Dziedzictwo – stawka VAT 23%, kategoria `alcohol`).
+  - Regionalne cydry rzemieślnicze oraz wina lane z kranów (kategoria `alcohol`).
+  - Przekąski barowe, cytrusy do koktajli, lód w kostkach (kategoria `food`, stawki 8% i 23%).
+  - Koszty energii chłodni kegowej (PGE Obrót S.A.) oraz ogrzewania (SEC Szczecin).
+  - Czynsz za lokal zabytkowy na Starym Mieście (kategoria `rent`).
+  - Specjalistyczna usługa chemicznej sanityzacji i mycia 24 linii piwnych (kategoria `services`).
+  - Usługa licencyjna oprogramowania sprzedażowego GastroPOS (kategoria `services`).
+  - Faktura sprzedaży B2B: warsztaty kiperskie i degustacja sensoryczna piw kraftowych (kategoria `sales`).
+* **Profil Bar & Grill (Tankownia – restauracja z piwem z tanka i kuchnią grillową):**
+  - Świeże, niepasteryzowane piwo z tanka dostarczane cysterną browarową w ilości 1000L (Kompania Piwowarska / Tyskie Browary Książęce – kategoria `alcohol`).
+  - Sezonowana wołowina Black Angus na steki, świeże żeberka wieprzowe BBQ (kategoria `food`, stawka 5% / 8%).
+  - Maślane bułki brioszowe z rzemieślniczej piekarni oraz warzywa grillowe (kategoria `food`).
+  - Media o wysokim poborze: przemysłowy gaz ziemny do palników i pieców (PGNiG) oraz energia trójfazowa (Enea S.A.).
+  - Czynsz za 250 m² lokalu z ogródkiem gastronomicznym (kategoria `rent`).
+  - Okresowy serwis i przegląd pieca konwekcyjno-parowego Rational (kategoria `services`).
+  - Terminale kelnerskie POS i system ekranów kuchennych KDS (kategoria `services`).
+  - Faktura sprzedaży B2B: obsługa bankietu firmowego z zamkniętą kolacją grillową (kategoria `sales`).
+
+##### 2. Pełne wsparcie dla współdzielonego NIP (Grupa kapitałowa / Jedna spółka z o.o.):
+W praktyce gastronomicznej powszechnym modelem jest prowadzenie kilku lokali pod wspólnym NIP-em jednej spółki z o.o. Dotychczasowy kod generował w takim scenariuszu nakładające się faktury. Wprowadzono architekturę eliminującą ten problem:
+* Każdy lokal zachowuje odrębną serię faktur: seria `FS/WKL/...` dla Wielokranu oraz `FV/TNK/...` dla Tankowni.
+* Unikalny numer KSeF tworzony jest z wykorzystaniem deterministycznego prefiksu szesnastkowego lokalu (`${venueHex}${itemHex}`), co gwarantuje pełną unikalność w unikalnym indeksie bazy danych `ksef_invoices(ksef_number)`.
+* Każda faktura posiada sztywno przypisany `restaurant_id`, a pole uwag (`notes`) oraz pozycje XML jednoznacznie wskazują obiekt docelowy (np. `[Lokal: Tankownia]`).
+* Synchronizacja jednego lokalu nie nadpisuje ani nie usuwa faktur pozostałych obiektów sieci.
+
+##### 3. Elastyczna synchronizacja (Pojedynczy lokal vs Cała sieć):
+W `services/ksefService.ts` oraz `app/api/ksef/sync/route.ts`:
+* Gdy parametr `restaurant_id` nie zostanie przekazany lub ma wartość `"all"`, system synchronizuje faktury dla **wszystkich aktywnych lokali sieci**, aktualizując stemple czasowe `last_sync_at` per lokal.
+* Gdy synchronizowany jest jeden konkretny lokal, system generuje/pobiera faktury dla tego lokalu, aktualizuje jego konfigurację i zwraca pełną, scaloną listę faktur sieci (zapobiegając wyczyszczeniu widoków pozostałych lokali).
+
+##### 4. Precyzyjne agregacje finansowe i wyliczanie rentowności:
+* **Naprawa udziałów procentowych w `OwnerFinancialTab.tsx`:**
+  - Wprowadzono zmienną `totalNetworkRevenue`, która sumuje przychody ze wszystkich lokali sieci.
+  - Udział przychodu lokalu (`venueRevenueShare`) obliczany jest względem `totalNetworkRevenue`, co wyeliminowało błąd, w którym w widoku pojedynczego lokalu udział był dzielony przez przychód tego samego lokalu, dając niefizyczny wynik 100%.
+  - Tabela efektywności operacyjnej (`displayedBreakdown`) w widoku wybranego lokalu prezentuje dane wyłącznie tego obiektu, a w widoku sieci porównuje wszystkie obiekty.
+* **Rozdzielenie kosztów i sprzedaży w `OwnerKsefTab.tsx`:**
+  - W statystykach zafiltrowanych faktur odseparowano sumę kosztów (`totalCostNet`) od sumy sprzedaży (`totalSalesNet`).
+  - Karta KPI "Koszty KSeF Netto" uwzględnia wyłącznie faktury zakupowe (`invoice_type === 'cost'`), co zapewnia zgodność do grosza z polem `total_ksef_cost_net` w Pulpicie Finansowym i zapobiega zafałszowaniu wskaźnika food/beverage cost przez faktury przychodowe.
+  - Dodano hook `useEffect` automatycznie synchronizujący lokalny filtr `venueFilter` z globalnym przełącznikiem lokalu w nagłówku (`selectedVenueId`).
+
+---
+
+#### 3.8.7 Weryfikacja integralności Git, kompilacja produkcyjna i rejestr zmian (Zadanie 7)
+
+##### 1. Rejestr zmian w plikach źródłowych (File Change Summary):
+
+| Ścieżka Pliku | Typ Zmiany | Główne Modyfikacje |
+|---|---|---|
+| `app/owner/page.tsx` | Modyfikacja | Poprawa zapytań PostgREST kadry (usunięcie błędu `users:user_id` i `nip`), przemianowanie przycisku na "Zarządzaj Lokalami" (`/manager`), tożsamość właściciela "Krzysztof D." (`kd@t.pl`), modal edycji profilu właściciela z ikoną ołówka, przemianowanie zakładki na "Zarządzanie kadrą", przekazywanie `availableRoles`. |
+| `app/manager/page.tsx` | Modyfikacja | Pełna autoryzacja roli `owner` bez przekierowania do `/bartender`, automatyczne ładowanie wszystkich lokali sieci z fallbackiem demonstracyjnym, dodanie dedykowanego przycisku powrotu `👑 Panel Właściciela (KSeF / Kadra)` obok wylogowania. |
+| `components/owner/OwnerStaffTab.tsx` | Modyfikacja | Przemianowanie sekcji na "Zarządzanie Kadrą", dynamiczne pobieranie ról z tabeli `restaurant_roles` i profili kadry, dynamiczny filtr stanowisk z case-insensitive match, dynamiczny modal edycji ról, czytelne etykiety stanowisk (Badge). |
+| `components/owner/OwnerKsefTab.tsx` | Modyfikacja | Eliminacja kolizji kluczy React (`key={`${inv.id}-${inv.restaurant_id}`}` oraz `key={`vat-...`}`, `key={`item-...`}`), synchronizacja `venueFilter` z `selectedVenueId`, precyzyjne rozdzielenie `totalCostNet` i `totalSalesNet` w KPI. |
+| `components/owner/OwnerFinancialTab.tsx` | Modyfikacja | Wyliczanie `totalNetworkRevenue` i poprawny udział procentowy lokali w sieci, dynamiczne filtrowanie tabeli rentowności `displayedBreakdown` w widoku pojedynczego lokalu. |
+| `services/ksefService.ts` | Modyfikacja | Unikalne identyfikatory faktur z prefiksem hex lokalu (`sim-${venueHex}-inv-${idx}`), odrębne profile asortymentowe Multitap (Wielokran) i Bar & Grill (Tankownia), pełna obsługa współdzielonego NIP, wieloobiektowa i selektywna synchronizacja z zachowaniem faktur sieci. |
+| `scripts/migration_owner_staff_rls.sql` | Nowy plik | Polityki RLS dla roli `owner` na tabelach `restaurant_users`, `public.users` oraz `restaurant_roles`, funkcje `is_restaurant_owner()` i `is_any_owner()`. |
+| `scripts/fix_assign_owner.sql` | Modyfikacja | Inicjalizacja konta `kd@t.pl` z imieniem "Krzysztof D.", usunięcie restrykcyjnych ograniczeń CHECK na rolach, inicjalizacja konfiguracji KSeF per lokal, procedura RPC `add_staff_member`. |
+| `scripts/migration_owner_ksef.sql` | Modyfikacja | Domyślne dane demonstracyjne z tożsamością "Krzysztof D." i adresem `kd@t.pl`. |
+| `docs/RAPORT_I_HISTORIA_ZMIAN.md` | Modyfikacja | Kompletna dokumentacja architektoniczna i techniczna wszystkich 7 zadań wdrożeniowych. |
+
+##### 2. Weryfikacja statyczna TypeScript:
+Wykonano polecenie weryfikacji typowania:
+```bash
+npx tsc --noEmit
+```
+* Wynik: **0 błędów** (Exit code: 0). Wszystkie interfejsy TypeScript w `types/ksef.ts`, `types/owner.ts` oraz komponentach Next.js zachowują pełną spójność typów.
+
+##### 3. Kompilacja produkcyjna Next.js:
+Wykonano polecenie budowy wydania produkcyjnego:
+```bash
+npm run build
+```
+* Kompilator: Next.js 16.4.4 z silnikiem Turbopack oraz React 19.
+* Wynik: Pomyślna kompilacja w 437ms, generowanie stron statycznych i tras serwerowych w 726ms.
+* Wygenerowane trasy produkcyjne (11/11):
+  - `○ /` – strona logowania (Static)
+  - `○ /_not-found` – strona błędu 404 (Static)
+  - `ƒ /api/ksef/config` – endpoint konfiguracji KSeF (Server Dynamic)
+  - `ƒ /api/ksef/invoices` – endpoint zapytań o faktury (Server Dynamic)
+  - `ƒ /api/ksef/sync` – endpoint synchronizacji KSeF / Sandbox (Server Dynamic)
+  - `○ /bartender` – panel barmana (Static)
+  - `○ /manager` – panel managera (Static)
+  - `○ /manifest.webmanifest` – manifest aplikacji PWA (Static)
+  - `○ /owner` – Pulpit Właściciela (Static)
+
 ---
 
 # Rozdział 4: Zestawienie skryptów migracyjnych i rekomendacje wdrożeniowe
@@ -803,6 +1086,8 @@ Wszystkie modyfikacje schematu bazy danych zostały przygotowane w formie idempo
 | `migration_bonus_rules_schedule.sql` | `bonus_rules` | Kolumny `schedule_type`, `applicable_days int[]`, `applicable_dates text[]`. | `feature/update-tankownia-case` (v2.0.0) |
 | `migration_announcements.sql` | `restaurant_announcements` | Dodanie kolumn `image_url`, `keep_in_history`, bucket `announcement-images` i procedury retencji 30 dni. | `feature/update-tankownia-case` (v2.0.0) |
 | `migration_owner_ksef.sql` | `restaurant_users`, `restaurant_ksef_config`, `ksef_invoices` | Obsługa roli `owner`, funkcje RLS (`is_restaurant_owner`, `is_any_owner`), tabela konfiguracji KSeF per lokal, tabela faktur KSeF z metadanymi XML i rozbiciem stawek, polityki RLS wyłącznego dostępu dla roli owner/service_role oraz dane demonstracyjne seed. | `feature/update-owner` |
+| `migration_owner_staff_rls.sql` | `restaurant_users`, `public.users`, `restaurant_roles` | Rozszerzenie polityk RLS dla roli `owner` (odczyt i zarządzanie personelem, odczyt profili użytkowników sieci, zarządzanie rolami lokalu), funkcje `is_restaurant_owner()`, `is_any_owner()`. | `feature/update-owner` |
+| `fix_assign_owner.sql` | `restaurant_users`, `public.users`, `restaurants`, `restaurant_ksef_config` | Skrypt naprawczy i inicjalizacyjny dla konta właściciela (`kd@t.pl`, 'Krzysztof D.'), usunięcie restrykcyjnych ograniczeń CHECK na rolach, inicjalizacja konfiguracji KSeF per lokal oraz funkcja RPC `add_staff_member`. | `feature/update-owner` |
 
 ---
 

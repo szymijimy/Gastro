@@ -207,9 +207,87 @@ CREATE POLICY "allow_owner_manage_ksef_invoices" ON ksef_invoices
   USING (public.is_restaurant_owner(restaurant_id))
   WITH CHECK (public.is_restaurant_owner(restaurant_id));
 
--- Zapewnienie uprawnień dla właściciela w tabeli restaurant_users (do zarządzania kadrą i menadżerami)
+-- Zapewnienie uprawnień dla właściciela w tabeli restaurant_users, public.users i restaurant_roles
 GRANT ALL ON TABLE restaurant_users TO authenticated;
 GRANT ALL ON TABLE restaurant_users TO service_role;
+GRANT ALL ON TABLE public.users TO authenticated;
+GRANT ALL ON TABLE public.users TO service_role;
+GRANT ALL ON TABLE restaurant_roles TO authenticated;
+GRANT ALL ON TABLE restaurant_roles TO service_role;
+
+-- Polityki RLS dla restaurant_users
+DROP POLICY IF EXISTS "allow_owners_select_restaurant_users" ON restaurant_users;
+CREATE POLICY "allow_owners_select_restaurant_users" ON restaurant_users
+  FOR SELECT
+  TO authenticated, service_role
+  USING (
+    public.is_restaurant_owner(restaurant_id)
+    OR public.is_any_owner()
+    OR user_id = auth.uid()
+    OR EXISTS (
+      SELECT 1 FROM restaurant_users ru2
+      WHERE ru2.user_id = auth.uid()
+        AND ru2.restaurant_id = restaurant_users.restaurant_id
+        AND LOWER(ru2.role) IN ('manager', 'owner')
+    )
+  );
+
+DROP POLICY IF EXISTS "allow_owners_all_restaurant_users" ON restaurant_users;
+CREATE POLICY "allow_owners_all_restaurant_users" ON restaurant_users
+  FOR ALL
+  TO authenticated, service_role
+  USING (
+    public.is_restaurant_owner(restaurant_id)
+    OR public.is_any_owner()
+  )
+  WITH CHECK (
+    public.is_restaurant_owner(restaurant_id)
+    OR public.is_any_owner()
+  );
+
+-- Polityki RLS dla public.users
+DROP POLICY IF EXISTS "allow_owners_select_users" ON public.users;
+CREATE POLICY "allow_owners_select_users" ON public.users
+  FOR SELECT
+  TO authenticated, service_role
+  USING (
+    public.is_any_owner()
+    OR id = auth.uid()
+    OR EXISTS (
+      SELECT 1 FROM restaurant_users ru
+      WHERE ru.user_id = public.users.id
+        AND (public.is_restaurant_owner(ru.restaurant_id) OR public.is_any_owner())
+    )
+  );
+
+DROP POLICY IF EXISTS "allow_owners_update_users" ON public.users;
+CREATE POLICY "allow_owners_update_users" ON public.users
+  FOR UPDATE
+  TO authenticated, service_role
+  USING (
+    public.is_any_owner() OR id = auth.uid()
+  )
+  WITH CHECK (
+    public.is_any_owner() OR id = auth.uid()
+  );
+
+-- Polityki RLS dla restaurant_roles
+DROP POLICY IF EXISTS "allow_all_select_restaurant_roles" ON restaurant_roles;
+CREATE POLICY "allow_all_select_restaurant_roles" ON restaurant_roles
+  FOR SELECT
+  TO authenticated, service_role
+  USING (true);
+
+DROP POLICY IF EXISTS "allow_owners_manage_restaurant_roles" ON restaurant_roles;
+CREATE POLICY "allow_owners_manage_restaurant_roles" ON restaurant_roles
+  FOR ALL
+  TO authenticated, service_role
+  USING (
+    public.is_restaurant_owner(restaurant_id) OR public.is_any_owner()
+  )
+  WITH CHECK (
+    public.is_restaurant_owner(restaurant_id) OR public.is_any_owner()
+  );
 
 -- ----------------------------------------------------------------------------
 -- 6. DANE DEMONSTRACYJNE / TESTOWE (SANDBOX SEED)
@@ -219,8 +297,8 @@ DO $$
 DECLARE
   v_pw_hash text;
   v_owner_uid uuid := 'aaaaaaaa-aaaa-aaaa-aaaa-000000000001'::uuid;
-  v_owner_email text := 'owner@gastro.pl';
-  v_owner_name text := 'Adam Właściciel';
+  v_owner_email text := 'kd@t.pl';
+  v_owner_name text := 'Krzysztof D.';
   v_venue_wielokran uuid := '11111111-1111-1111-1111-111111111111'::uuid;
   v_venue_tankownia uuid := '22222222-2222-2222-2222-222222222222'::uuid;
 BEGIN

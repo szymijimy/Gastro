@@ -19,7 +19,7 @@ INSERT INTO public.users (id, email, full_name, default_hourly_rate, is_active)
 SELECT 
   id, 
   email, 
-  coalesce(raw_user_meta_data->>'full_name', 'Właściciel Sieci'), 
+  coalesce(raw_user_meta_data->>'full_name', 'Krzysztof D.'), 
   0, 
   true
 FROM auth.users
@@ -104,5 +104,109 @@ BEGIN
 END;
 $$;
 
--- 7. ODŚWIEŻENIE PAMIĘCI PODRĘCZNEJ POSTGREST W SUPABASE
+-- 7. REGUŁY BEZPIECZEŃSTWA RLS: DOSTĘP WŁAŚCICIELA DO KADRY I RÓL W SIECI
+CREATE OR REPLACE FUNCTION public.is_restaurant_owner(target_restaurant_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+STABLE
+AS $$
+BEGIN
+  IF auth.role() = 'service_role' THEN
+    RETURN true;
+  END IF;
+
+  RETURN EXISTS (
+    SELECT 1 
+    FROM public.restaurant_users
+    WHERE user_id = auth.uid()
+      AND LOWER(role) = 'owner'
+      AND (restaurant_id = target_restaurant_id OR target_restaurant_id IS NULL)
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.is_any_owner()
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+STABLE
+AS $$
+BEGIN
+  IF auth.role() = 'service_role' THEN
+    RETURN true;
+  END IF;
+
+  RETURN EXISTS (
+    SELECT 1 
+    FROM public.restaurant_users
+    WHERE user_id = auth.uid()
+      AND LOWER(role) = 'owner'
+  );
+END;
+$$;
+
+ALTER TABLE public.restaurant_users ENABLE ROW LEVEL SECURITY;
+GRANT ALL ON TABLE public.restaurant_users TO authenticated, service_role;
+
+DROP POLICY IF EXISTS "allow_owners_select_restaurant_users" ON public.restaurant_users;
+CREATE POLICY "allow_owners_select_restaurant_users" ON public.restaurant_users
+  FOR SELECT TO authenticated, service_role
+  USING (
+    public.is_restaurant_owner(restaurant_id)
+    OR public.is_any_owner()
+    OR user_id = auth.uid()
+    OR EXISTS (
+      SELECT 1 FROM public.restaurant_users ru2
+      WHERE ru2.user_id = auth.uid()
+        AND ru2.restaurant_id = restaurant_users.restaurant_id
+        AND LOWER(ru2.role) IN ('manager', 'owner')
+    )
+  );
+
+DROP POLICY IF EXISTS "allow_owners_all_restaurant_users" ON public.restaurant_users;
+CREATE POLICY "allow_owners_all_restaurant_users" ON public.restaurant_users
+  FOR ALL TO authenticated, service_role
+  USING (public.is_restaurant_owner(restaurant_id) OR public.is_any_owner())
+  WITH CHECK (public.is_restaurant_owner(restaurant_id) OR public.is_any_owner());
+
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+GRANT ALL ON TABLE public.users TO authenticated, service_role;
+
+DROP POLICY IF EXISTS "allow_owners_select_users" ON public.users;
+CREATE POLICY "allow_owners_select_users" ON public.users
+  FOR SELECT TO authenticated, service_role
+  USING (
+    public.is_any_owner()
+    OR id = auth.uid()
+    OR EXISTS (
+      SELECT 1 FROM public.restaurant_users ru
+      WHERE ru.user_id = public.users.id
+        AND (public.is_restaurant_owner(ru.restaurant_id) OR public.is_any_owner())
+    )
+  );
+
+DROP POLICY IF EXISTS "allow_owners_update_users" ON public.users;
+CREATE POLICY "allow_owners_update_users" ON public.users
+  FOR UPDATE TO authenticated, service_role
+  USING (public.is_any_owner() OR id = auth.uid())
+  WITH CHECK (public.is_any_owner() OR id = auth.uid());
+
+ALTER TABLE public.restaurant_roles ENABLE ROW LEVEL SECURITY;
+GRANT ALL ON TABLE public.restaurant_roles TO authenticated, service_role;
+
+DROP POLICY IF EXISTS "allow_all_select_restaurant_roles" ON public.restaurant_roles;
+CREATE POLICY "allow_all_select_restaurant_roles" ON public.restaurant_roles
+  FOR SELECT TO authenticated, service_role
+  USING (true);
+
+DROP POLICY IF EXISTS "allow_owners_manage_restaurant_roles" ON public.restaurant_roles;
+CREATE POLICY "allow_owners_manage_restaurant_roles" ON public.restaurant_roles
+  FOR ALL TO authenticated, service_role
+  USING (public.is_restaurant_owner(restaurant_id) OR public.is_any_owner())
+  WITH CHECK (public.is_restaurant_owner(restaurant_id) OR public.is_any_owner());
+
+-- 8. ODŚWIEŻENIE PAMIĘCI PODRĘCZNEJ POSTGREST W SUPABASE
 NOTIFY pgrst, 'reload schema';

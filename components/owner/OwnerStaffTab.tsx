@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import {
   Users,
   UserCheck,
@@ -21,12 +21,14 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { supabase } from "@/lib/supabase"
 import type { OwnerStaffUser, OwnerVenue } from "@/types/owner"
 
 interface OwnerStaffTabProps {
   staffUsers: OwnerStaffUser[]
   venues: OwnerVenue[]
   currentUserId: string | null
+  availableRoles?: string[]
   onSaveStaffAssignment: (data: {
     userId: string
     role: string
@@ -39,11 +41,78 @@ export function OwnerStaffTab({
   staffUsers,
   venues,
   currentUserId,
+  availableRoles = [],
   onSaveStaffAssignment,
 }: OwnerStaffTabProps) {
   const [searchQuery, setSearchQuery] = useState("")
   const [roleFilter, setRoleFilter] = useState<string>("all")
   const [venueFilter, setVenueFilter] = useState<string>("all")
+
+  // Pobieranie ról z bazy restaurant_roles dla lokali właściciela
+  const [dbRoles, setDbRoles] = useState<string[]>([])
+
+  useEffect(() => {
+    const fetchDbRoles = async () => {
+      if (venues.length === 0) return
+      try {
+        const { data } = await supabase
+          .from("restaurant_roles")
+          .select("name")
+          .in("restaurant_id", venues.map((v) => v.id))
+        if (data && data.length > 0) {
+          const names = Array.from(
+            new Set(data.map((r: { name: string }) => r.name).filter(Boolean))
+          )
+          setDbRoles(names)
+        }
+      } catch (err) {
+        console.warn("Błąd pobierania restaurant_roles w OwnerStaffTab:", err)
+      }
+    }
+    fetchDbRoles()
+  }, [venues])
+
+  // Dynamiczna lista unikalnych ról (role systemowe + role z lokali + role występujące u pracowników)
+  const dynamicRoles = useMemo(() => {
+    const roleMap = new Map<string, { value: string; label: string }>()
+
+    // 1. Role systemowe
+    roleMap.set("owner", { value: "owner", label: "Właściciel" })
+    roleMap.set("manager", { value: "manager", label: "Manager" })
+
+    // 2. Realne role z restaurant_roles dla lokali właściciela
+    const combinedRoles = [...(availableRoles || []), ...dbRoles]
+    combinedRoles.forEach((roleName) => {
+      const trimmed = roleName.trim()
+      const key = trimmed.toLowerCase()
+      if (!roleMap.has(key)) {
+        let label = trimmed
+        if (key === "bartender" || key === "barman") {
+          label = "Barman / Obsługa"
+        }
+        roleMap.set(key, { value: trimmed, label })
+      }
+    })
+
+    // 3. Wszelkie unikalne role znalezione wśród członków personelu
+    staffUsers.forEach((user) => {
+      user.memberships.forEach((m) => {
+        if (m.role) {
+          const trimmed = m.role.trim()
+          const key = trimmed.toLowerCase()
+          if (!roleMap.has(key)) {
+            let label = trimmed
+            if (key === "bartender" || key === "barman") {
+              label = "Barman / Obsługa"
+            }
+            roleMap.set(key, { value: trimmed, label })
+          }
+        }
+      })
+    })
+
+    return Array.from(roleMap.values())
+  }, [availableRoles, dbRoles, staffUsers])
 
   // Stan modalu edycji
   const [editingUser, setEditingUser] = useState<OwnerStaffUser | null>(null)
@@ -56,10 +125,10 @@ export function OwnerStaffTab({
   const handleOpenEditModal = (user: OwnerStaffUser) => {
     setEditingUser(user)
     const primaryRole =
-      user.memberships.find((m) => m.role === "owner")?.role ||
-      user.memberships.find((m) => m.role === "manager")?.role ||
+      user.memberships.find((m) => m.role.toLowerCase() === "owner")?.role ||
+      user.memberships.find((m) => m.role.toLowerCase() === "manager")?.role ||
       user.memberships[0]?.role ||
-      "bartender"
+      (dynamicRoles[2]?.value || "Barman")
 
     setModalRole(primaryRole)
     const initialRate = user.memberships[0]?.hourly_rate || user.default_hourly_rate || 30
@@ -118,7 +187,9 @@ export function OwnerStaffTab({
       // Filtr roli
       let matchRole = true
       if (roleFilter !== "all") {
-        matchRole = u.memberships.some((m) => m.role === roleFilter)
+        matchRole = u.memberships.some(
+          (m) => m.role.toLowerCase() === roleFilter.toLowerCase()
+        )
       }
 
       // Filtr lokalu
@@ -134,12 +205,25 @@ export function OwnerStaffTab({
   // Statystyki podsumowujące
   const totalStaffCount = staffUsers.length
   const totalManagerCount = staffUsers.filter((u) =>
-    u.memberships.some((m) => m.role === "manager")
+    u.memberships.some((m) => m.role.toLowerCase() === "manager")
   ).length
   const multiVenueCount = staffUsers.filter((u) => u.memberships.length > 1).length
 
   return (
     <div className="space-y-6">
+      {/* Nagłówek sekcji Zarządzanie Kadrą */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-1">
+        <div>
+          <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+            <Users className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+            Zarządzanie Kadrą
+          </h2>
+          <p className="text-xs text-zinc-500">
+            Przegląd i konfiguracja uprawnień, stawek oraz przypisań pracowników do lokali sieci
+          </p>
+        </div>
+      </div>
+
       {/* Statystyki kadrowe */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Card className="shadow-xs">
@@ -224,9 +308,11 @@ export function OwnerStaffTab({
                   className="text-xs h-9 rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-2 py-1 text-zinc-800 dark:text-zinc-200"
                 >
                   <option value="all">Wszystkie role</option>
-                  <option value="owner">Właściciel</option>
-                  <option value="manager">Manager</option>
-                  <option value="bartender">Barman / Obsługa</option>
+                  {dynamicRoles.map((r) => (
+                    <option key={r.value.toLowerCase()} value={r.value}>
+                      {r.label}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -286,8 +372,13 @@ export function OwnerStaffTab({
               </TableRow>
             ) : (
               filteredUsers.map((user) => {
-                const isOwner = user.memberships.some((m) => m.role === "owner")
-                const isManager = user.memberships.some((m) => m.role === "manager")
+                const isOwner = user.memberships.some((m) => m.role.toLowerCase() === "owner")
+                const isManager = user.memberships.some((m) => m.role.toLowerCase() === "manager")
+                const primaryMembership = user.memberships[0]
+                const matchedRole = primaryMembership
+                  ? dynamicRoles.find((r) => r.value.toLowerCase() === primaryMembership.role.toLowerCase())
+                  : null
+                const roleBadgeLabel = matchedRole?.label || primaryMembership?.role || "Barman / Obsługa"
                 const highestRate = Math.max(
                   ...user.memberships.map((m) => m.hourly_rate || 0),
                   user.default_hourly_rate || 0
@@ -324,7 +415,7 @@ export function OwnerStaffTab({
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
-                          Barman / Obsługa
+                          {roleBadgeLabel}
                         </span>
                       )}
                     </TableCell>
@@ -438,9 +529,11 @@ export function OwnerStaffTab({
                   onChange={(e) => setModalRole(e.target.value)}
                   className="w-full text-xs h-9 rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-1.5 text-zinc-900 dark:text-zinc-100 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                 >
-                  <option value="bartender">Barman / Obsługa (standardowy pracownik)</option>
-                  <option value="manager">Manager Lokalu (dostęp do grafików, obecności, zadań)</option>
-                  <option value="owner">Właściciel (pełny dostęp zarządczy i finansowy KSeF)</option>
+                  {dynamicRoles.map((r) => (
+                    <option key={r.value.toLowerCase()} value={r.value}>
+                      {r.label}
+                    </option>
+                  ))}
                 </select>
               </div>
 

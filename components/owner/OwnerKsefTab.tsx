@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import {
   Receipt,
   Search,
@@ -82,6 +82,11 @@ export function OwnerKsefTab({
   const [venueFilter, setVenueFilter] = useState<string>(selectedVenueId)
   const [dateFrom, setDateFrom] = useState("")
   const [dateTo, setDateTo] = useState("")
+
+  // Automatyczna synchronizacja lokalnego filtra z nagłówkiem po zmianie lokalu
+  useEffect(() => {
+    setVenueFilter(selectedVenueId)
+  }, [selectedVenueId])
 
   // Modale
   const [selectedInvoice, setSelectedInvoice] = useState<KsefInvoice | null>(null)
@@ -240,7 +245,15 @@ export function OwnerKsefTab({
     searchQuery,
   ])
 
-  // Statystyki zafiltrowanych faktur
+  // Statystyki zafiltrowanych faktur (z rzetelnym rozdzieleniem kosztów i przychodów)
+  const totalCostNet = filteredInvoices
+    .filter((i) => i.invoice_type === "cost")
+    .reduce((acc, i) => acc + (Number(i.net_amount) || 0), 0)
+
+  const totalSalesNet = filteredInvoices
+    .filter((i) => i.invoice_type === "sales")
+    .reduce((acc, i) => acc + (Number(i.net_amount) || 0), 0)
+
   const totalFilteredNet = filteredInvoices.reduce((acc, i) => acc + (Number(i.net_amount) || 0), 0)
   const totalFilteredVat = filteredInvoices.reduce((acc, i) => acc + (Number(i.vat_amount) || 0), 0)
   const totalFilteredGross = filteredInvoices.reduce((acc, i) => acc + (Number(i.gross_amount) || 0), 0)
@@ -279,7 +292,7 @@ export function OwnerKsefTab({
 
           <Button
             size="sm"
-            onClick={() => onSyncKsef(selectedVenueId !== "all" ? selectedVenueId : undefined)}
+            onClick={() => onSyncKsef(effectiveVenueFilter !== "all" ? effectiveVenueFilter : undefined)}
             disabled={isSyncing}
             className="text-xs h-9 gap-1.5 bg-purple-600 hover:bg-purple-700 text-white"
           >
@@ -298,10 +311,21 @@ export function OwnerKsefTab({
           </span>
         </div>
         <div className="p-3 bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-700 rounded-xl">
-          <span className="text-[11px] font-medium text-zinc-500 block">Suma Netto</span>
-          <span className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
-            {formatPLN(totalFilteredNet)}
+          <span className="text-[11px] font-medium text-zinc-500 block">
+            {typeFilter === "sales"
+              ? "Przychody Netto"
+              : typeFilter === "cost"
+              ? "Koszty KSeF Netto"
+              : "Koszty Netto"}
           </span>
+          <span className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
+            {formatPLN(typeFilter === "sales" ? totalSalesNet : totalCostNet)}
+          </span>
+          {typeFilter === "all" && totalSalesNet > 0 && (
+            <span className="text-[10px] text-emerald-600 dark:text-emerald-400 block mt-0.5 truncate">
+              + Przychód: {formatPLN(totalSalesNet)}
+            </span>
+          )}
         </div>
         <div className="p-3 bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-700 rounded-xl">
           <span className="text-[11px] font-medium text-zinc-500 block">Suma VAT</span>
@@ -478,7 +502,7 @@ export function OwnerKsefTab({
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => onSyncKsef(selectedVenueId !== "all" ? selectedVenueId : undefined)}
+                      onClick={() => onSyncKsef(effectiveVenueFilter !== "all" ? effectiveVenueFilter : undefined)}
                       disabled={isSyncing}
                       className="text-xs h-7"
                     >
@@ -497,7 +521,7 @@ export function OwnerKsefTab({
 
                 return (
                   <TableRow
-                    key={inv.id}
+                    key={`${inv.id}-${inv.restaurant_id}`}
                     className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30 text-xs"
                   >
                     {/* Numer KSeF i numer faktury */}
@@ -782,7 +806,7 @@ export function OwnerKsefTab({
                             </TableHeader>
                             <TableBody>
                               {selectedInvoice.raw_metadata.vat_breakdown.map((vb: any, idx: number) => (
-                                <TableRow key={idx} className="text-xs">
+                                <TableRow key={`vat-${idx}-${vb.rate}`} className="text-xs">
                                   <TableCell className="font-semibold">{vb.rate}</TableCell>
                                   <TableCell className="text-right">{formatPLN(vb.net_amount)}</TableCell>
                                   <TableCell className="text-right">{formatPLN(vb.vat_amount)}</TableCell>
@@ -815,7 +839,7 @@ export function OwnerKsefTab({
                             </TableHeader>
                             <TableBody>
                               {selectedInvoice.raw_metadata.items.map((item: any, idx: number) => (
-                                <TableRow key={idx} className="text-xs">
+                                <TableRow key={`item-${idx}-${item.name}`} className="text-xs">
                                   <TableCell className="font-medium text-zinc-900 dark:text-zinc-100">
                                     {item.name}
                                   </TableCell>

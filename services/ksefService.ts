@@ -304,7 +304,17 @@ export function generateRealisticGastroInvoices(
   const year = now.getFullYear()
   const month = String(now.getMonth() + 1).padStart(2, "0")
 
-  const baseInvoices: Array<{
+  // Identyfikacja profilu lokalu gastronomicznego (Multitap/Craft vs Bar & Grill/Tank)
+  const isTankownia =
+    restaurantId.includes("2222") ||
+    restaurantName.toLowerCase().includes("tankownia") ||
+    restaurantName.toLowerCase().includes("grill")
+
+  // Deterministic 4-character hex code based on restaurantId to guarantee global uniqueness
+  const venueHex = restaurantId.replace(/[^0-9a-fA-F]/g, "").slice(0, 4).toUpperCase().padEnd(4, "F")
+  const venueShort = isTankownia ? "TNK" : "WKL"
+
+  type BaseInvoiceTemplate = {
     sellerNip: string
     sellerName: string
     invoiceNumber: string
@@ -314,16 +324,19 @@ export function generateRealisticGastroInvoices(
     status: PaymentStatus
     notes: string
     items: Array<{ name: string; qty: number; unit: string; netPrice: number; vatRate: string }>
-  }> = [
+  }
+
+  // Profil A: Wielokran - Multitap i Pub Rzemieślniczy (24 krany, piwa kraftowe, cydry, przekąski)
+  const craftInvoices: BaseInvoiceTemplate[] = [
     {
       sellerNip: "8971234567",
       sellerName: 'Browar Rzemieślniczy "Piwne Dziedzictwo" Sp. z o.o.',
-      invoiceNumber: `FS/${year}/${month}/0142`,
+      invoiceNumber: `FS/${venueShort}/${year}/${month}/0142`,
       dayOffset: 2,
       type: "cost",
       category: "alcohol",
       status: "paid",
-      notes: "Dostawa kegów na otwarcie sezonu: Hazy IPA x5, Pils x6, Stout x3.",
+      notes: "Dostawa świeżych kegów kraftowych: Hazy IPA 30L x5, Pils rzemieślniczy x6, Milk Stout x3.",
       items: [
         { name: "Keg Hazy IPA 30L", qty: 5, unit: "szt", netPrice: 380.0, vatRate: "23%" },
         { name: "Keg Kraftowy Pils 30L", qty: 6, unit: "szt", netPrice: 310.0, vatRate: "23%" },
@@ -331,198 +344,375 @@ export function generateRealisticGastroInvoices(
       ],
     },
     {
-      sellerNip: "5219988776",
-      sellerName: 'Dystrybucja Alkoholi Premium "Vitis & Spirit" S.A.',
-      invoiceNumber: `FV/WAW/${year}/8891`,
+      sellerNip: "5543219876",
+      sellerName: 'Browar Rzemieślniczy "Pinta & Tank" Sp. k.',
+      invoiceNumber: `FV/${venueShort}/${year}/${month}/0098`,
       dayOffset: 4,
       type: "cost",
       category: "alcohol",
       status: "paid",
-      notes: "Zaopatrzenie baru w alkohole mocne, giny botaniczne oraz kordiany barmańskie.",
+      notes: "Rotacja kranów kraftowych: American IPA 30L x4, Sour Ale z marakują x4, Porter Bałtycki x2.",
       items: [
-        { name: "Wódka kraftowa ziemniaczana 0.7L", qty: 24, unit: "but", netPrice: 65.0, vatRate: "23%" },
-        { name: "Gin Botaniczny London Dry 0.7L", qty: 12, unit: "but", netPrice: 110.0, vatRate: "23%" },
-        { name: "Tequila Reposado 100% Agave 0.7L", qty: 6, unit: "but", netPrice: 180.0, vatRate: "23%" },
-        { name: "Syropy i kordiany Monin zestaw 1L", qty: 10, unit: "but", netPrice: 42.0, vatRate: "23%" },
+        { name: "Keg American IPA 30L", qty: 4, unit: "szt", netPrice: 390.0, vatRate: "23%" },
+        { name: "Keg Passionfruit Sour Ale 30L", qty: 4, unit: "szt", netPrice: 360.0, vatRate: "23%" },
+        { name: "Keg Imperial Porter Bałtycki 20L", qty: 2, unit: "szt", netPrice: 370.0, vatRate: "23%" },
       ],
     },
     {
-      sellerNip: "5543219876",
-      sellerName: 'Browar Rzemieślniczy "Pinta & Tank" Sp. k.',
-      invoiceNumber: `FV/${year}/${month}/0098`,
-      dayOffset: 6,
+      sellerNip: "5219988776",
+      sellerName: 'Dystrybucja Cydrów i Win Kraftowych "Vitis" Sp. z o.o.',
+      invoiceNumber: `FV-WIN/${venueShort}/${year}/${month}/112`,
+      dayOffset: 5,
       type: "cost",
       category: "alcohol",
-      status: "unpaid",
-      notes: "Świeże piwo z tanka 500L oraz dostawa kegów American IPA.",
+      status: "paid",
+      notes: "Zaopatrzenie baru w cydry rzemieślnicze z nalewaka oraz wina naturalne.",
       items: [
-        { name: "Piwo świeże niepasteryzowane z tanka 500L", qty: 1, unit: "tank", netPrice: 4880.0, vatRate: "23%" },
-        { name: "Keg American IPA 30L", qty: 4, unit: "szt", netPrice: 380.0, vatRate: "23%" },
+        { name: "Cydr rzemieślniczy wytrawny beczka 30L", qty: 2, unit: "szt", netPrice: 340.0, vatRate: "23%" },
+        { name: "Wino białe regionalne Solaris 0.75L", qty: 12, unit: "but", netPrice: 55.0, vatRate: "23%" },
+        { name: "Wino czerwone Rondo Cuvee 0.75L", qty: 6, unit: "but", netPrice: 85.0, vatRate: "23%" },
       ],
     },
     {
       sellerNip: "7010456123",
       sellerName: 'Hurtownia Warzyw i Owoców "Świeżak Gastro" Sp. j.',
-      invoiceNumber: `FS-WARZ/${year}/${month}/551`,
+      invoiceNumber: `FS-WARZ/${venueShort}/${year}/${month}/551`,
       dayOffset: 7,
       type: "cost",
       category: "food",
       status: "paid",
-      notes: "Świeże cytrusy do drinków, mięta oraz lód kostkowy spożywczy.",
+      notes: "Świeże cytrusy do koktajli barowych, mięta cięta oraz lód kostkowy spożywczy.",
       items: [
         { name: "Cytryny barowe niewoskowane", qty: 20, unit: "kg", netPrice: 11.5, vatRate: "5%" },
-        { name: "Limonki wyselekcjonowane", qty: 15, unit: "kg", netPrice: 18.0, vatRate: "5%" },
-        { name: "Pomarańcze do soków świeżych", qty: 30, unit: "kg", netPrice: 8.5, vatRate: "5%" },
+        { name: "Limonki barmańskie", qty: 15, unit: "kg", netPrice: 18.0, vatRate: "5%" },
         { name: "Mięta świeża cięta gastro", qty: 5, unit: "kg", netPrice: 55.0, vatRate: "5%" },
-        { name: "Lód spożywczy w kostkach 10kg", qty: 8, unit: "worek", netPrice: 20.0, vatRate: "23%" },
-      ],
-    },
-    {
-      sellerNip: "9512348765",
-      sellerName: 'Dystrybucja Mięsa i Wędlin "Tapas & Deli Gastro"',
-      invoiceNumber: `FV-DELI/${year}/${month}/210`,
-      dayOffset: 9,
-      type: "cost",
-      category: "food",
-      status: "pending",
-      notes: "Polędwica wołowa na steki, deski serów oraz hiszpańskie wędliny dojrzewające.",
-      items: [
-        { name: "Polędwica wołowa sezonowana Black Angus", qty: 15, unit: "kg", netPrice: 130.0, vatRate: "5%" },
-        { name: "Deski serów dojrzewających i wędlin tapas", qty: 12, unit: "kg", netPrice: 85.0, vatRate: "5%" },
-        { name: "Skrzydełka z kurczaka premium gastro", qty: 25, unit: "kg", netPrice: 11.2, vatRate: "5%" },
+        { name: "Lód spożywczy w kostkach gourmet 10kg", qty: 8, unit: "worek", netPrice: 20.0, vatRate: "23%" },
       ],
     },
     {
       sellerNip: "5271928374",
       sellerName: 'Piekarnia Rzemieślnicza "Chleb & Piec"',
-      invoiceNumber: `WZ-FV/${year}/${month}/1109`,
-      dayOffset: 10,
+      invoiceNumber: `WZ-FV/${venueShort}/${year}/${month}/1109`,
+      dayOffset: 8,
       type: "cost",
       category: "food",
       status: "paid",
-      notes: "Codzienne świeże bułki maślane brioche do burgerów oraz chleb na zakwasie.",
+      notes: "Rzemieślnicze pieczywo barowe, paluchy z solą i kminkiem oraz bagietki czosnkowe.",
       items: [
-        { name: "Bułki maślane brioche do burgerów", qty: 250, unit: "szt", netPrice: 2.2, vatRate: "5%" },
-        { name: "Bagietki rzemieślnicze do zapiekanek", qty: 80, unit: "szt", netPrice: 3.0, vatRate: "5%" },
-        { name: "Chleb żytni na zakwasie 1kg", qty: 20, unit: "bochen", netPrice: 5.0, vatRate: "5%" },
+        { name: "Paluchy drożdżowe z kminkiem i solą morską", qty: 300, unit: "szt", netPrice: 2.5, vatRate: "5%" },
+        { name: "Bagietki rzemieślnicze do zapiekanek", qty: 60, unit: "szt", netPrice: 3.5, vatRate: "5%" },
+        { name: "Chleb żytni na zakwasie 1kg", qty: 15, unit: "bochen", netPrice: 5.0, vatRate: "5%" },
+      ],
+    },
+    {
+      sellerNip: "9512348765",
+      sellerName: 'Manufaktura Przekąsek Piwnych "Tapas & Kraft"',
+      invoiceNumber: `FV-DELI/${venueShort}/${year}/${month}/088`,
+      dayOffset: 10,
+      type: "cost",
+      category: "food",
+      status: "pending",
+      notes: "Deski serów dojrzewających i wędlin rzemieślniczych do degustacji piw.",
+      items: [
+        { name: "Deski serów zagrodowych długodojrzewających", qty: 15, unit: "kpl", netPrice: 75.0, vatRate: "5%" },
+        { name: "Wędliny dojrzewające suszone tapas gastro", qty: 12, unit: "kg", netPrice: 85.0, vatRate: "5%" },
+        { name: "Orzeszki prażone z rozmarynem i chili 1kg", qty: 15, unit: "op", netPrice: 10.0, vatRate: "23%" },
       ],
     },
     {
       sellerNip: "5260250541",
       sellerName: "PGE Obrót S.A. / Dystrybucja Energii",
-      invoiceNumber: `FV-EE/${year}/${month}/982134`,
+      invoiceNumber: `FV-EE/${venueShort}/${year}/${month}/982134`,
       dayOffset: 12,
       type: "cost",
       category: "utilities",
       status: "paid",
-      notes: "Zużycie energii elektrycznej za lokal gastronomiczny (chłodnie, bemar, klimatyzacja).",
+      notes: "Zużycie energii elektrycznej (chłodnie kegowe, oświetlenie, wyparzarki szkła).",
       items: [
-        { name: "Energia elektryczna czynna - taryfa C12a", qty: 3200, unit: "kWh", netPrice: 0.95, vatRate: "23%" },
-        { name: "Opłata dystrybucyjna i mocowa stała", qty: 1, unit: "mc", netPrice: 410.0, vatRate: "23%" },
+        { name: "Energia elektryczna czynna - taryfa C12a", qty: 2800, unit: "kWh", netPrice: 0.95, vatRate: "23%" },
+        { name: "Opłata dystrybucyjna i mocowa stała", qty: 1, unit: "mc", netPrice: 390.0, vatRate: "23%" },
       ],
     },
     {
       sellerNip: "5252787325",
       sellerName: "PGNiG Obrót Detaliczny Sp. z o.o.",
-      invoiceNumber: `FV-GAZ/${year}/${month}/44812`,
+      invoiceNumber: `FV-GAZ/${venueShort}/${year}/${month}/44812`,
       dayOffset: 13,
       type: "cost",
       category: "utilities",
       status: "unpaid",
-      notes: "Gaz ziemny wysokometanowy dla kuchni gastronomicznej (piece i trzony kuchenne).",
+      notes: "Paliwo gazowe na ogrzewanie lokalu i ciepłą wodę technologiczną baru.",
       items: [
-        { name: "Paliwo gazowe dla kuchni gastronomicznej", qty: 4200, unit: "kWh", netPrice: 0.24, vatRate: "23%" },
-        { name: "Opłaty abonamentowe i przesyłowe gazu", qty: 1, unit: "mc", netPrice: 172.0, vatRate: "23%" },
+        { name: "Paliwo gazowe dla ogrzewania lokalu", qty: 2200, unit: "kWh", netPrice: 0.24, vatRate: "23%" },
+        { name: "Opłata abonamentowa i przesyłowa", qty: 1, unit: "mc", netPrice: 152.0, vatRate: "23%" },
       ],
     },
     {
       sellerNip: "5251122334",
       sellerName: 'Zarząd Nieruchomości "Starówka Gastro Sp. z o.o."',
-      invoiceNumber: `CZYNSZ/${year}/${month}/03`,
+      invoiceNumber: `CZYNSZ/${venueShort}/${year}/${month}/03`,
       dayOffset: 1,
       type: "cost",
       category: "rent",
       status: "paid",
-      notes: "Czynsz najmu lokalu użytkowego oraz opłata eksploatacyjna za lokal gastronomiczny.",
+      notes: "Czynsz najmu lokalu gastronomicznego 180m2 w zabytkowej kamienicy.",
       items: [
         { name: "Czynsz najmu lokalu gastronomicznego 180m2", qty: 1, unit: "mc", netPrice: 9500.0, vatRate: "23%" },
-        { name: "Opłata eksploatacyjna i zarząd częściami wspólnymi", qty: 1, unit: "mc", netPrice: 2000.0, vatRate: "23%" },
+        { name: "Opłata eksploatacyjna i utrzymanie części wspólnych", qty: 1, unit: "mc", netPrice: 2000.0, vatRate: "23%" },
       ],
     },
     {
       sellerNip: "5213456789",
       sellerName: "Gastro-Tech Chłodnictwo & Serwis Nalewaków",
-      invoiceNumber: `SRV/${year}/${month}/054`,
+      invoiceNumber: `SRV/${venueShort}/${year}/${month}/054`,
       dayOffset: 14,
       type: "cost",
       category: "services",
       status: "paid",
-      notes: "Okresowy przegląd instalacji wyszynku piwa, sanityzacja chemiczna linii i głowic.",
+      notes: "Okresowa sanityzacja chemiczna 24 linii piwnych, głowic kranów i wymiana o-ringów.",
       items: [
-        { name: "Sanityzacja chemiczna linii piwnych (16 kranów)", qty: 16, unit: "linia", netPrice: 85.0, vatRate: "23%" },
-        { name: "Przegląd agregatu schładzarki i wymiana szybkozłączek", qty: 1, unit: "kpl", netPrice: 490.0, vatRate: "23%" },
+        { name: "Sanityzacja chemiczna linii piwnych (24 krany)", qty: 24, unit: "linia", netPrice: 85.0, vatRate: "23%" },
+        { name: "Przegląd instalacji schładzarek i zaworów CO2/N2", qty: 1, unit: "kpl", netPrice: 490.0, vatRate: "23%" },
       ],
     },
     {
       sellerNip: "5842718923",
       sellerName: "GastroPOS & Cloud Solutions Sp. z o.o.",
-      invoiceNumber: `SUB-POS/${year}/${month}/812`,
+      invoiceNumber: `SUB-POS/${venueShort}/${year}/${month}/812`,
       dayOffset: 15,
       type: "cost",
       category: "services",
       status: "paid",
-      notes: "Miesięczny abonament licencyjny systemu POS dla lokalu oraz terminale płatnicze.",
+      notes: "Abonament chmurowy GastroPOS (3 stanowiska barowe + moduł kegów).",
       items: [
-        { name: "Abonament chmurowy GastroPOS (3 stanowiska + KDS)", qty: 1, unit: "mc", netPrice: 490.0, vatRate: "23%" },
-        { name: "Dzierżawa i serwis terminali płatniczych Android", qty: 2, unit: "szt", netPrice: 100.0, vatRate: "23%" },
-      ],
-    },
-    {
-      sellerNip: "7010891234",
-      sellerName: 'Drukarnia Reklamowa "MenuPrint Express"',
-      invoiceNumber: `FV-DRUK/${year}/${month}/390`,
-      dayOffset: 16,
-      type: "cost",
-      category: "services",
-      status: "unpaid",
-      notes: "Druk laminowanych kart menu odpornych na zalania oraz drewniane podkładki pod piwo.",
-      items: [
-        { name: "Karty menu format A4 laminowane mat soft-touch", qty: 60, unit: "szt", netPrice: 8.5, vatRate: "23%" },
-        { name: "Podkładki pod kufle z wypalanym logo lokalu", qty: 500, unit: "szt", netPrice: 0.54, vatRate: "23%" },
+        { name: "Abonament GastroPOS Multitap (3 stanowiska barowe)", qty: 1, unit: "mc", netPrice: 490.0, vatRate: "23%" },
+        { name: "Dzierżawa terminali płatniczych barowych", qty: 2, unit: "szt", netPrice: 100.0, vatRate: "23%" },
       ],
     },
     {
       sellerNip: "5261928301",
       sellerName: 'Hurtownia Higieniczna "CleanGastro & Eko"',
-      invoiceNumber: `CLEAN/${year}/${month}/7712`,
+      invoiceNumber: `CLEAN/${venueShort}/${year}/${month}/7712`,
       dayOffset: 18,
       type: "cost",
       category: "other",
       status: "paid",
-      notes: "Płyny do mycia szkła barowego bezsmakowe, serwetki dyspenserowe, chemia do pieców.",
+      notes: "Środki myjące do szkła barowego bezsmakowe, serwetki dyspenserowe, czyściwa.",
       items: [
         { name: "Koncentrat myjący do wyparzarek szkła 10L", qty: 2, unit: "kanister", netPrice: 180.0, vatRate: "23%" },
-        { name: "Serwetki dyspenserowe barowe 1-warstwowe 10000szt", qty: 1, unit: "karton", netPrice: 220.0, vatRate: "23%" },
+        { name: "Serwetki dyspenserowe barowe 10000szt", qty: 1, unit: "karton", netPrice: 220.0, vatRate: "23%" },
         { name: "Ręczniki papierowe celulozowe ZZ 4000szt", qty: 2, unit: "karton", netPrice: 110.0, vatRate: "23%" },
-        { name: "Płyn do odtłuszczania grilla i frytownic 5L", qty: 2, unit: "kanister", netPrice: 160.0, vatRate: "23%" },
       ],
     },
     {
       sellerNip: restaurantNip,
       sellerName: restaurantName,
-      invoiceNumber: `FS-OUT/${year}/${month}/0019`,
+      invoiceNumber: `FS-OUT/${venueShort}/${year}/${month}/0019`,
       dayOffset: 20,
       type: "sales",
       category: "services",
       status: "paid",
-      notes: "Kompleksowa obsługa imprezy integracyjnej i degustacja kraftowa dla firmy IT.",
+      notes: "Kompleksowa obsługa degustacji piw kraftowych i catering dla firmy IT.",
       items: [
         { name: "Catering kraftowy i degustacja selekcji piw (50 osób)", qty: 50, unit: "os", netPrice: 120.0, vatRate: "23%" },
-        { name: "Wynajem sali VIP na wyłączność z obsługą barmańską", qty: 1, unit: "usł", netPrice: 2500.0, vatRate: "23%" },
+        { name: "Wynajem sali na wyłączność z obsługą barmańską", qty: 1, unit: "usł", netPrice: 2500.0, vatRate: "23%" },
       ],
     },
   ]
 
+  // Profil B: Tankownia - Bar & Grill & Tank Beer (świeże piwo z tanka 1000L, steki Black Angus, burgery kraftowe)
+  const grillInvoices: BaseInvoiceTemplate[] = [
+    {
+      sellerNip: "5543219876",
+      sellerName: 'Browar Rzemieślniczy "Pinta & Tank" Sp. k.',
+      invoiceNumber: `FV/${venueShort}/${year}/${month}/0214`,
+      dayOffset: 3,
+      type: "cost",
+      category: "alcohol",
+      status: "paid",
+      notes: "Dostawa świeżego niepasteryzowanego piwa z tanka browaru 1000L oraz kegi American IPA.",
+      items: [
+        { name: "Piwo świeże niepasteryzowane z tanka 1000L", qty: 1, unit: "tank", netPrice: 4880.0, vatRate: "23%" },
+        { name: "Keg American IPA 30L", qty: 4, unit: "szt", netPrice: 380.0, vatRate: "23%" },
+      ],
+    },
+    {
+      sellerNip: "5219988776",
+      sellerName: 'Dystrybucja Alkoholi Premium "Vitis & Spirit" S.A.',
+      invoiceNumber: `FV-WAW/${venueShort}/${year}/8891`,
+      dayOffset: 4,
+      type: "cost",
+      category: "alcohol",
+      status: "paid",
+      notes: "Zaopatrzenie baru w alkohole mocne do cocktail baru, wódki kraftowe i syropy Monin.",
+      items: [
+        { name: "Wódka kraftowa ziemniaczana 0.7L (karton 6szt)", qty: 6, unit: "kart", netPrice: 380.0, vatRate: "23%" },
+        { name: "Gin Botaniczny London Dry 0.7L", qty: 16, unit: "but", netPrice: 110.0, vatRate: "23%" },
+        { name: "Tequila Reposado 100% Agave 0.7L", qty: 8, unit: "but", netPrice: 180.0, vatRate: "23%" },
+        { name: "Zestaw syropów barmańskich Monin 1L", qty: 8, unit: "but", netPrice: 42.0, vatRate: "23%" },
+      ],
+    },
+    {
+      sellerNip: "9512348765",
+      sellerName: 'Dystrybucja Mięsa i Wędlin "Tapas & Deli Gastro"',
+      invoiceNumber: `FV-DELI/${venueShort}/${year}/${month}/412`,
+      dayOffset: 6,
+      type: "cost",
+      category: "food",
+      status: "paid",
+      notes: "Zaopatrzenie kuchni w sezonowaną wołowinę Black Angus, żeberka BBQ i drób.",
+      items: [
+        { name: "Polędwica wołowa sezonowana Black Angus", qty: 25, unit: "kg", netPrice: 130.0, vatRate: "5%" },
+        { name: "Żeberka wieprzowe St. Louis BBQ", qty: 35, unit: "kg", netPrice: 42.0, vatRate: "5%" },
+        { name: "Skrzydełka z kurczaka premium gastro", qty: 40, unit: "kg", netPrice: 11.2, vatRate: "5%" },
+      ],
+    },
+    {
+      sellerNip: "5271928374",
+      sellerName: 'Piekarnia Rzemieślnicza "Chleb & Piec"',
+      invoiceNumber: `WZ-FV/${venueShort}/${year}/${month}/2214`,
+      dayOffset: 7,
+      type: "cost",
+      category: "food",
+      status: "paid",
+      notes: "Świeże bułki maślane brioche do burgerów kraftowych i pieczywo czosnkowe.",
+      items: [
+        { name: "Bułki maślane brioche z sezamem do burgerów", qty: 450, unit: "szt", netPrice: 2.2, vatRate: "5%" },
+        { name: "Bagietki czosnkowe do steków", qty: 100, unit: "szt", netPrice: 3.2, vatRate: "5%" },
+      ],
+    },
+    {
+      sellerNip: "7010456123",
+      sellerName: 'Hurtownia Warzyw i Owoców "Świeżak Gastro" Sp. j.',
+      invoiceNumber: `FS-WARZ/${venueShort}/${year}/${month}/890`,
+      dayOffset: 9,
+      type: "cost",
+      category: "food",
+      status: "paid",
+      notes: "Warzywa do burgerów, sałat i grilla (pomidory malinowe, cebula czerwona, sałaty, pikle).",
+      items: [
+        { name: "Pomidory malinowe grill gastro", qty: 40, unit: "kg", netPrice: 9.5, vatRate: "5%" },
+        { name: "Cebula czerwona cukrowa", qty: 25, unit: "kg", netPrice: 6.0, vatRate: "5%" },
+        { name: "Sałata rzymska i lodowa", qty: 30, unit: "kg", netPrice: 12.0, vatRate: "5%" },
+        { name: "Papryczki Jalapeno i pikle ogórkowe", qty: 15, unit: "słoik", netPrice: 18.0, vatRate: "8%" },
+      ],
+    },
+    {
+      sellerNip: "5260250541",
+      sellerName: "PGE Obrót S.A. / Dystrybucja Energii",
+      invoiceNumber: `FV-EE/${venueShort}/${year}/${month}/982188`,
+      dayOffset: 11,
+      type: "cost",
+      category: "utilities",
+      status: "paid",
+      notes: "Energia elektryczna taryfa C12a (piece konwekcyjno-parowe, chłodnie szokowe, okapy).",
+      items: [
+        { name: "Energia elektryczna czynna - taryfa C12a", qty: 4200, unit: "kWh", netPrice: 0.95, vatRate: "23%" },
+        { name: "Opłata dystrybucyjna i mocowa stała", qty: 1, unit: "mc", netPrice: 510.0, vatRate: "23%" },
+      ],
+    },
+    {
+      sellerNip: "5252787325",
+      sellerName: "PGNiG Obrót Detaliczny Sp. z o.o.",
+      invoiceNumber: `FV-GAZ/${venueShort}/${year}/${month}/44890`,
+      dayOffset: 12,
+      type: "cost",
+      category: "utilities",
+      status: "unpaid",
+      notes: "Gaz ziemny wysokometanowy dla kuchni (piece, trzony kuchenne, grill gazowy).",
+      items: [
+        { name: "Paliwo gazowe dla kuchni gastronomicznej", qty: 4800, unit: "kWh", netPrice: 0.24, vatRate: "23%" },
+        { name: "Opłaty abonamentowe i przesyłowe gazu", qty: 1, unit: "mc", netPrice: 185.0, vatRate: "23%" },
+      ],
+    },
+    {
+      sellerNip: "5251122334",
+      sellerName: 'Zarząd Nieruchomości "Centrum Gastro Sp. z o.o."',
+      invoiceNumber: `CZYNSZ/${venueShort}/${year}/${month}/03`,
+      dayOffset: 1,
+      type: "cost",
+      category: "rent",
+      status: "paid",
+      notes: "Czynsz najmu lokalu gastronomicznego 250m2 z ogródkiem letnim.",
+      items: [
+        { name: "Czynsz najmu lokalu 250m2 z zapleczem kuchennym", qty: 1, unit: "mc", netPrice: 11200.0, vatRate: "23%" },
+        { name: "Dzierżawa ogródka gastronomicznego letniego", qty: 1, unit: "mc", netPrice: 2000.0, vatRate: "23%" },
+      ],
+    },
+    {
+      sellerNip: "5213456789",
+      sellerName: "Gastro-Tech Serwis Urządzeń Gastronomicznych",
+      invoiceNumber: `SRV-GRILL/${venueShort}/${year}/${month}/019`,
+      dayOffset: 14,
+      type: "cost",
+      category: "services",
+      status: "paid",
+      notes: "Przegląd pieców konwekcyjno-parowych Rational, sanityzacja tanków i okapów wyciągowych.",
+      items: [
+        { name: "Przegląd techniczny pieca Rational SCC i odkamienianie", qty: 1, unit: "kpl", netPrice: 1100.0, vatRate: "23%" },
+        { name: "Inspekcja i sanityzacja instalacji tanków piwnych", qty: 1, unit: "usł", netPrice: 750.0, vatRate: "23%" },
+      ],
+    },
+    {
+      sellerNip: "5842718923",
+      sellerName: "GastroPOS & Cloud Solutions Sp. z o.o.",
+      invoiceNumber: `SUB-POS/${venueShort}/${year}/${month}/814`,
+      dayOffset: 15,
+      type: "cost",
+      category: "services",
+      status: "paid",
+      notes: "Abonament GastroPOS (4 stanowiska kelnerskie mobilne + KDS kuchni).",
+      items: [
+        { name: "Abonament chmurowy GastroPOS z obsługą KDS kuchni", qty: 1, unit: "mc", netPrice: 590.0, vatRate: "23%" },
+        { name: "Dzierżawa mobilnych terminali kelnerskich Android", qty: 3, unit: "szt", netPrice: 100.0, vatRate: "23%" },
+      ],
+    },
+    {
+      sellerNip: "7010891234",
+      sellerName: 'Drukarnia Reklamowa "MenuPrint Express"',
+      invoiceNumber: `FV-DRUK/${venueShort}/${year}/${month}/402`,
+      dayOffset: 16,
+      type: "cost",
+      category: "services",
+      status: "unpaid",
+      notes: "Druk laminowanych kart dań BBQ oraz grawerowane drewniane podkładki pod kufle.",
+      items: [
+        { name: "Karty dań Bar & Grill laminowane format A4", qty: 80, unit: "szt", netPrice: 8.0, vatRate: "23%" },
+        { name: "Podkładki pod kufle z logo Tankownia", qty: 600, unit: "szt", netPrice: 0.55, vatRate: "23%" },
+      ],
+    },
+    {
+      sellerNip: "5261928301",
+      sellerName: 'Hurtownia Higieniczna "CleanGastro & Eko"',
+      invoiceNumber: `CLEAN/${venueShort}/${year}/${month}/7740`,
+      dayOffset: 18,
+      type: "cost",
+      category: "other",
+      status: "paid",
+      notes: "Profesjonalna chemia do trzonów grillowych, zmywarek gastronomicznych i czyściwa.",
+      items: [
+        { name: "Koncentrat do mycia grilla i pieców konwekcyjnych 5L", qty: 3, unit: "kanister", netPrice: 190.0, vatRate: "23%" },
+        { name: "Płyn do zmywarek gastronomicznych kapturowych 10L", qty: 2, unit: "kanister", netPrice: 175.0, vatRate: "23%" },
+        { name: "Czyściwa przemysłowe niepylące w rolach", qty: 4, unit: "rolka", netPrice: 90.0, vatRate: "23%" },
+      ],
+    },
+    {
+      sellerNip: restaurantNip,
+      sellerName: restaurantName,
+      invoiceNumber: `FS-OUT/${venueShort}/${year}/${month}/0042`,
+      dayOffset: 20,
+      type: "sales",
+      category: "services",
+      status: "paid",
+      notes: "Organizacja zamkniętej kolacji biznesowej z degustacją steków Black Angus i piwa z tanka.",
+      items: [
+        { name: "Kolacja degustacyjna Bar & Grill (60 osób)", qty: 60, unit: "os", netPrice: 145.0, vatRate: "23%" },
+        { name: "Wynajem sali z obsługą barmańską i grill masterem", qty: 1, unit: "usł", netPrice: 2500.0, vatRate: "23%" },
+      ],
+    },
+  ]
+
+  const baseInvoices = isTankownia ? grillInvoices : craftInvoices
   const results: KsefInvoice[] = []
 
   baseInvoices.forEach((base, idx) => {
@@ -570,10 +760,15 @@ export function generateRealisticGastroInvoices(
     const sellerNip = isSales ? restaurantNip : base.sellerNip
     const sellerName = isSales ? restaurantName : base.sellerName
     const buyerNip = isSales ? "5250001122" : restaurantNip
-    const buyerName = isSales ? "TechInnovations Polska Sp. z o.o." : restaurantName
+    const buyerName = isSales ? "TechInnovations Polska Sp. z o.o." : `${restaurantName}`
 
-    const hexCode = (1000 + idx * 77).toString(16).toUpperCase()
-    const ksefNumber = `${sellerNip}-${year}${month}${String(day).padStart(2, "0")}-${hexCode}-01`
+    // Unikalny KSeF Number: uwzględnia deterministyczny hex lokalu i numer pozycji
+    const itemHex = (0x1000 + (idx + 1) * 0x77).toString(16).toUpperCase()
+    const ksefNumber = `${sellerNip}-${year}${month}${String(day).padStart(2, "0")}-${venueHex}${itemHex}-01`
+    const invoiceId = `sim-${venueHex.toLowerCase()}-inv-${idx + 1}`
+
+    const venueNotePrefix = `[Lokal: ${restaurantName}] `
+    const fullNotes = base.notes ? `${venueNotePrefix}${base.notes}` : venueNotePrefix
 
     const xmlContent = `<?xml version="1.0" encoding="UTF-8"?>
 <Faktura xmlns="http://crd.gov.pl/wzor/2023/06/29/12648/">
@@ -635,7 +830,7 @@ ${lineItems
     }
 
     results.push({
-      id: `sim-inv-${idx + 1}`,
+      id: invoiceId,
       restaurant_id: restaurantId,
       ksef_number: ksefNumber,
       invoice_number: base.invoiceNumber,
@@ -654,7 +849,7 @@ ${lineItems
       raw_metadata: metadata,
       payment_status: base.status,
       expense_category: base.category,
-      notes: base.notes,
+      notes: fullNotes,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
@@ -1096,11 +1291,57 @@ export async function terminateKsefSession(
 export async function syncKsefInvoices(
   request: KsefSyncRequest = {}
 ): Promise<KsefSyncResponse> {
-  const restaurantId = request.restaurant_id || "11111111-1111-1111-1111-111111111111"
-  const config = await getKsefConfig(restaurantId)
-  const environment = request.environment || config?.environment || "test"
-  const nip = (config?.nip || "5252812345").replace(/[^0-9]/g, "")
-  const token = config?.ksef_token || ""
+  const isSyncAll = !request.restaurant_id || request.restaurant_id === "all"
+
+  // 1. Zidentyfikuj lokale objęte synchronizacją
+  let targetVenues: Array<{ id: string; name: string; nip: string }> = []
+
+  if (!isSyncAll) {
+    const singleId = request.restaurant_id!
+    const cfg = await getKsefConfig(singleId)
+    let vName = "Lokal Gastronomiczny"
+    if (singleId === "11111111-1111-1111-1111-111111111111") {
+      vName = "Wielokran Gastro Sp. z o.o."
+    } else if (singleId === "22222222-2222-2222-2222-222222222222") {
+      vName = "Tankownia Bar & Grill Sp. z o.o."
+    } else {
+      try {
+        const { data } = await supabase.from("restaurants").select("name, nip").eq("id", singleId).maybeSingle()
+        if (data?.name) vName = data.name
+      } catch {}
+    }
+    targetVenues = [{ id: singleId, name: vName, nip: cfg?.nip || "5252812345" }]
+  } else {
+    // Synchronizacja dla wszystkich lokali sieci
+    try {
+      const { data: dbVenues } = await supabase.from("restaurants").select("id, name, nip")
+      if (dbVenues && dbVenues.length > 0) {
+        for (const dv of dbVenues) {
+          const cfg = await getKsefConfig(dv.id)
+          targetVenues.push({
+            id: dv.id,
+            name: dv.name,
+            nip: cfg?.nip || dv.nip || "5252812345",
+          })
+        }
+      }
+    } catch {}
+
+    if (targetVenues.length === 0) {
+      targetVenues = [
+        {
+          id: "11111111-1111-1111-1111-111111111111",
+          name: "Wielokran Gastro Sp. z o.o.",
+          nip: inMemoryConfigsCache.get("11111111-1111-1111-1111-111111111111")?.nip || "5252812345",
+        },
+        {
+          id: "22222222-2222-2222-2222-222222222222",
+          name: "Tankownia Bar & Grill Sp. z o.o.",
+          nip: inMemoryConfigsCache.get("22222222-2222-2222-2222-222222222222")?.nip || "5252898765",
+        },
+      ]
+    }
+  }
 
   // Ustalenie zakresu dat (domyślnie bieżący miesiąc lub ostatnie 30 dni)
   const now = new Date()
@@ -1110,150 +1351,157 @@ export async function syncKsefInvoices(
   const dateFrom = request.date_from || defaultDateFrom
   const dateTo = request.date_to || defaultDateTo
 
-  // Decyzja czy użyć trybu symulacji:
-  // 1. Jeśli wymuszono symulację (request.force_simulation === true)
-  // 2. Jeśli token testowy nie został wprowadzony (jest pusty lub demonstracyjny)
-  const shouldUseSimulation =
-    request.force_simulation === true ||
-    !token ||
-    token.trim() === "" ||
-    token.includes("demo-token")
+  let totalNewCount = 0
+  let totalUpdatedCount = 0
+  let totalSyncedInvoices: KsefInvoice[] = []
+  let anySimulated = false
+  const allErrors: string[] = []
 
-  let syncedInvoices: KsefInvoice[] = []
-  let isSimulated = false
-  const errors: string[] = []
+  for (const venue of targetVenues) {
+    const config = await getKsefConfig(venue.id)
+    const environment = request.environment || config?.environment || "test"
+    const nip = (config?.nip || venue.nip || "5252812345").replace(/[^0-9]/g, "")
+    const token = config?.ksef_token || ""
 
-  if (!shouldUseSimulation) {
-    try {
-      // 1. Pobranie wyzwania
-      const challengeData = await requestKsefChallenge(nip, environment)
-      // 2. Inicjalizacja sesji
-      const session = await initKsefTokenSession(nip, token, challengeData.challenge, environment)
+    // Decyzja czy użyć trybu symulacji:
+    // 1. Jeśli wymuszono symulację (request.force_simulation === true)
+    // 2. Jeśli token testowy nie został wprowadzony (jest pusty lub demonstracyjny)
+    const shouldUseSimulation =
+      request.force_simulation === true ||
+      !token ||
+      token.trim() === "" ||
+      token.includes("demo-token")
+
+    let venueInvoices: KsefInvoice[] = []
+    let isVenueSimulated = false
+
+    if (!shouldUseSimulation) {
+      try {
+        const challengeData = await requestKsefChallenge(nip, environment)
+        const session = await initKsefTokenSession(nip, token, challengeData.challenge, environment)
+
+        try {
+          const headerList = await queryKsefInvoices(session.sessionToken, dateFrom, dateTo, environment)
+
+          for (const header of headerList) {
+            const ksefRef = header.ksefReferenceNumber
+            try {
+              const xml = await getKsefInvoiceXml(session.sessionToken, ksefRef, environment)
+              const parsed = parseKsefFaXml(xml)
+              const category = detectExpenseCategory(parsed.sellerName, parsed.metadata.items)
+
+              venueInvoices.push({
+                id: `ksef-${ksefRef}`,
+                restaurant_id: venue.id,
+                ksef_number: ksefRef,
+                invoice_number: parsed.invoiceNumber,
+                invoice_type: "cost",
+                issue_date: parsed.issueDate,
+                acquisition_date: header.acquisitionTimestamp || `${parsed.issueDate}T12:00:00Z`,
+                seller_nip: parsed.sellerNip,
+                seller_name: parsed.sellerName,
+                buyer_nip: parsed.buyerNip,
+                buyer_name: parsed.buyerName,
+                net_amount: parsed.netAmount,
+                vat_amount: parsed.vatAmount,
+                gross_amount: parsed.grossAmount,
+                currency: parsed.currency,
+                xml_content: xml,
+                raw_metadata: parsed.metadata,
+                payment_status: "paid",
+                expense_category: category,
+                notes: `Faktura pobrana oficjalnym API KSeF (${environment}) dla lokalu ${venue.name}`,
+              })
+            } catch (itemErr: any) {
+              console.error(`Błąd pobierania XML dla ${ksefRef}:`, itemErr)
+              allErrors.push(`Błąd pobierania faktury ${ksefRef}: ${itemErr.message}`)
+            }
+          }
+        } finally {
+          await terminateKsefSession(session.sessionToken, environment)
+        }
+      } catch (apiErr: any) {
+        console.warn(`Połączenie z oficjalnym API KSeF dla lokalu ${venue.name} nie powiodło się, przełączam na symulację:`, apiErr.message)
+        allErrors.push(`KSeF API ${environment} (${venue.name}): ${apiErr.message}`)
+        isVenueSimulated = true
+      }
+    } else {
+      isVenueSimulated = true
+    }
+
+    // Jeśli tryb symulacji jest aktywny lub brak faktur z API KSeF
+    if (isVenueSimulated || venueInvoices.length === 0) {
+      venueInvoices = generateRealisticGastroInvoices(venue.id, nip, venue.name, dateFrom, dateTo)
+      isVenueSimulated = true
+    }
+
+    if (isVenueSimulated) {
+      anySimulated = true
+    }
+
+    // Zapis faktur do pamięci podręcznej oraz Supabase
+    for (const inv of venueInvoices) {
+      const isExisting = inMemoryInvoicesCache.has(inv.ksef_number)
+      if (isExisting) totalUpdatedCount++
+      else totalNewCount++
+
+      inMemoryInvoicesCache.set(inv.ksef_number, inv)
 
       try {
-        // 3. Pobranie listy nagłówków faktur
-        const headerList = await queryKsefInvoices(session.sessionToken, dateFrom, dateTo, environment)
-
-        // 4. Pobieranie i parsowanie XML dla każdej faktury
-        for (const header of headerList) {
-          const ksefRef = header.ksefReferenceNumber
-          try {
-            const xml = await getKsefInvoiceXml(session.sessionToken, ksefRef, environment)
-            const parsed = parseKsefFaXml(xml)
-            const category = detectExpenseCategory(parsed.sellerName, parsed.metadata.items)
-
-            syncedInvoices.push({
-              id: `ksef-${ksefRef}`,
-              restaurant_id: restaurantId,
-              ksef_number: ksefRef,
-              invoice_number: parsed.invoiceNumber,
-              invoice_type: "cost",
-              issue_date: parsed.issueDate,
-              acquisition_date: header.acquisitionTimestamp || `${parsed.issueDate}T12:00:00Z`,
-              seller_nip: parsed.sellerNip,
-              seller_name: parsed.sellerName,
-              buyer_nip: parsed.buyerNip,
-              buyer_name: parsed.buyerName,
-              net_amount: parsed.netAmount,
-              vat_amount: parsed.vatAmount,
-              gross_amount: parsed.grossAmount,
-              currency: parsed.currency,
-              xml_content: xml,
-              raw_metadata: parsed.metadata,
-              payment_status: "paid",
-              expense_category: category,
-              notes: `Faktura pobrana oficjalnym API KSeF (${environment})`,
-            })
-          } catch (itemErr: any) {
-            console.error(`Błąd pobierania XML dla ${ksefRef}:`, itemErr)
-            errors.push(`Błąd pobierania faktury ${ksefRef}: ${itemErr.message}`)
-          }
-        }
-      } finally {
-        // 5. Zamknięcie sesji w KSeF
-        await terminateKsefSession(session.sessionToken, environment)
-      }
-    } catch (apiErr: any) {
-      console.warn("Połączenie z oficjalnym API KSeF nie powiodło się, przełączam na symulację gastronomiczną:", apiErr.message)
-      errors.push(`KSeF API ${environment}: ${apiErr.message}`)
-      isSimulated = true
+        await supabase.from("ksef_invoices").upsert(
+          {
+            restaurant_id: inv.restaurant_id,
+            ksef_number: inv.ksef_number,
+            invoice_number: inv.invoice_number,
+            invoice_type: inv.invoice_type,
+            issue_date: inv.issue_date,
+            acquisition_date: inv.acquisition_date,
+            seller_nip: inv.seller_nip,
+            seller_name: inv.seller_name,
+            buyer_nip: inv.buyer_nip,
+            buyer_name: inv.buyer_name,
+            net_amount: inv.net_amount,
+            vat_amount: inv.vat_amount,
+            gross_amount: inv.gross_amount,
+            currency: inv.currency,
+            xml_content: inv.xml_content,
+            raw_metadata: inv.raw_metadata,
+            payment_status: inv.payment_status,
+            expense_category: inv.expense_category,
+            notes: inv.notes,
+          },
+          { onConflict: "ksef_number" }
+        )
+      } catch (saveErr) {}
     }
-  } else {
-    isSimulated = true
+
+    totalSyncedInvoices.push(...venueInvoices)
+
+    // Aktualizacja last_sync_at w konfiguracji lokalu
+    await saveKsefConfig({
+      restaurant_id: venue.id,
+      last_sync_at: new Date().toISOString(),
+    })
   }
 
-  // Jeśli tryb symulacji jest aktywny lub wystąpił błąd API KSeF
-  if (isSimulated || syncedInvoices.length === 0) {
-    const venueName =
-      restaurantId === "22222222-2222-2222-2222-222222222222"
-        ? "Tankownia Bar & Grill Sp. z o.o."
-        : "Wielokran Gastro Sp. z o.o."
+  // Pełna lista wszystkich aktualnych faktur (posortowana chronologicznie malejąco)
+  const allCurrentInvoices = Array.from(inMemoryInvoicesCache.values()).sort((a, b) =>
+    b.issue_date.localeCompare(a.issue_date)
+  )
 
-    syncedInvoices = generateRealisticGastroInvoices(restaurantId, nip, venueName, dateFrom, dateTo)
-    isSimulated = true
-  }
-
-  // Zapis faktur do Supabase ksef_invoices oraz pamięci podręcznej
-  let newCount = 0
-  let updatedCount = 0
-
-  for (const inv of syncedInvoices) {
-    const isExisting = inMemoryInvoicesCache.has(inv.ksef_number)
-    if (isExisting) updatedCount++
-    else newCount++
-
-    inMemoryInvoicesCache.set(inv.ksef_number, inv)
-
-    // Próba zapisu do tabeli w Supabase
-    try {
-      await supabase.from("ksef_invoices").upsert(
-        {
-          restaurant_id: inv.restaurant_id,
-          ksef_number: inv.ksef_number,
-          invoice_number: inv.invoice_number,
-          invoice_type: inv.invoice_type,
-          issue_date: inv.issue_date,
-          acquisition_date: inv.acquisition_date,
-          seller_nip: inv.seller_nip,
-          seller_name: inv.seller_name,
-          buyer_nip: inv.buyer_nip,
-          buyer_name: inv.buyer_name,
-          net_amount: inv.net_amount,
-          vat_amount: inv.vat_amount,
-          gross_amount: inv.gross_amount,
-          currency: inv.currency,
-          xml_content: inv.xml_content,
-          raw_metadata: inv.raw_metadata,
-          payment_status: inv.payment_status,
-          expense_category: inv.expense_category,
-          notes: inv.notes,
-        },
-        { onConflict: "ksef_number" }
-      )
-    } catch (saveErr) {
-      // Ignorujemy błędy braku tabeli lub RLS na etapie przed migracją
-    }
-  }
-
-  // Aktualizacja last_sync_at w konfiguracji
-  await saveKsefConfig({
-    restaurant_id: restaurantId,
-    last_sync_at: new Date().toISOString(),
-  })
-
-  const message = isSimulated
-    ? `Pomyślnie zsynchronizowano ${syncedInvoices.length} faktur gastronomicznych w trybie symulacji Sandbox (browary kraftowe, alkohole mocne, żywność, media, czynsz, serwis nalewaków).`
-    : `Pomyślnie pobrano ${syncedInvoices.length} e-faktur z oficjalnego API KSeF (${environment}).`
+  const message = anySimulated
+    ? `Pomyślnie zsynchronizowano ${totalSyncedInvoices.length} faktur gastronomicznych dla ${targetVenues.length > 1 ? `wszystkich ${targetVenues.length} lokali sieci` : targetVenues[0].name} w trybie symulacji Sandbox (browary kraftowe, wódki, żywność, media, czynsz, serwis).`
+    : `Pomyślnie pobrano ${totalSyncedInvoices.length} e-faktur z oficjalnego API KSeF dla ${targetVenues.length} lokali.`
 
   return {
     success: true,
     message,
-    synced_count: syncedInvoices.length,
-    new_count: newCount,
-    updated_count: updatedCount,
-    environment,
-    is_simulated: isSimulated,
-    invoices: syncedInvoices,
-    errors: errors.length > 0 ? errors : undefined,
+    synced_count: totalSyncedInvoices.length,
+    new_count: totalNewCount,
+    updated_count: totalUpdatedCount,
+    environment: "test",
+    is_simulated: anySimulated,
+    invoices: allCurrentInvoices, // Zwracamy pełną listę aktualnych faktur sieci, aby widoki nie traciły faktur innych lokali
+    errors: allErrors.length > 0 ? allErrors : undefined,
   }
 }

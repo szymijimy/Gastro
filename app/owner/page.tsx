@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation"
 import { supabase } from "@/lib/supabase"
 import { FeedbackHost, showToast, askConfirm } from "@/components/ui/feedback"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import {
   Building2,
@@ -16,6 +18,7 @@ import {
   ShieldCheck,
   RefreshCw,
   Sparkles,
+  Pencil,
 } from "lucide-react"
 
 import { OwnerDisclaimerBanner } from "@/components/owner/OwnerDisclaimerBanner"
@@ -62,8 +65,13 @@ function OwnerDashboard() {
   // Stan użytkownika i autoryzacji
   const [loading, setLoading] = useState(true)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
-  const [currentUserEmail, setCurrentUserEmail] = useState<string>("")
-  const [currentUserName, setCurrentUserName] = useState<string>("Właściciel")
+  const [currentUserEmail, setCurrentUserEmail] = useState<string>("kd@t.pl")
+  const [currentUserName, setCurrentUserName] = useState<string>("Krzysztof D.")
+
+  // Stan edycji profilu właściciela (imię i nazwisko)
+  const [isEditProfileOpen, setIsEditProfileOpen] = useState(false)
+  const [editFullName, setEditFullName] = useState("")
+  const [isSavingProfile, setIsSavingProfile] = useState(false)
 
   // Zakładka i aktywny lokal
   const [activeTab, setActiveTab] = useState<OwnerTab>("financial")
@@ -95,6 +103,7 @@ function OwnerDashboard() {
   const [invoices, setInvoices] = useState<KsefInvoice[]>([])
   const [configs, setConfigs] = useState<Record<string, KsefConfig | null>>({})
   const [staffUsers, setStaffUsers] = useState<OwnerStaffUser[]>([])
+  const [availableRoles, setAvailableRoles] = useState<string[]>([])
   const [isSyncingKsef, setIsSyncingKsef] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
 
@@ -116,12 +125,48 @@ function OwnerDashboard() {
         }
 
         const uid = session?.user?.id || "aaaaaaaa-aaaa-aaaa-aaaa-000000000001"
-        const email = session?.user?.email || "owner@gastro.pl"
-        const metaName = session?.user?.user_metadata?.full_name || "Adam Właściciel"
+        const email = session?.user?.email || "kd@t.pl"
+
+        // Pobierz imię i nazwisko z public.users lub auth metadata, domyślnie 'Krzysztof D.'
+        let resolvedName = "Krzysztof D."
+        try {
+          const { data: userProfile } = await supabase
+            .from("users")
+            .select("full_name")
+            .eq("id", uid)
+            .maybeSingle()
+
+          if (
+            userProfile?.full_name &&
+            userProfile.full_name !== "Adam Właściciel" &&
+            userProfile.full_name !== "Właściciel Sieci"
+          ) {
+            resolvedName = userProfile.full_name
+          } else if (
+            session?.user?.user_metadata?.full_name &&
+            session.user.user_metadata.full_name !== "Adam Właściciel"
+          ) {
+            resolvedName = session.user.user_metadata.full_name
+          } else {
+            resolvedName = "Krzysztof D."
+            // Automatyczna inicjalizacja domyślnego imienia w public.users i auth
+            if (session?.user?.id) {
+              await supabase
+                .from("users")
+                .upsert(
+                  { id: uid, email, full_name: "Krzysztof D.", is_active: true },
+                  { onConflict: "id" }
+                )
+              await supabase.auth.updateUser({ data: { full_name: "Krzysztof D." } })
+            }
+          }
+        } catch {
+          resolvedName = session?.user?.user_metadata?.full_name || "Krzysztof D."
+        }
 
         setCurrentUserId(uid)
         setCurrentUserEmail(email)
-        setCurrentUserName(metaName)
+        setCurrentUserName(resolvedName)
 
         // Sprawdź rolę 'owner' w bazie
         const { data: rolesData } = await supabase
@@ -158,7 +203,7 @@ function OwnerDashboard() {
       // A. Lokale
       const { data: venuesData } = await supabase
         .from("restaurants")
-        .select("id, name, color, nip")
+        .select("id, name, color")
 
       let loadedVenues = DEFAULT_VENUES
       if (venuesData && venuesData.length > 0) {
@@ -166,7 +211,7 @@ function OwnerDashboard() {
           id: v.id,
           name: v.name || "Lokal",
           color: v.color || (v.name === "Wielokran" ? "#8b5cf6" : "#f97316"),
-          nip: v.nip || (v.name === "Wielokran" ? "5252812345" : "5252898765"),
+          nip: v.name === "Wielokran" ? "5252812345" : "5252898765",
           is_active: true,
         }))
         setVenues(loadedVenues)
@@ -207,7 +252,25 @@ function OwnerDashboard() {
       }
       setConfigs(configMap)
 
-      // D. Personel i menadżerowie
+      // D. Role personelu lokali
+      try {
+        const { data: rolesData } = await supabase
+          .from("restaurant_roles")
+          .select("name")
+          .in("restaurant_id", loadedVenues.map((v) => v.id))
+          .order("name", { ascending: true })
+
+        if (rolesData && rolesData.length > 0) {
+          const uniqueRoles = Array.from(
+            new Set(rolesData.map((r: { name: string }) => r.name).filter(Boolean))
+          )
+          setAvailableRoles(uniqueRoles)
+        }
+      } catch (rolesErr) {
+        console.warn("Błąd ładowania ról lokali:", rolesErr)
+      }
+
+      // E. Personel i pracownicy sieci
       await loadStaffData(loadedVenues)
     } catch (err: any) {
       console.error("Błąd loadInitialData:", err)
@@ -219,19 +282,28 @@ function OwnerDashboard() {
   // Pobieranie pracowników sieci
   const loadStaffData = async (activeVenues: OwnerVenue[]) => {
     try {
-      const { data: ruData } = await supabase
+      const venueIds = activeVenues.map((v) => v.id)
+      if (venueIds.length === 0) return
+
+      const staffMap = new Map<string, OwnerStaffUser>()
+
+      // 1. Bezpośrednie pobranie z restaurant_users wraz z profilem users
+      const { data: ruData, error: ruError } = await supabase
         .from("restaurant_users")
         .select(`
           restaurant_id,
           user_id,
           role,
           hourly_rate,
-          users:user_id (id, full_name, email)
+          users (id, full_name, email, default_hourly_rate)
         `)
+        .in("restaurant_id", venueIds)
+
+      if (ruError) {
+        console.warn("loadStaffData: Błąd zapytania restaurant_users:", ruError.message)
+      }
 
       if (ruData && ruData.length > 0) {
-        const staffMap = new Map<string, OwnerStaffUser>()
-
         ruData.forEach((row: any) => {
           const uid = row.user_id
           const userObj = Array.isArray(row.users) ? row.users[0] : row.users
@@ -243,28 +315,90 @@ function OwnerDashboard() {
               email: userObj?.email || "pracownik@gastro.pl",
               full_name: userObj?.full_name || "Pracownik",
               is_active: true,
-              default_hourly_rate: Number(row.hourly_rate) || 30,
+              default_hourly_rate: Number(row.hourly_rate) || Number(userObj?.default_hourly_rate) || 30,
               memberships: [],
             })
           }
 
           const existingUser = staffMap.get(uid)!
-          existingUser.memberships.push({
-            restaurant_id: row.restaurant_id,
-            restaurant_name: venueObj?.name || "Lokal",
-            role: row.role,
-            hourly_rate: Number(row.hourly_rate) || 30,
+          if (userObj?.email && (existingUser.email === "pracownik@gastro.pl" || !existingUser.email)) {
+            existingUser.email = userObj.email
+          }
+          if (userObj?.full_name && (existingUser.full_name === "Pracownik" || !existingUser.full_name)) {
+            existingUser.full_name = userObj.full_name
+          }
+
+          if (!existingUser.memberships.some((m) => m.restaurant_id === row.restaurant_id)) {
+            existingUser.memberships.push({
+              restaurant_id: row.restaurant_id,
+              restaurant_name: venueObj?.name || "Lokal",
+              role: row.role,
+              hourly_rate: Number(row.hourly_rate) || 30,
+            })
+          }
+        })
+      }
+
+      // 2. Pobranie zespołu przez procedurę RPC get_restaurant_teammates (SECURITY DEFINER)
+      //    Zapewnia pełne pobranie personelu dla właściciela, jeśli polityki RLS tabeli restaurant_users
+      //    nie zostały jeszcze zaktualizowane w bazie danych.
+      try {
+        const teamResults = await Promise.all(
+          venueIds.map(async (vId) => {
+            const { data: tData, error: tErr } = await supabase.rpc("get_restaurant_teammates", {
+              p_restaurant_id: vId,
+            })
+            if (tErr) console.warn(`Błąd get_restaurant_teammates (${vId}):`, tErr.message)
+            return { venueId: vId, teammates: tData || [] }
+          })
+        )
+
+        teamResults.forEach(({ venueId, teammates }) => {
+          const venueObj = activeVenues.find((v) => v.id === venueId)
+          teammates.forEach((tm: any) => {
+            const uid = tm.user_id
+            if (!staffMap.has(uid)) {
+              staffMap.set(uid, {
+                id: uid,
+                email: tm.email || "pracownik@gastro.pl",
+                full_name: tm.full_name || "Pracownik",
+                is_active: true,
+                default_hourly_rate: 30,
+                memberships: [],
+              })
+            }
+
+            const existingUser = staffMap.get(uid)!
+            if (tm.email && (existingUser.email === "pracownik@gastro.pl" || !existingUser.email)) {
+              existingUser.email = tm.email
+            }
+            if (tm.full_name && (existingUser.full_name === "Pracownik" || !existingUser.full_name)) {
+              existingUser.full_name = tm.full_name
+            }
+
+            if (!existingUser.memberships.some((m) => m.restaurant_id === venueId)) {
+              existingUser.memberships.push({
+                restaurant_id: venueId,
+                restaurant_name: venueObj?.name || "Lokal",
+                role: tm.role || "Barman",
+                hourly_rate: 30,
+              })
+            }
           })
         })
+      } catch (rpcErr) {
+        console.warn("loadStaffData: Błąd RPC get_restaurant_teammates:", rpcErr)
+      }
 
+      if (staffMap.size > 0) {
         setStaffUsers(Array.from(staffMap.values()))
       } else {
-        // Mock demonstracyjny kadry
+        // Mock demonstracyjny kadry wyłącznie gdy baza jest całkowicie pusta
         setStaffUsers([
           {
             id: "aaaaaaaa-aaaa-aaaa-aaaa-000000000001",
-            email: "owner@gastro.pl",
-            full_name: "Adam Właściciel",
+            email: "kd@t.pl",
+            full_name: "Krzysztof D.",
             is_active: true,
             default_hourly_rate: 0,
             memberships: [
@@ -313,7 +447,7 @@ function OwnerDashboard() {
               {
                 restaurant_id: "11111111-1111-1111-1111-111111111111",
                 restaurant_name: "Wielokran",
-                role: "bartender",
+                role: "Barman",
                 hourly_rate: 32,
               },
             ],
@@ -328,7 +462,7 @@ function OwnerDashboard() {
               {
                 restaurant_id: "22222222-2222-2222-2222-222222222222",
                 restaurant_name: "Tankownia",
-                role: "bartender",
+                role: "Barman",
                 hourly_rate: 31,
               },
             ],
@@ -581,7 +715,7 @@ function OwnerDashboard() {
   }
 
   // --------------------------------------------------------------------------
-  // 7. Akcje: Zarządzanie uprawnieniami i kadrami menadżerskimi
+  // 7. Akcje: Zarządzanie uprawnieniami i kadrą
   // --------------------------------------------------------------------------
   const handleSaveStaffAssignment = async ({
     userId,
@@ -609,8 +743,8 @@ function OwnerDashboard() {
         const isAssigned = selectedVenueIds.includes(venue.id)
 
         if (isAssigned) {
-          // Wstaw lub zaktualizuj
-          const { error } = await supabase.from("restaurant_users").upsert(
+          // Wstaw lub zaktualizuj w restaurant_users
+          const { error: upsertErr } = await supabase.from("restaurant_users").upsert(
             {
               restaurant_id: venue.id,
               user_id: userId,
@@ -619,7 +753,18 @@ function OwnerDashboard() {
             },
             { onConflict: "restaurant_id,user_id" }
           )
-          if (error) console.warn("Supabase upsert warning:", error.message)
+          if (upsertErr) {
+            console.warn("Supabase upsert warning, fallback do update:", upsertErr.message)
+            const { error: updateErr } = await supabase
+              .from("restaurant_users")
+              .update({
+                role: role,
+                hourly_rate: hourlyRate,
+              })
+              .eq("restaurant_id", venue.id)
+              .eq("user_id", userId)
+            if (updateErr) console.warn("Supabase update warning:", updateErr.message)
+          }
         } else {
           // Usuń przypisanie do lokalu
           const { error } = await supabase
@@ -629,6 +774,14 @@ function OwnerDashboard() {
             .eq("user_id", userId)
           if (error) console.warn("Supabase delete warning:", error.message)
         }
+      }
+
+      // Synchronizacja bazowej stawki godzinowej w profilu użytkownika
+      if (hourlyRate > 0) {
+        await supabase
+          .from("users")
+          .update({ default_hourly_rate: hourlyRate })
+          .eq("id", userId)
       }
 
       // Zaktualizuj stan lokalny
@@ -693,11 +846,81 @@ function OwnerDashboard() {
     }
   }
 
+  // --------------------------------------------------------------------------
+  // 8. Akcje: Edycja profilu właściciela (imię i nazwisko)
+  // --------------------------------------------------------------------------
+  const handleOpenEditProfile = () => {
+    setEditFullName(currentUserName)
+    setIsEditProfileOpen(true)
+  }
+
+  const handleSaveProfileName = async () => {
+    const trimmed = editFullName.trim()
+    if (!trimmed) {
+      showToast("Imię i nazwisko nie może być puste.", "warning")
+      return
+    }
+
+    setIsSavingProfile(true)
+    try {
+      // 1. Zapis w public.users w Supabase
+      if (currentUserId) {
+        const { error: dbError } = await supabase
+          .from("users")
+          .upsert(
+            {
+              id: currentUserId,
+              email: currentUserEmail,
+              full_name: trimmed,
+              is_active: true,
+            },
+            { onConflict: "id" }
+          )
+
+        if (dbError) {
+          console.error("Błąd zapisu w public.users:", dbError)
+          throw new Error(dbError.message)
+        }
+      }
+
+      // 2. Zapis w Supabase Auth (supabase.auth.updateUser)
+      const { error: authError } = await supabase.auth.updateUser({
+        data: {
+          full_name: trimmed,
+        },
+      })
+
+      if (authError) {
+        console.warn("Ostrzeżenie supabase.auth.updateUser:", authError.message)
+      }
+
+      // 3. Aktualizacja stanu w komponencie
+      setCurrentUserName(trimmed)
+      if (typeof window !== "undefined") {
+        localStorage.setItem("gastro_owner_name", trimmed)
+      }
+
+      // 4. Aktualizacja w staffUsers
+      setStaffUsers((prev) =>
+        prev.map((u) => (u.id === currentUserId ? { ...u, full_name: trimmed } : u))
+      )
+
+      showToast("Pomyślnie zaktualizowano dane właściciela.", "success")
+      setIsEditProfileOpen(false)
+    } catch (err: any) {
+      console.error("Błąd aktualizacji profilu:", err)
+      showToast("Nie udało się zaktualizować profilu: " + (err.message || ""), "error")
+    } finally {
+      setIsSavingProfile(false)
+    }
+  }
+
   // Wylogowanie
   const handleLogout = async () => {
     await supabase.auth.signOut()
     if (typeof window !== "undefined") {
       localStorage.removeItem("gastro_owner_mock")
+      localStorage.removeItem("gastro_owner_name")
     }
     router.replace("/")
   }
@@ -780,24 +1003,47 @@ function OwnerDashboard() {
           </div>
 
           {/* Profil użytkownika, skróty i wylogowanie */}
-          <div className="flex items-center gap-3">
-            <div className="hidden sm:block text-right">
-              <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 block">
-                {currentUserName}
-              </span>
-              <span className="text-[11px] text-zinc-500 font-mono block">
-                {currentUserEmail}
-              </span>
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="flex items-center gap-2">
+              <div className="hidden sm:block text-right">
+                <div className="flex items-center justify-end gap-1.5">
+                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 block">
+                    {currentUserName}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleOpenEditProfile}
+                    className="p-1 rounded-md text-zinc-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+                    title="Edytuj imię i nazwisko właściciela"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <span className="text-[11px] text-zinc-500 font-mono block">
+                  {currentUserEmail}
+                </span>
+              </div>
+
+              {/* Przycisk edycji profilu na telefonie */}
+              <button
+                type="button"
+                onClick={handleOpenEditProfile}
+                className="sm:hidden p-1.5 rounded-lg text-zinc-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-zinc-100 dark:bg-zinc-800 cursor-pointer"
+                title="Edytuj profil właściciela"
+              >
+                <Pencil className="w-4 h-4" />
+              </button>
             </div>
 
             <Button
               variant="outline"
               size="sm"
               onClick={() => router.push("/manager")}
-              className="text-xs h-8 gap-1 hidden lg:inline-flex"
+              className="text-xs h-8 gap-1 font-semibold border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 inline-flex"
+              title="Przejdź do panelu zarządzania lokalami"
             >
               <ExternalLink className="w-3.5 h-3.5" />
-              Widok Managera
+              Zarządzaj Lokalami
             </Button>
 
             <Button
@@ -871,7 +1117,7 @@ function OwnerDashboard() {
                 className="text-xs font-semibold px-4 py-2 flex items-center gap-2"
               >
                 <Users className="w-4 h-4" />
-                Zarządzanie Kadrą Menadżerską
+                Zarządzanie Kadrą
               </TabsTrigger>
               <TabsTrigger
                 value="ksef"
@@ -910,12 +1156,13 @@ function OwnerDashboard() {
             />
           </TabsContent>
 
-          {/* Tab 2: Zarządzanie Kadrą Menadżerską */}
+          {/* Tab 2: Zarządzanie Kadrą */}
           <TabsContent value="managers" className="focus:outline-hidden space-y-6">
             <OwnerStaffTab
               staffUsers={staffUsers}
               venues={venues}
               currentUserId={currentUserId}
+              availableRoles={availableRoles}
               onSaveStaffAssignment={handleSaveStaffAssignment}
             />
           </TabsContent>
@@ -947,6 +1194,97 @@ function OwnerDashboard() {
           </div>
         </div>
       </footer>
+
+      {/* Modal edycji profilu właściciela */}
+      {isEditProfileOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl max-w-md w-full border border-zinc-200 dark:border-zinc-800 shadow-2xl p-6 space-y-5">
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 flex items-center justify-center font-bold text-sm">
+                  👑
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-zinc-900 dark:text-zinc-100">
+                    Edycja profilu właściciela
+                  </h3>
+                  <p className="text-xs text-zinc-500">
+                    Aktualizacja danych konta w Supabase (baza i autoryzacja)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEditProfileOpen(false)}
+                className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 text-lg leading-none p-1 rounded-md cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                handleSaveProfileName()
+              }}
+              className="space-y-4"
+            >
+              <div className="space-y-1.5">
+                <Label htmlFor="owner-fullname" className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                  Imię i nazwisko właściciela
+                </Label>
+                <Input
+                  id="owner-fullname"
+                  type="text"
+                  value={editFullName}
+                  onChange={(e) => setEditFullName(e.target.value)}
+                  placeholder="np. Krzysztof D."
+                  required
+                  autoFocus
+                  className="text-sm font-medium"
+                />
+                <p className="text-[11px] text-zinc-400">
+                  Imię będzie widoczne na raportach sieci, fakturach oraz w module kadry.
+                </p>
+              </div>
+
+              <div className="space-y-1 bg-zinc-50 dark:bg-zinc-800/50 p-3 rounded-xl border border-zinc-200/60 dark:border-zinc-800 text-xs text-zinc-600 dark:text-zinc-400">
+                <div className="flex justify-between py-0.5">
+                  <span className="text-zinc-400">Adres e-mail:</span>
+                  <span className="font-mono font-medium text-zinc-800 dark:text-zinc-200">{currentUserEmail}</span>
+                </div>
+                <div className="flex justify-between py-0.5">
+                  <span className="text-zinc-400">Rola systemowa:</span>
+                  <span className="font-semibold text-amber-600 dark:text-amber-400">Właściciel Sieci (owner)</span>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsEditProfileOpen(false)}
+                  disabled={isSavingProfile}
+                >
+                  Anuluj
+                </Button>
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={isSavingProfile || !editFullName.trim()}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold cursor-pointer"
+                >
+                  {isSavingProfile ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin mr-1.5" />
+                  ) : null}
+                  Zapisz zmiany
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
