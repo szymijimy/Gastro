@@ -18,19 +18,10 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- 1. OBSŁUGA ROLI 'owner' W RESTAURANT_USERS I REGUŁY BEZPIECZEŃSTWA
 -- ----------------------------------------------------------------------------
 
--- Zapewnienie, że kolumna role w restaurant_users akceptuje rolę 'owner'
-DO $$
-BEGIN
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint 
-    WHERE conname = 'restaurant_users_role_check'
-  ) THEN
-    ALTER TABLE restaurant_users DROP CONSTRAINT restaurant_users_role_check;
-  END IF;
-
-  ALTER TABLE restaurant_users ADD CONSTRAINT restaurant_users_role_check 
-    CHECK (role IS NOT NULL AND length(trim(role)) > 0);
-END $$;
+-- Usunięcie ewentualnych restrykcyjnych ograniczeń na kolumnie role w restaurant_users,
+-- aby umożliwić role systemowe ('owner', 'manager') oraz dowolne role definiowane przez lokale
+ALTER TABLE restaurant_users DROP CONSTRAINT IF EXISTS check_restaurant_users_role;
+ALTER TABLE restaurant_users DROP CONSTRAINT IF EXISTS restaurant_users_role_check;
 
 -- Indeksy przyspieszające weryfikację uprawnień
 CREATE INDEX IF NOT EXISTS idx_restaurant_users_role_user 
