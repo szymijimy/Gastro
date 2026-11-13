@@ -538,6 +538,7 @@ function ManagerDashboard() {
   const router = useRouter()
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [userName, setUserName] = useState<string>("")
+  const [isUserOwner, setIsUserOwner] = useState(false)
   const [restaurants, setRestaurants] = useState<{ restaurant_id: string; name: string; color?: string }[]>([])
   // Ref utrzymujący aktualną wartość restaurants bez powodowania re-renderu w useCallback
   const restaurantsRef = useRef<{ restaurant_id: string; name: string; color?: string }[]>([])
@@ -704,9 +705,11 @@ function ManagerDashboard() {
         .from("restaurant_users")
         .select("restaurant_id, role, restaurants (name, color)")
         .eq("user_id", session.user.id)
-        .eq("role", "manager")
+        .in("role", ["manager", "owner"])
 
       if (userRestaurants && userRestaurants.length > 0) {
+        const hasOwnerRole = userRestaurants.some((ur: { role: string }) => ur.role === "owner")
+        setIsUserOwner(hasOwnerRole)
         const formattedVenues = userRestaurants.map((ur: UserRestaurantItem) => {
           const rObj = Array.isArray(ur.restaurants) ? ur.restaurants[0] : ur.restaurants
           const vName = rObj?.name || "Lokal"
@@ -794,6 +797,7 @@ function ManagerDashboard() {
   }
 
   const getRoleColor = (roleName: string) => {
+    if (roleName === "owner") return "#4f46e5"
     if (roleName === "manager") return "#18181b"
     const found = roles.find(r => r.name.toLowerCase() === roleName.toLowerCase())
     return found?.color || "#71717a"
@@ -871,6 +875,33 @@ function ManagerDashboard() {
     })
 
     if (error) {
+      // Fallback: jeśli RPC rzuca błąd, spróbuj dodać bezpośrednio jeśli profil użytkownika już istnieje
+      const { data: userProfile } = await supabase
+        .from("users")
+        .select("id")
+        .eq("email", newStaffEmail.trim().toLowerCase())
+        .maybeSingle()
+
+      if (userProfile?.id) {
+        const { error: upsertErr } = await supabase.from("restaurant_users").upsert(
+          {
+            restaurant_id: activeRestaurantId,
+            user_id: userProfile.id,
+            role: newStaffRole,
+            hourly_rate: parseFloat(newStaffRate) || 0,
+          },
+          { onConflict: "restaurant_id,user_id" }
+        )
+
+        if (!upsertErr) {
+          showToast("Pracownik pomyślnie dodany do lokalu.", "success")
+          setNewStaffName("")
+          setNewStaffEmail("")
+          setNewStaffRate("")
+          await loadVenueData(activeRestaurantId)
+          return
+        }
+      }
       showToast("Błąd serwera: " + error.message, "error")
     } else if (data !== "OK") {
       showToast(data, "error")
@@ -1284,6 +1315,16 @@ function ManagerDashboard() {
                   <span className="px-2.5 py-0.5 rounded-full text-[11px] sm:text-xs font-semibold bg-blue-600 text-white shadow-2xs">
                     Panel Managera
                   </span>
+                  {isUserOwner && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2.5 text-xs bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:text-indigo-800 border-indigo-200 font-semibold gap-1"
+                      onClick={() => router.push("/owner")}
+                    >
+                      👑 Panel Właściciela (KSeF)
+                    </Button>
+                  )}
                 </div>
                 <p className="text-xs text-zinc-500">
                   Aktywny lokal: <strong className="text-zinc-900">{activeRestaurantName || "Brak aktywnego lokalu"}</strong>
@@ -1531,7 +1572,8 @@ function ManagerDashboard() {
                           {roles.map(r => (
                             <option key={r.id} value={r.name}>{r.name}</option>
                           ))}
-                          <option value="manager">Manager (Pełny dostęp)</option>
+                          <option value="manager">Manager (Pełny dostęp do lokalu)</option>
+                          <option value="owner">Właściciel (Owner - pełny dostęp do sieci i KSeF)</option>
                         </select>
                       </div>
                       <div className="space-y-2">
@@ -1603,13 +1645,14 @@ function ManagerDashboard() {
                                     onChange={(e) => handleUpdateStaffRole(member.user_id, e.target.value)}
                                     className="h-8 rounded-md border border-zinc-200 bg-white px-2 text-xs font-medium text-zinc-800 disabled:opacity-60 disabled:cursor-not-allowed"
                                   >
-                                    {member.role !== "manager" && !roles.some(r => r.name === member.role) && (
+                                    {member.role !== "manager" && member.role !== "owner" && !roles.some(r => r.name === member.role) && (
                                       <option value={member.role}>{member.role} (niezdefiniowana)</option>
                                     )}
                                     {roles.map(r => (
                                       <option key={r.id} value={r.name}>{r.name}</option>
                                     ))}
                                     <option value="manager">Manager</option>
+                                    <option value="owner">Właściciel (Owner)</option>
                                   </select>
                                 </div>
                               </TableCell>
