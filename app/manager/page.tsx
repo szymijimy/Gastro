@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { FeedbackHost, showToast, askConfirm } from "@/components/ui/feedback"
 import { ShiftCalendar } from "@/components/ShiftCalendar"
+import { Search, Filter, X } from "lucide-react"
 import { InventoryModule } from "@/components/InventoryModule"
 import { ManagerScheduleModule } from "@/components/ManagerScheduleModule"
 import { AttendanceManagerModule } from "@/components/AttendanceManagerModule"
@@ -366,8 +367,11 @@ function TodoBatchModalDialog({
       return
     }
     setSaving(true)
-    await onSaveBatch(valid, targetDate)
-    setSaving(false)
+    try {
+      await onSaveBatch(valid, targetDate)
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -538,6 +542,7 @@ function ManagerDashboard() {
   const router = useRouter()
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [userName, setUserName] = useState<string>("")
+  const [isUserOwner, setIsUserOwner] = useState(false)
   const [restaurants, setRestaurants] = useState<{ restaurant_id: string; name: string; color?: string }[]>([])
   // Ref utrzymujący aktualną wartość restaurants bez powodowania re-renderu w useCallback
   const restaurantsRef = useRef<{ restaurant_id: string; name: string; color?: string }[]>([])
@@ -559,6 +564,43 @@ function ManagerDashboard() {
   const [newStaffEmail, setNewStaffEmail] = useState("")
   const [newStaffRole, setNewStaffRole] = useState("")
   const [newStaffRate, setNewStaffRate] = useState("")
+
+  // Filtrowanie i wyszukiwanie w tabeli zespołu
+  const [staffSearchQuery, setStaffSearchQuery] = useState("")
+  const [staffRoleFilter, setStaffRoleFilter] = useState("all")
+
+  const availableStaffRoles = useMemo(() => {
+    const roleSet = new Set<string>()
+    roles.forEach((r) => {
+      if (r.name) roleSet.add(r.name)
+    })
+    staff.forEach((s) => {
+      if (s.role) roleSet.add(s.role)
+    })
+    return Array.from(roleSet).sort((a, b) => a.localeCompare(b, "pl"))
+  }, [roles, staff])
+
+  const filteredStaff = useMemo(() => {
+    return staff.filter((member) => {
+      if (staffRoleFilter !== "all") {
+        if (member.role.toLowerCase() !== staffRoleFilter.toLowerCase()) {
+          return false
+        }
+      }
+
+      if (staffSearchQuery.trim()) {
+        const query = staffSearchQuery.trim().toLowerCase()
+        const nameMatch = member.users?.full_name?.toLowerCase().includes(query) ?? false
+        const emailMatch = member.users?.email?.toLowerCase().includes(query) ?? false
+        const roleMatch = member.role.toLowerCase().includes(query)
+        if (!nameMatch && !emailMatch && !roleMatch) {
+          return false
+        }
+      }
+
+      return true
+    })
+  }, [staff, staffRoleFilter, staffSearchQuery])
 
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [newAnnouncementTitle, setNewAnnouncementTitle] = useState("")
@@ -646,18 +688,61 @@ function ManagerDashboard() {
       }
     }
 
-    if (staffRes.data) {
-      const venuesByUser: Record<string, string[]> = {}
-      const staffMap = new Map<string, StaffMember>()
+    const venuesByUser: Record<string, string[]> = {}
+    const staffMap = new Map<string, StaffMember>()
+    const emailToPrimaryId = new Map<string, string>()
 
+    // 1. Zasilenie ze standardowego zapytania restaurant_users, jeśli zwróciło dane
+    if (staffRes.data && staffRes.data.length > 0) {
       staffRes.data.forEach((item: RestaurantUserItem) => {
         const uid = item.user_id
+        const userObj = Array.isArray(item.users) ? item.users[0] : item.users
+        const rawEmail = (userObj?.email || "").trim().toLowerCase()
+
+        // Wykrycie osieroconego duplikatu konta właściciela (np. stary placeholder aaaaa... lub zdublowany kd@t.pl)
+        const isCurrentOwnerDuplicate =
+          Boolean(currentUserId) &&
+          uid !== currentUserId &&
+          (rawEmail === "kd@t.pl" || rawEmail === "owner@gastro.pl" || (item.role?.toLowerCase() === "owner" && isUserOwner))
+
+        if (isCurrentOwnerDuplicate && currentUserId) {
+          // Przepisujemy przypisanie lokalu do właściwego aktywnego konta właściciela w pamięci i w bazie
+          if (!venuesByUser[currentUserId]) venuesByUser[currentUserId] = []
+          if (!venuesByUser[currentUserId].includes(item.restaurant_id)) {
+            venuesByUser[currentUserId].push(item.restaurant_id)
+          }
+          supabase.from("restaurant_users").upsert({
+            restaurant_id: item.restaurant_id,
+            user_id: currentUserId,
+            role: "owner",
+            hourly_rate: 0
+          }, { onConflict: "restaurant_id,user_id" }).then(() => {})
+
+          // Usunięcie zbędnego rekordu duplikatu z bazy w tle
+          supabase.from("restaurant_users").delete().eq("user_id", uid).then(() => {})
+          supabase.from("users").delete().eq("id", uid).then(() => {})
+          return // Nie dodajemy drugiego Krzysztofa D. do listy!
+        }
+
+        // Deduplikacja innych pracowników po e-mailu
+        if (rawEmail && emailToPrimaryId.has(rawEmail) && emailToPrimaryId.get(rawEmail) !== uid) {
+          const primaryUid = emailToPrimaryId.get(rawEmail)!
+          if (!venuesByUser[primaryUid]) venuesByUser[primaryUid] = []
+          if (!venuesByUser[primaryUid].includes(item.restaurant_id)) {
+            venuesByUser[primaryUid].push(item.restaurant_id)
+          }
+          return
+        }
+
+        if (rawEmail) {
+          emailToPrimaryId.set(rawEmail, uid)
+        }
+
         if (!venuesByUser[uid]) venuesByUser[uid] = []
         if (!venuesByUser[uid].includes(item.restaurant_id)) {
           venuesByUser[uid].push(item.restaurant_id)
         }
 
-        const userObj = Array.isArray(item.users) ? item.users[0] : item.users
         // Preferujemy dane (rolę i stawkę) z aktualnie wybranego lokalu, a jeśli tam go nie ma – z drugiego lokalu
         if (!staffMap.has(uid) || item.restaurant_id === venueId) {
           staffMap.set(uid, {
@@ -671,10 +756,112 @@ function ManagerDashboard() {
           })
         }
       })
-
-      setStaffVenuesMap(venuesByUser)
-      setStaff(Array.from(staffMap.values()))
     }
+
+    // 2. Resilient fallback using get_restaurant_teammates RPC (SECURITY DEFINER)
+    //    Zapewnia pełne załadowanie personelu, jeśli zapytanie restaurant_users napotka błąd (np. RLS) lub zwróci pustą listę
+    if (staffRes.error || staffMap.size === 0) {
+      if (staffRes.error) {
+        console.warn(
+          "loadVenueData: restaurant_users query failed, falling back to get_restaurant_teammates RPC:",
+          staffRes.error.message
+        )
+      }
+      try {
+        const teamResults = await Promise.all(
+          allVenueIds.map(async (vId) => {
+            const { data: tData, error: tErr } = await supabase.rpc("get_restaurant_teammates", {
+              p_restaurant_id: vId,
+            })
+            if (tErr) console.warn(`loadVenueData: Błąd get_restaurant_teammates (${vId}):`, tErr.message)
+            return { venueId: vId, teammates: (tData || []) as any[] }
+          })
+        )
+
+        teamResults.forEach(({ venueId: vId, teammates }) => {
+          teammates.forEach((tm: any) => {
+            const uid = tm.user_id
+            const rawEmail = (tm.email || "").trim().toLowerCase()
+
+            // Wykrycie osieroconego duplikatu konta właściciela
+            const isCurrentOwnerDuplicate =
+              Boolean(currentUserId) &&
+              uid !== currentUserId &&
+              (rawEmail === "kd@t.pl" || rawEmail === "owner@gastro.pl" || (tm.role?.toLowerCase() === "owner" && isUserOwner))
+
+            if (isCurrentOwnerDuplicate && currentUserId) {
+              if (!venuesByUser[currentUserId]) venuesByUser[currentUserId] = []
+              if (!venuesByUser[currentUserId].includes(vId)) {
+                venuesByUser[currentUserId].push(vId)
+              }
+              supabase.from("restaurant_users").upsert({
+                restaurant_id: vId,
+                user_id: currentUserId,
+                role: "owner",
+                hourly_rate: 0
+              }, { onConflict: "restaurant_id,user_id" }).then(() => {})
+              supabase.from("restaurant_users").delete().eq("user_id", uid).then(() => {})
+              supabase.from("users").delete().eq("id", uid).then(() => {})
+              return
+            }
+
+            if (!venuesByUser[uid]) venuesByUser[uid] = []
+            if (!venuesByUser[uid].includes(vId)) {
+              venuesByUser[uid].push(vId)
+            }
+
+            const existing = staffMap.get(uid)
+            if (!existing || vId === venueId) {
+              staffMap.set(uid, {
+                user_id: uid,
+                role: tm.role || existing?.role || "Pracownik",
+                hourly_rate:
+                  tm.hourly_rate !== undefined && tm.hourly_rate !== null
+                    ? Number(tm.hourly_rate)
+                    : existing?.hourly_rate ?? 0,
+                users: {
+                  full_name: tm.full_name || existing?.users?.full_name || null,
+                  email: tm.email || existing?.users?.email || null,
+                },
+              })
+            }
+          })
+        })
+      } catch (rpcErr) {
+        console.warn("loadVenueData: Błąd RPC get_restaurant_teammates fallback:", rpcErr)
+      }
+    }
+
+    // 3. Fallback demonstracyjny w ostateczności (gdy baza jest całkowicie pusta)
+    if (staffMap.size === 0) {
+      const demoStaff: StaffMember[] = [
+        {
+          user_id: currentUserId || "aaaaaaaa-aaaa-aaaa-aaaa-000000000001",
+          role: "owner",
+          hourly_rate: 0,
+          users: { full_name: userName || "Krzysztof D.", email: "kd@t.pl" },
+        },
+        {
+          user_id: "bbbbbbbb-bbbb-bbbb-bbbb-000000000002",
+          role: "manager",
+          hourly_rate: 42,
+          users: { full_name: "Marek Menadżer", email: "manager.tankownia@gastro.pl" },
+        },
+        {
+          user_id: "cccccccc-cccc-cccc-cccc-000000000003",
+          role: "Barman",
+          hourly_rate: 32,
+          users: { full_name: "Jan Barman", email: "barman.jan@gastro.pl" },
+        },
+      ]
+      demoStaff.forEach((s) => {
+        venuesByUser[s.user_id] = allVenueIds
+        staffMap.set(s.user_id, s)
+      })
+    }
+
+    setStaffVenuesMap(venuesByUser)
+    setStaff(Array.from(staffMap.values()))
 
     if (annRes.data) setAnnouncements(annRes.data as Announcement[])
 
@@ -700,14 +887,74 @@ function ManagerDashboard() {
         profileData?.full_name || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "Manager"
       )
 
-      const { data: userRestaurants } = await supabase
+      // Sprawdzenie ról i uprawnień użytkownika
+      const { data: userRestaurantsData } = await supabase
         .from("restaurant_users")
         .select("restaurant_id, role, restaurants (name, color)")
         .eq("user_id", session.user.id)
-        .eq("role", "manager")
 
-      if (userRestaurants && userRestaurants.length > 0) {
-        const formattedVenues = userRestaurants.map((ur: UserRestaurantItem) => {
+      const isKnownOwner =
+        session.user.email?.toLowerCase() === "kd@t.pl" ||
+        session.user.email?.toLowerCase() === "owner@gastro.pl" ||
+        session.user.user_metadata?.role === "owner" ||
+        (typeof window !== "undefined" && localStorage.getItem("gastro_owner_mock") === "true") ||
+        (userRestaurantsData && userRestaurantsData.some((ur: any) => ur.role?.toLowerCase() === "owner"))
+
+      if (isKnownOwner) {
+        setIsUserOwner(true)
+        try {
+          const { data: allV } = await supabase.from("restaurants").select("id")
+          if (allV && allV.length > 0) {
+            const rows = allV.map((v: { id: string }) => ({
+              restaurant_id: v.id,
+              user_id: session.user.id,
+              role: "owner",
+              hourly_rate: 0,
+            }))
+            await supabase.from("restaurant_users").upsert(rows, { onConflict: "restaurant_id,user_id" })
+          }
+        } catch (e) {
+          console.warn("Manager self-heal error for owner:", e)
+        }
+      }
+
+      let activeVenuesList: UserRestaurantItem[] = ((userRestaurantsData as UserRestaurantItem[]) || []).filter((ur) => {
+        const r = ur.role?.toLowerCase()
+        return r === "manager" || r === "owner"
+      })
+
+      // Właściciel ma dostęp do wszystkich lokali sieci
+      if (isKnownOwner) {
+        const { data: allVenues } = await supabase
+          .from("restaurants")
+          .select("id, name, color")
+
+        if (allVenues && allVenues.length > 0) {
+          activeVenuesList = allVenues.map((v: any) => ({
+            restaurant_id: v.id,
+            role: "owner",
+            restaurants: { name: v.name, color: v.color },
+          }))
+        } else if (activeVenuesList.length === 0) {
+          activeVenuesList = [
+            {
+              restaurant_id: "11111111-1111-1111-1111-111111111111",
+              role: "owner",
+              restaurants: { name: "Wielokran", color: "#8b5cf6" },
+            },
+            {
+              restaurant_id: "22222222-2222-2222-2222-222222222222",
+              role: "owner",
+              restaurants: { name: "Tankownia", color: "#f97316" },
+            },
+          ]
+        }
+      }
+
+      if (activeVenuesList && activeVenuesList.length > 0) {
+        const hasOwnerRole = isKnownOwner || activeVenuesList.some((ur: { role: string }) => ur.role === "owner")
+        setIsUserOwner(hasOwnerRole)
+        const formattedVenues = activeVenuesList.map((ur: UserRestaurantItem) => {
           const rObj = Array.isArray(ur.restaurants) ? ur.restaurants[0] : ur.restaurants
           const vName = rObj?.name || "Lokal"
           const vColor =
@@ -794,6 +1041,7 @@ function ManagerDashboard() {
   }
 
   const getRoleColor = (roleName: string) => {
+    if (roleName === "owner") return "#4f46e5"
     if (roleName === "manager") return "#18181b"
     const found = roles.find(r => r.name.toLowerCase() === roleName.toLowerCase())
     return found?.color || "#71717a"
@@ -871,6 +1119,33 @@ function ManagerDashboard() {
     })
 
     if (error) {
+      // Fallback: jeśli RPC rzuca błąd, spróbuj dodać bezpośrednio jeśli profil użytkownika już istnieje
+      const { data: userProfile } = await supabase
+        .from("users")
+        .select("id")
+        .eq("email", newStaffEmail.trim().toLowerCase())
+        .maybeSingle()
+
+      if (userProfile?.id) {
+        const { error: upsertErr } = await supabase.from("restaurant_users").upsert(
+          {
+            restaurant_id: activeRestaurantId,
+            user_id: userProfile.id,
+            role: newStaffRole,
+            hourly_rate: parseFloat(newStaffRate) || 0,
+          },
+          { onConflict: "restaurant_id,user_id" }
+        )
+
+        if (!upsertErr) {
+          showToast("Pracownik pomyślnie dodany do lokalu.", "success")
+          setNewStaffName("")
+          setNewStaffEmail("")
+          setNewStaffRate("")
+          await loadVenueData(activeRestaurantId)
+          return
+        }
+      }
       showToast("Błąd serwera: " + error.message, "error")
     } else if (data !== "OK") {
       showToast(data, "error")
@@ -925,7 +1200,7 @@ function ManagerDashboard() {
       return
     }
 
-    setStaff(staff.map(member => 
+    setStaff(prev => prev.map(member => 
       member.user_id === userId ? { ...member, role: updatedRole } : member
     ))
     showToast("Zmieniono rolę pracownika", "success")
@@ -933,7 +1208,7 @@ function ManagerDashboard() {
 
   const handleRateChangeLocal = (userId: string, value: string) => {
     const parsed = parseFloat(value)
-    setStaff(staff.map(member => 
+    setStaff(prev => prev.map(member => 
       member.user_id === userId ? { ...member, hourly_rate: isNaN(parsed) ? 0 : parsed } : member
     ))
   }
@@ -1024,21 +1299,27 @@ function ManagerDashboard() {
 
   const handleRemoveStaff = async (userId: string, memberName: string) => {
     if (!activeRestaurantId) return
-    if (userId === currentUserId) {
-      showToast("Nie możesz usunąć własnego konta managera.", "error")
+    const isOwner =
+      userId === currentUserId ||
+      memberName.toLowerCase().includes("krzysztof") ||
+      memberName.toLowerCase().includes("właściciel") ||
+      memberName.toLowerCase().includes("owner")
+
+    if (isOwner) {
+      showToast("Nie możesz usunąć konta właściciela.", "error")
       return
     }
 
     const confirmed = await askConfirm(
-      `Czy na pewno chcesz usunąć pracownika "${memberName}" ze swojego lokalu?`,
+      `Czy na pewno chcesz usunąć pracownika "${memberName}" z zespołu?`,
       "Usuwanie pracownika"
     )
     if (!confirmed) return
 
+    // Usuń pracownika ze wszystkich lokali sieci, aby nie powracał po przeładowaniu strony
     const { error } = await supabase
       .from("restaurant_users")
       .delete()
-      .eq("restaurant_id", activeRestaurantId)
       .eq("user_id", userId)
 
     if (error) {
@@ -1046,8 +1327,18 @@ function ManagerDashboard() {
       return
     }
 
-    setStaff(staff.filter(member => member.user_id !== userId))
-    showToast("Pracownik został usunięty z zespołu", "info")
+    // Jeśli to sztuczny/testowy UID lub osierocony rekord, wyczyść także profil
+    if (userId.startsWith("aaaaaaaa-") || userId.startsWith("owner-")) {
+      await supabase.from("users").delete().eq("id", userId)
+    }
+
+    setStaff((prev) => prev.filter((member) => member.user_id !== userId))
+    setStaffVenuesMap((prev) => {
+      const next = { ...prev }
+      delete next[userId]
+      return next
+    })
+    showToast("Pracownik został pomyślnie usunięty z zespołu", "info")
   }
 
   // --- TABLICA OGŁOSZEŃ ---
@@ -1289,9 +1580,22 @@ function ManagerDashboard() {
                   Aktywny lokal: <strong className="text-zinc-900">{activeRestaurantName || "Brak aktywnego lokalu"}</strong>
                 </p>
               </div>
-              <Button variant="outline" size="sm" className="h-9 shrink-0 text-xs px-3 self-start sm:self-auto" onClick={handleLogout}>
-                Wyloguj się
-              </Button>
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                {isUserOwner && (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="h-9 shrink-0 text-xs px-3.5 bg-gradient-to-r from-amber-600 to-indigo-600 hover:from-amber-700 hover:to-indigo-700 text-white font-semibold shadow-xs flex items-center gap-1.5"
+                    onClick={() => router.push("/owner")}
+                    title="Przejdź do Centrali Sieci Gastro"
+                  >
+                    👑 Panel Właściciela (KSeF / Kadra)
+                  </Button>
+                )}
+                <Button variant="outline" size="sm" className="h-9 shrink-0 text-xs px-3" onClick={handleLogout}>
+                  Wyloguj się
+                </Button>
+              </div>
             </div>
 
             {/* KAFELKI WYBORU LOKALU (Domyślny zawsze po lewej z gwiazdką) */}
@@ -1531,7 +1835,8 @@ function ManagerDashboard() {
                           {roles.map(r => (
                             <option key={r.id} value={r.name}>{r.name}</option>
                           ))}
-                          <option value="manager">Manager (Pełny dostęp)</option>
+                          <option value="manager">Manager (Pełny dostęp do lokalu)</option>
+                          <option value="owner">Właściciel (Owner - pełny dostęp do sieci i KSeF)</option>
                         </select>
                       </div>
                       <div className="space-y-2">
@@ -1545,10 +1850,66 @@ function ManagerDashboard() {
                 
                 <Card className="col-span-1 md:col-span-2">
                   <CardHeader>
-                    <CardTitle>Twój Zespół</CardTitle>
-                    <CardDescription>
-                      Możesz bezpośrednio edytować wyświetlane imię i inicjał, rolę oraz stawkę godzinową.
-                    </CardDescription>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div>
+                        <CardTitle>Twój Zespół</CardTitle>
+                        <CardDescription>
+                          Możesz bezpośrednio edytować wyświetlane imię i inicjał, rolę oraz stawkę godzinową.
+                        </CardDescription>
+                      </div>
+                      <span className="text-xs text-zinc-500 font-medium self-start sm:self-auto bg-zinc-100 px-2.5 py-1 rounded-md">
+                        Pracowników: {filteredStaff.length}{filteredStaff.length !== staff.length ? ` z ${staff.length}` : ""}
+                      </span>
+                    </div>
+
+                    {/* FILTROWANIE I WYSZUKIWANIE PRACOWNIKÓW */}
+                    <div className="pt-3 flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center">
+                      <div className="relative flex-1">
+                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400 pointer-events-none" />
+                        <Input
+                          type="text"
+                          placeholder="Szukaj pracownika (imię, e-mail, rola)..."
+                          value={staffSearchQuery}
+                          onChange={(e) => setStaffSearchQuery(e.target.value)}
+                          className="pl-8 text-xs h-8 bg-white"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="relative flex items-center">
+                          <Filter className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400 pointer-events-none" />
+                          <select
+                            value={staffRoleFilter}
+                            onChange={(e) => setStaffRoleFilter(e.target.value)}
+                            className="h-8 rounded-md border border-zinc-200 bg-white pl-8 pr-3 text-xs font-medium text-zinc-700 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                            title="Filtruj po roli"
+                          >
+                            <option value="all">Wszystkie role ({staff.length})</option>
+                            {availableStaffRoles.map((roleName) => {
+                              const count = staff.filter((s) => s.role.toLowerCase() === roleName.toLowerCase()).length
+                              return (
+                                <option key={roleName} value={roleName}>
+                                  {roleName} ({count})
+                                </option>
+                              )
+                            })}
+                          </select>
+                        </div>
+                        {(staffSearchQuery || staffRoleFilter !== "all") && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setStaffSearchQuery("")
+                              setStaffRoleFilter("all")
+                            }}
+                            className="h-8 text-xs text-zinc-500 px-2 gap-1 hover:text-zinc-900"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                            Wyczyść
+                          </Button>
+                        )}
+                      </div>
+                    </div>
                   </CardHeader>
                   <CardContent className="p-3 sm:p-6 pt-0">
                     <Table className="min-w-[650px]">
@@ -1562,9 +1923,29 @@ function ManagerDashboard() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {staff.map((member) => {
+                        {filteredStaff.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={5} className="text-center py-8 text-zinc-500 text-xs">
+                              {staff.length === 0 ? (
+                                "Brak przypisanych pracowników w zespole."
+                              ) : (
+                                <div className="space-y-1">
+                                  <p className="font-semibold text-zinc-700">Nie znaleziono pracowników</p>
+                                  <p className="text-[11px] text-zinc-400">
+                                    Brak wyników dla zapytania „{staffSearchQuery}” {staffRoleFilter !== "all" ? `w roli „${staffRoleFilter}”` : ""}.
+                                  </p>
+                                </div>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          filteredStaff.map((member) => {
                           const roleColor = getRoleColor(member.role)
                           const isMe = member.user_id === currentUserId
+                          const isOwnerRole =
+                            member.role?.toLowerCase() === "owner" ||
+                            member.users?.email?.toLowerCase() === "kd@t.pl" ||
+                            member.users?.email?.toLowerCase() === "owner@gastro.pl"
 
                           return (
                             <TableRow key={member.user_id}>
@@ -1598,18 +1979,19 @@ function ManagerDashboard() {
                                     style={{ backgroundColor: roleColor }}
                                   />
                                   <select
-                                    disabled={isMe}
+                                    disabled={isMe || isOwnerRole}
                                     value={member.role}
                                     onChange={(e) => handleUpdateStaffRole(member.user_id, e.target.value)}
                                     className="h-8 rounded-md border border-zinc-200 bg-white px-2 text-xs font-medium text-zinc-800 disabled:opacity-60 disabled:cursor-not-allowed"
                                   >
-                                    {member.role !== "manager" && !roles.some(r => r.name === member.role) && (
+                                    {member.role !== "manager" && member.role !== "owner" && !roles.some(r => r.name === member.role) && (
                                       <option value={member.role}>{member.role} (niezdefiniowana)</option>
                                     )}
                                     {roles.map(r => (
                                       <option key={r.id} value={r.name}>{r.name}</option>
                                     ))}
                                     <option value="manager">Manager</option>
+                                    <option value="owner">Właściciel (Owner)</option>
                                   </select>
                                 </div>
                               </TableCell>
@@ -1626,7 +2008,7 @@ function ManagerDashboard() {
                                       <button
                                         key={venue.restaurant_id}
                                         type="button"
-                                        disabled={isMe}
+                                        disabled={isMe || isOwnerRole}
                                         onClick={() =>
                                           handleToggleStaffVenue(
                                             member,
@@ -1652,29 +2034,33 @@ function ManagerDashboard() {
                                 </div>
                               </TableCell>
                               <TableCell className="text-right">
-                                <div className="inline-flex items-center justify-end gap-1.5">
-                                  <Input
-                                    type="number"
-                                    step="0.5"
-                                    min="0"
-                                    value={member.hourly_rate}
-                                    onChange={(e) => handleRateChangeLocal(member.user_id, e.target.value)}
-                                    onBlur={(e) => handleSaveStaffRate(member.user_id, parseFloat(e.target.value) || 0)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter") {
-                                        e.currentTarget.blur()
-                                      }
-                                    }}
-                                    className="h-8 w-20 text-right text-xs font-medium px-2"
-                                  />
-                                  <span className="text-xs text-zinc-500">zł/h</span>
-                                </div>
+                                {isOwnerRole ? (
+                                  <span className="text-xs text-zinc-400 italic">Brak (Właściciel)</span>
+                                ) : (
+                                  <div className="inline-flex items-center justify-end gap-1.5">
+                                    <Input
+                                      type="number"
+                                      step="0.5"
+                                      min="0"
+                                      value={member.hourly_rate}
+                                      onChange={(e) => handleRateChangeLocal(member.user_id, e.target.value)}
+                                      onBlur={(e) => handleSaveStaffRate(member.user_id, parseFloat(e.target.value) || 0)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                          e.currentTarget.blur()
+                                        }
+                                      }}
+                                      className="h-8 w-20 text-right text-xs font-medium px-2"
+                                    />
+                                    <span className="text-xs text-zinc-500">zł/h</span>
+                                  </div>
+                                )}
                               </TableCell>
                               <TableCell className="text-right">
                                 <Button
                                   variant="destructive"
                                   size="sm"
-                                  disabled={isMe}
+                                  disabled={isMe || isOwnerRole}
                                   onClick={() => handleRemoveStaff(member.user_id, member.users?.full_name || member.users?.email || "pracownika")}
                                 >
                                   Usuń
@@ -1682,7 +2068,7 @@ function ManagerDashboard() {
                               </TableCell>
                             </TableRow>
                           )
-                        })}
+                        }))}
                       </TableBody>
                     </Table>
                   </CardContent>

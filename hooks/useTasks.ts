@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useCallback } from "react"
+import { supabase } from "@/lib/supabase"
 import { showToast, askConfirm } from "@/components/ui/feedback"
 import {
   fetchTodos,
@@ -132,7 +133,10 @@ export function useTasks(
 
   const handleSaveBatch = useCallback(
     async (validTasks: DraftTask[], targetDate: string) => {
-      if (!restaurantId) return
+      if (!restaurantId) {
+        showToast("Brak wybranego lokalu – nie można zapisać zadań.", "error")
+        return
+      }
 
       const { data, error: svcError } = await insertBatchTodos(
         restaurantId,
@@ -146,20 +150,36 @@ export function useTasks(
         return
       }
 
-      if (data) {
+      if (data && data.length > 0) {
         setTodos((prev) => [...data, ...prev])
-        if (targetDate) setSelectedDate(targetDate)
-        setIsModalOpen(false)
-        showToast(`Dodano pomyślnie ${data.length} ${data.length === 1 ? "zadanie" : "zadań"}`, "success")
+      } else {
+        await loadTodos(restaurantId)
       }
+
+      if (targetDate) setSelectedDate(targetDate)
+      setIsModalOpen(false)
+      showToast(
+        `Dodano pomyślnie ${validTasks.length} ${validTasks.length === 1 ? "zadanie" : "zadań"}`,
+        "success"
+      )
     },
-    [restaurantId, selectedDate, todayStr, setSelectedDate]
+    [restaurantId, selectedDate, todayStr, setSelectedDate, loadTodos]
   )
 
   const handleToggle = useCallback(
     async (todo: TodoItem, overrideUserId?: string | null) => {
       const newStatus = !todo.is_completed
-      const actingUserId = newStatus ? (overrideUserId ?? currentUserId ?? null) : null
+      let actingUserId = newStatus ? (overrideUserId ?? currentUserId ?? null) : null
+
+      if (newStatus && !actingUserId) {
+        try {
+          const { data: { session } } = await supabase.auth.getSession()
+          actingUserId = session?.user?.id ?? null
+        } catch {
+          // cichy fallback w razie braku aktywnej sesji auth
+        }
+      }
+
       const completedAt = newStatus ? new Date().toISOString() : null
 
       // Optymistyczna aktualizacja UI

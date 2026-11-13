@@ -49,21 +49,28 @@ export async function insertBatchTodos(
   targetDate: string,
   fallbackDate: string
 ): Promise<ServiceResult<TodoItem[]>> {
+  const safeDate = targetDate || fallbackDate || new Date().toISOString().slice(0, 10)
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
   const rows = tasks.map((t) => {
     let assigned_role: string | null = null
     let assigned_user_id: string | null = null
 
     if (t.assignee.startsWith("role:")) {
-      assigned_role = t.assignee.replace("role:", "")
+      const parsedRole = t.assignee.replace("role:", "").trim()
+      assigned_role = parsedRole || null
     } else if (t.assignee.startsWith("user:")) {
-      assigned_user_id = t.assignee.replace("user:", "")
+      const parsedUid = t.assignee.replace("user:", "").trim()
+      if (uuidRegex.test(parsedUid)) {
+        assigned_user_id = parsedUid
+      }
     }
 
     return {
       restaurant_id: restaurantId,
       task: t.text.trim(),
       priority: t.priority,
-      target_date: targetDate || fallbackDate,
+      target_date: safeDate,
       assigned_role,
       assigned_user_id,
       is_completed: false,
@@ -99,9 +106,15 @@ export async function toggleTodoCompleted(
   newStatus: boolean,
   completedByUserId?: string | null
 ): Promise<ServiceResult<true>> {
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  const validCompletedBy =
+    newStatus && completedByUserId && uuidRegex.test(completedByUserId.trim())
+      ? completedByUserId.trim()
+      : null
+
   const updatePayload = {
     is_completed: newStatus,
-    completed_by_user_id: newStatus ? (completedByUserId ?? null) : null,
+    completed_by_user_id: validCompletedBy,
     completed_at: newStatus ? new Date().toISOString() : null,
   }
 
@@ -110,7 +123,23 @@ export async function toggleTodoCompleted(
     .update(updatePayload)
     .eq("id", todoId)
 
-  if (error) return { data: null, error: error.message }
+  if (error) {
+    // Resilient fallback: jeśli błąd dotyczy klucza obcego lub completed_by_user_id (np. użytkownik demo)
+    if (newStatus && validCompletedBy) {
+      const fallbackPayload = {
+        is_completed: newStatus,
+        completed_by_user_id: null,
+        completed_at: updatePayload.completed_at,
+      }
+      const { error: retryError } = await supabase
+        .from("restaurant_todos")
+        .update(fallbackPayload)
+        .eq("id", todoId)
+
+      if (!retryError) return { data: true, error: null }
+    }
+    return { data: null, error: error.message }
+  }
   return { data: true, error: null }
 }
 
