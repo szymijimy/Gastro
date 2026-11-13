@@ -1,12 +1,12 @@
 # RAPORT ARCHITEKTURY I HISTORIA ZMIAN SYSTEMU GASTRO APP
-## Od Wersji Bazowej (v1) do Wdrożenia Gałęzi `feature/update-tankownia-case`
+## Od Wersji Bazowej (v1) przez Aktualizację Tankownia (v2.0.0) do Gałęzi `feature/update-owner`
 
 ---
 
 ### Metryka Dokumentu
 * **Nazwa Systemu:** Gastro App – Zintegrowana Platforma Zarządzania Gastronomią i Siecią Lokali (m.in. Wielokran, Tankownia)
 * **Katalog Projektu:** `gastro-app`
-* **Główna Gałąź Wdrożeniowa:** `feature/update-tankownia-case`
+* **Główna Gałąź Wdrożeniowa:** `feature/update-owner` (poprzednio `feature/update-tankownia-case`)
 * **Stos Technologiczny:** Next.js (App Router, React 19), TypeScript, Tailwind CSS, Supabase (PostgreSQL 15+, GoTrue Auth, RLS, Storage)
 * **Status:** Oficjalna Dokumentacja Architektoniczna i Rejestr Zmian (Changelog Techniczny)
 
@@ -33,7 +33,17 @@
    - [2.7 Zaawansowane reguły premiowe z harmonogramem dat i dni tygodnia](#27-zaawansowane-reguły-premiowe-z-harmonogramem-dat-i-dni-tygodnia)
    - [2.8 Wprowadzanie i bezpośrednia edycja godzin pracy przez menadżera](#28-wprowadzanie-i-bezpośrednia-edycja-godzin-pracy-przez-menadżera)
    - [2.9 Moduł ogłoszeń ze skalowaniem Canvas WebP i retencją 30 dni](#29-moduł-ogłoszeń-ze-skalowaniem-canvas-webp-i-retencją-30-dni)
-3. [Rozdział 3: Zestawienie skryptów migracyjnych i rekomendacje wdrożeniowe](#rozdział-3-zestawienie-skryptów-migracyjnych-i-rekomendacje-wdrożeniowe)
+3. [Rozdział 3: Nowości wdrożone w gałęzi `feature/update-owner` (Rola Właściciela, KSeF, Pulpit Finansowy)](#rozdział-3-nowości-wdrożone-w-gałęzi-featureupdate-owner-rola-właściciela-ksef-pulpit-finansowy)
+   - [3.1 Nowa rola systemowa `owner` (Właściciel Sieci) i trójwarstwowa matryca uprawnień](#31-nowa-rola-systemowa-owner-właściciel-sieci-i-trójwarstwowa-matryca-uprawnień)
+   - [3.2 Pulpit Finansowy Sieci (/owner) – agregacja przychodów, koszty płacowe i marża operacyjna](#32-pulpit-finansowy-sieci-owner--agregacja-przychodów-koszty-płacowe-i-marża-operacyjna)
+   - [3.3 Moduł Integracji z Krajowym Systemem e-Faktur (KSeF) i podgląd faktur kosztowych](#33-moduł-integracji-z-krajowym-systemem-e-faktur-ksef-i-podgląd-faktur-kosztowych)
+   - [3.4 Zarządzanie kadrą menadżerską i elastyczne przypisywanie lokali](#34-zarządzanie-kadrą-menadżerską-i-elastyczne-przypisywanie-lokali)
+   - [3.5 Analiza prawno-podatkowa: Granice prawne systemu (Pogląd Zarządczy / BI vs Księgi Rachunkowe KAS/US)](#35-analiza-prawno-podatkowa-granice-prawne-systemu-pogląd-zarządczy--bi-vs-księgi-rachunkowe-kasus)
+   - [3.6 Oficjalna klauzula prawna (Legal Disclaimer) i wytyczne operacyjne](#36-oficjalna-klauzula-prawna-legal-disclaimer-i-wytyczne-operacyjne)
+   - [3.7 Analiza repozytorium Git i ocena usunięcia gałęzi `feature/update-tankownia-case`](#37-analiza-repozytorium-git-i-ocena-usunięcia-gałęzi-featureupdate-tankownia-case)
+4. [Rozdział 4: Zestawienie skryptów migracyjnych i rekomendacje wdrożeniowe](#rozdział-4-zestawienie-skryptów-migracyjnych-i-rekomendacje-wdrożeniowe)
+   - [4.1 Zestawienie wykonanych migracji bazodanowych (SQL)](#41-zestawienie-wykonanych-migracji-bazodanowych-sql)
+   - [4.2 Rekomendacje architektoniczne i wdrożeniowe](#42-rekomendacje-architektoniczne-i-wdrożeniowe)
 
 ---
 
@@ -496,35 +506,321 @@ Przesyłanie surowych zdjęć o wadze 5-15 MB z nowoczesnych smartfonów powodow
 
 ---
 
-# Rozdział 3: Zestawienie skryptów migracyjnych i rekomendacje wdrożeniowe
+# Rozdział 3: Nowości wdrożone w gałęzi `feature/update-owner` (Rola Właściciela, KSeF, Pulpit Finansowy)
 
-### 3.1 Zestawienie wykonanych migracji bazodanowych (SQL)
+Gałąź `feature/update-owner` stanowi strategiczne rozszerzenie platformy Gastro App z poziomu zarządzania pojedynczym lokalem do poziomu centrali sieciowej (Multi-Venue Business Intelligence). Wprowadza ona dedykowaną rolę Właściciela (`owner`), skonsolidowany Pulpit Finansowy Sieci, bezpośrednią integrację z Krajowym Systemem e-Faktur (KSeF) w trybie podglądu analitycznego, narzędzia centralnego zarządzania kadrą menadżerską oraz rygorystyczne wytyczne prawno-podatkowe.
 
-Wszystkie modyfikacje schematu bazy danych zostały przygotowane w formie idempotetnych, bezpiecznych skryptów SQL w katalogu `scripts/`:
+```mermaid
+flowchart TD
+    subgraph OwnerLayer ["Poziom Strategiczny – Właściciel Sieci (/owner)"]
+        OwnerUI["Pulpit Właściciela (/owner)"]
+        FinDashboard["Pulpit Finansowy Sieci<br/>(Przychody, Koszty Płac, Koszty KSeF, Marża)"]
+        KsefExplorer["Eksplorator Faktur KSeF<br/>(Filtrowanie, Podgląd FA_VAT XML, Podział Kosztów)"]
+        StaffManager["Zarządzanie Kadrą Menadżerską<br/>(Awans na Managera, Przypisanie Lokali)"]
+    end
 
-| Skrypt Migracyjny | Dotknięte Tabele | Opis Wprowadzonych Zmian |
-|---|---|---|
-| `migration_todos_completed_by.sql` | `restaurant_todos` | Dodanie kolumn `completed_by_user_id` i `completed_at` oraz indeksów B-tree. |
-| `migration_day_requirements.sql` | `restaurant_day_requirements`, `restaurant_operating_hours` | Utworzenie tabeli zapotrzebowania miesięcznego, kolumna `shift_roles`, uprawnienia RLS. |
-| `migration_revenue_fields.sql` | `restaurant_revenue_fields`, `daily_revenues` | Pola konfiguracji utargu, flagi `include_in_total`, `deduct_previous_day`, kolumna `breakdown jsonb`. |
-| `migration_reservations.sql` | `restaurant_reservations` | Utworzenie tabeli rezerwacji stolików w stylu To-Do wraz z indeksami i uprawnieniami RLS. |
-| `migration_reservations_status.sql` | `restaurant_reservations` | Rozszerzenie statusów (`pending`, `arrived`, `no_show`, `cancelled`) oraz kolumny `actual_arrival_time`. |
-| `migration_restaurant_color.sql` | `restaurants` | Dodanie kolumny `color` do identyfikacji wizualnej lokali w kalendarzu wieloobiektowym. |
-| `migration_bonus_rules_schedule.sql` | `bonus_rules` | Kolumny `schedule_type`, `applicable_days int[]`, `applicable_dates text[]`. |
-| `migration_announcements.sql` | `restaurant_announcements` | Dodanie kolumn `image_url`, `keep_in_history`, bucket `announcement-images` i procedury retencji 30 dni. |
+    subgraph ManagerLayer ["Poziom Operacyjny – Menadżerowie Lokali (/manager)"]
+        ManagerUI["Panel Managera (Tankownia / Wielokran)"]
+        ScheduleMod["Harmonogramy i Zapotrzebowanie"]
+        InventoryMod["Magazyn i Inwentaryzacja"]
+        AttendanceMod["Ewidencja Czasu Pracy i Wypłaty"]
+        RevenueReport["Raportowanie Utargu Dziennego"]
+    end
+
+    subgraph StaffLayer ["Poziom Realizacyjny – Personel Barowy (/bartender)"]
+        BartenderUI["Panel Barmana (PIN Kiosk)"]
+        TodoMod["Checklista Zadań To-Do"]
+        CheckInOut["Rejestracja Wejścia / Wyjścia"]
+    end
+
+    subgraph DataIntegrations ["Zewnętrzne Usługi i API"]
+        KSEF_API["Oficjalne API KSeF (MF gov pl)<br/>Sandbox / Demo / Prod"]
+        SupabaseDB[("PostgreSQL 15+ z RLS<br/>(restaurant_ksef_config, ksef_invoices)")]
+    end
+
+    OwnerUI --> FinDashboard
+    OwnerUI --> KsefExplorer
+    OwnerUI --> StaffManager
+
+    FinDashboard --> SupabaseDB
+    KsefExplorer --> KSEF_API
+    KsefExplorer --> SupabaseDB
+    StaffManager --> SupabaseDB
+
+    ManagerUI --> AttendanceMod
+    ManagerUI --> RevenueReport
+    AttendanceMod --> SupabaseDB
+    RevenueReport --> SupabaseDB
+
+    BartenderUI --> CheckInOut
+    CheckInOut --> AttendanceMod
+```
 
 ---
 
-### 3.2 Rekomendacje architektoniczne i wdrożeniowe
+### 3.1 Nowa rola systemowa `owner` (Właściciel Sieci) i trójwarstwowa matryca uprawnień
+
+W architekturze wersji v1 oraz v2.0.0 system operował na dwustopniowej strukturze: Menadżer lokalu (`manager`) oraz Pracownik/Barman (`bartender`). W gałęzi `feature/update-owner` zaimplementowano rolę Właściciela (`owner`), tworząc pełną, trójstopniową hierarchię uprawnień.
+
+#### 1. Modyfikacje modelu danych i relacji (PostgreSQL):
+* W tabeli `restaurant_users` usunięto dotychczasowe ograniczenie sprawdzające i wprowadzono jawną obsługę roli `owner`:
+  ```sql
+  ALTER TABLE restaurant_users ADD CONSTRAINT restaurant_users_role_check 
+    CHECK (role IS NOT NULL AND length(trim(role)) > 0);
+  ```
+* Wprowadzono funkcje bezpieczeństwa PL/pgSQL:
+  - `public.is_restaurant_owner(target_restaurant_id uuid)` – weryfikuje, czy zalogowany użytkownik posiada uprawnienia właścicielskie dla wybranego lokalu lub globalnie.
+  - `public.is_any_owner()` – sprawdza uprawnienia właścicielskie w kontekście operacji globalnych.
+
+#### 2. Logika routingu i autoryzacji sesji (`app/page.tsx`):
+Podczas logowania użytkownika silnik autoryzacyjny bada listę przypisanych ról (`memberships`) i kieruje użytkownika do dedykowanego środowiska pracy:
+```typescript
+const rolesList = (memberships || []).map((m: { role: string }) => m.role)
+
+if (rolesList.includes("owner")) {
+  setLoading(false)
+  router.replace("/owner")
+} else if (rolesList.includes("manager")) {
+  setLoading(false)
+  router.replace("/manager")
+} else if (rolesList.length > 0) {
+  setLoading(false)
+  router.replace("/bartender")
+}
+```
+
+#### 3. Trójstopniowa matryca uprawnień systemu:
+
+| Obszar Funkcjonalny | Właściciel Sieci (`owner`) | Menadżer Lokalu (`manager`) | Barman / Personel (`bartender`) |
+|---|---|---|---|
+| **Zasięg Działania (Scope)** | Wszystkie lokale w sieci (skonsolidowany) oraz pojedyncze obiekty | Przypisany lokal gastronomiczny (np. Tankownia lub Wielokran) | Bieżące stanowisko w przypisanym lokalu |
+| **Dedykowany Widok UI** | `/owner` (Pulpit Właściciela) | `/manager` (Panel Zarządzania Lokalem) | `/bartender` (Szybki Panel Dotykowy) |
+| **Pulpit Finansowy** | Zagregowane przychody sieci, marża operacyjna, koszty KSeF, koszty pracy | Dzienny utarg lokalu, raporty kasowe, konfiguracja pól utargu | Wprowadzanie utargu przy zamknięciu zmiany |
+| **Moduł KSeF** | Pełny podgląd e-Faktur, synchronizacja z MF, kategoryzacja kosztów, tokeny | Brak wglądu do modułu KSeF | Brak wglądu do modułu KSeF |
+| **Kadra i Wynagrodzenia** | Globalne koszty płac sieci, mianowanie/odwoływanie menadżerów, wgląd w stawki | Układanie harmonogramów, zatwierdzanie godzin pracy, edycja wpisów obecności | Rejestracja wejścia/wyjścia (PIN), deklaracja dyspozycyjności |
+| **Magazyn i Zapasy** | Wgląd analityczny w stany magazynowe i wartość zapasów sieci | Pełne zarządzanie asortymentem, stanami minimalnymi, dostawami | Szybka aktualizacja stanów (+/-), spisywanie inwentaryzacji |
+| **Zadania To-Do** | Przegląd audytowy wykonania zadań w sieci | Tworzenie zadań, przydzielanie ról, analiza miesięczna | Realizacja i odznaczanie powierzonych zadań |
+| **Rezerwacje Stolików** | Podgląd obłożenia lokali w kalendarzu | Pełna obsługa rezerwacji, statusy (na miejscu, no-show, anulowano) | Podgląd rezerwacji na bieżącej zmianie |
+| **Konfiguracja API** | Klucze KSeF, parametry środowiskowe, zarządzanie obiektami sieci | Ustawienia lokalu, szablony grafików, reguły premiowe | Brak uprawnień konfiguracyjnych |
+
+---
+
+### 3.2 Pulpit Finansowy Sieci (/owner) – agregacja przychodów, koszty płacowe i marża operacyjna
+
+Dedykowany panel właścicielski `app/owner/page.tsx` zoptymalizowano pod kątem analizy kondycji biznesowej pojedynczych obiektów oraz całej sieci lokali.
+
+#### 1. Nawigacja i selekcja obiektów:
+* **Przełącznik lokalu (`VenueSwitcher`):** umożliwia natychmiastowe przełączenie kontekstu pomiędzy widokiem skonsolidowanym (*"Wszystkie lokale"*) a wybranym lokalem (*"Tankownia"*, *"Wielokran"*).
+* **Filtr okresu analitycznego:** domyślnie ustawiony na bieżący miesiąc z możliwością wyboru dowolnego zakresu dat.
+
+#### 2. Kluczowe Wskaźniki Efektywności (Karty KPI):
+1. **Łączny Przychód Sieci (`total_revenue`):** agregacja wprowadzonych dziennych utargów (`daily_revenues`) z automatycznym podziałem na płatności bezgotówkowe (karty/terminale) oraz gotówkę w kasie.
+2. **Koszty Pracownicze (`total_labor_cost`):** dynamicznie obliczana suma kosztów zatrudnienia na podstawie faktycznie przepracowanych godzin z `attendance_logs` przemnożonych przez zdefiniowane w `restaurant_users` stawki godzinowe (`hourly_rate`).
+3. **Koszty Zakupów KSeF (`total_ksef_cost_net`):** wartość netto faktur zakupowych pobranych z Krajowego Systemu e-Faktur (oraz podgląd podatku VAT i kwoty brutto).
+4. **Szacunkowy Wynik Operacyjny (`operating_profit_estimate`):**
+   $$\text{Wynik Operacyjny} = \text{Łączny Przychód} - \text{Koszty Pracownicze} - \text{Koszty Zakupów KSeF (Netto)}$$
+5. **Marża Operacyjna (`profit_margin_percent`):**
+   $$\text{Marża Operacyjna (\%)} = \left( \frac{\text{Szacunkowy Wynik Operacyjny}}{\text{Łączny Przychód}} \right) \times 100\%$$
+
+#### 3. Podział wydatków według kategorii gastronomicznych (`costs_by_category`):
+Każda faktura w systemie posiada przyporządkowaną kategorię kosztową, co pozwala właścicielowi na natychmiastową analizę struktury wydatków:
+* `alcohol` – piwo z tanka, beczki keg piw rzemieślniczych, wina, alkohole mocne.
+* `food` – produkty spożywcze, przekąski, zaopatrzenie części gastronomicznej.
+* `utilities` – energia elektryczna (np. PGE), gaz, woda, ścieki, odbiór odpadów komunalnych.
+* `rent` – czynsze najmu lokali użytkowych.
+* `services` – opłaty licencyjne systemów PoS, serwis chłodnictwa i nalewaków piwnych, pralnia, ochrona.
+* `other` – środki czystości, materiały eksploatacyjne, pozostałe.
+
+#### 4. Zestawienie porównawcze lokali (`venue_breakdown`):
+Tabela prezentuje metryki w rozbiciu na poszczególne lokale (Tankownia vs Wielokran), umożliwiając identyfikację różnic w rentowności, efektywności kosztów pracy oraz wielkości zakupów.
+
+---
+
+### 3.3 Moduł Integracji z Krajowym Systemem e-Faktur (KSeF) i podgląd faktur kosztowych
+
+Integracja z platformą KSeF Ministerstwa Finansów została zaprojektowana w nowoczesnej architekturze Next.js (App Router API routes) oraz Supabase.
+
+#### 1. Architektura techniczna modułu KSeF:
+* **Warstwa serwisowa (`services/ksefService.ts`):** odpowiada za komunikację HTTP z bramką KSeF, zarządzanie sesjami autoryzacyjnymi oraz transformację struktur XML do obiektów TypeScript.
+* **API Route synchronizacji (`/api/ksef/sync`):** asynchroniczny endpoint pobierający faktury za wybrany zakres dat, parsujący schemat FA_VAT i zapisujący dane do bazy.
+* **API Route konfiguracyjny (`/api/ksef/config`):** endpoint zarządzający NIP-em, środowiskiem i tokenami uwierzytelniającymi.
+
+#### 2. Obsługiwane środowiska Ministerstwa Finansów:
+System obsługuje 3 niezależne środowiska KSeF definiowane w typie `KsefEnvironment`:
+* `test` – oficjalne środowisko testowe MF: `https://ksef-test.mf.gov.pl/api`
+* `demo` – środowisko demonstracyjne przedprodukcyjne: `https://ksef-demo.mf.gov.pl/api`
+* `prod` – środowisko produkcyjne: `https://ksef.mf.gov.pl/api`
+
+#### 3. Tryb symulacyjny gastronomii (Gastro Sandbox Simulation Mode):
+W warunkach wdrożeniowych przedsiębiorcy gastronomiczni często oczekują na nadanie uprawnień i wygenerowanie tokenów w rządowym systemie KSeF. Aby umożliwić natychmiastowe testowanie pulpitów finansowych, moduł wyposażono w inteligentny tryb symulacyjny:
+* W przypadku braku skonfigurowanego tokena lub niedostępności API rządowego, usługa generuje realistyczny zbiór faktur odzwierciedlający specyfikę pubu / restauracji:
+  - Faktury z browarów kraftowych (np. Browar Rzemieślniczy Pinta Sp. z o.o. – dostawa kegów piwa, kategoria `alcohol`, stawka VAT 23%).
+  - Faktury z hurtowni spożywczych (np. Eurocash Dystrybucja S.A. – soki, przekąski, kategoria `food`, stawki VAT 8% i 23%).
+  - Faktury za media (PGE Obrót S.A. – energia elektryczna lokalu, kategoria `utilities`, stawka VAT 23%).
+  - Faktury za czynsz (Spółka Zarządzająca Nieruchomościami – wynajem lokalu gastronomicznego, kategoria `rent`, stawka VAT 23%).
+* Symulowane faktury posiadają w pełni poprawną strukturę numerów KSeF (`1234567890-YYYYMMDD-...`), wyliczone pozycje asortymentowe, rozbicie stawek VAT oraz wygenerowaną składnię XML FA_VAT.
+
+#### 4. Eksplorator faktur w interfejsie użytkownika:
+* **Tabela faktur:** kolumny: Identyfikator KSeF, Numer faktury, Data wystawienia, Sprzedawca, NIP sprzedawcy, Nabywca (Lokal), Wartość Netto, Podatek VAT, Wartość Brutto, Status płatności (`paid`, `unpaid`, `pending`), Kategoria kosztowa.
+* **Filtrowanie i wyszukiwanie:** zaawansowane filtry po kontrahencie/NIP, zakresie dat, kategorii kosztowej, lokalu oraz statusie płatności.
+* **Modal szczegółów faktury:**
+  - Podsumowanie stawek podatku VAT (23%, 8%, 5%, 0%, zwolnione).
+  - Wykaz pozycji asortymentowych (`Line Items`) wraz z cenami jednostkowymi.
+  - Podgląd surowego pliku XML ustrukturyzowanej faktury FA_VAT z możliwością skopiowania do schowka.
+* **Modal konfiguracji KSeF:** konfiguracja NIP per lokal, bezpieczne wprowadzanie tokenu sesyjnego, przełącznik środowisk oraz informacja o dacie ostatniej synchronizacji (`last_sync_at`).
+
+#### 5. Bezpieczeństwo i polityki RLS (Row Level Security):
+Dostęp do danych KSeF w tabelach `restaurant_ksef_config` oraz `ksef_invoices` został zabezpieczony na poziomie jądra bazy PostgreSQL:
+* Uprawnienia odczytu i zapisu posiadają **wyłącznie użytkownicy posiadający rolę `owner`** powiązaną z danym lokalem oraz wewnętrzna rola systemowa (`service_role`).
+* Personel operacyjny lokalu (barmani, kelnerzy, menadżerowie sali) nie ma technicznej możliwości odpytania bazy o dane faktur KSeF ani parametry połączeń.
+
+---
+
+### 3.4 Zarządzanie kadrą menadżerską i elastyczne przypisywanie lokali
+
+Zakładka *"Zarządzanie Kadrą Menadżerską"* w pulpicie właściciela rozwiązuje kluczowy problem operacyjny sieci lokali:
+* **Centralny rejestr kadry:** właściciel ma wgląd w pełną listę pracowników zatrudnionych we wszystkich lokalach sieci.
+* **Promowanie do roli menadżera:** jednym kliknięciem właściciel może awansować barmana (`bartender`) na menadżera (`manager`) lub zredukować uprawnienia.
+* **Przypisywanie lokali:** menadżer może zarządzać jednym obiektem (np. wyłącznie Tankownią) lub wieloma lokalami jednocześnie (np. Tankownia i Wielokran), posiadając w każdym z nich odrębnie zdefiniowaną stawkę rozliczeniową.
+
+---
+
+### 3.5 Analiza prawno-podatkowa: Granice prawne systemu (Pogląd Zarządczy / BI vs Księgi Rachunkowe KAS/US)
+
+Wdrożenie integracji z Krajowym Systemem e-Faktur oraz agregacji finansowych w systemie Gastro App wymagało przeprowadzenia rygorystycznej analizy prawnej w zakresie polskiego prawa bilansowego i podatkowego.
+
+#### 1. Wykładnia Ustawy o rachunkowości z dnia 29 września 1994 r. (t.j. Dz.U. z 2023 r. poz. 120 ze zm.):
+* **Art. 10 ust. 1 i 2 UoR – Dokumentacja zasad (polityki) rachunkowości:**
+  Zgodnie z art. 10 UoR jednostka gospodarcza zobowiązana jest posiadać dokumentację opisującą przyjęte zasady rachunkowości, w tym m.in. opis systemu przetwarzania danych, wykaz programów komputerowych, opis procedur i algorytmów oraz systemowych zabezpieczeń przed modyfikacją danych.
+* **Art. 13 ust. 1 UoR – Definicja ksiąg rachunkowych:**
+  Ustawodawca ściśle definiuje, co stanowi księgi rachunkowe: Dziennik, Księgę Główną (ewidencja syntetyczna na kontach księgowych), Księgi Pomocnicze (ewidencja analityczna), Zestawienia Obrotów i Sald (obrotówka) oraz Inwentarz.
+* **Art. 20 – 25 UoR – Dowody księgowe i ochrona zapisu:**
+  Księgi rachunkowe muszą gwarantować rzetelność, bezbłędność, sprawdzalność oraz bieżące i trwałe rejestrowanie zdarzeń gospodarczych bez możliwości ich modyfikacji bez śladu rewizyjnego (storno).
+* **Konkluzja w odniesieniu do Gastro App:**
+  Gastro App kategorycznie **NIE stanowi ksiąg rachunkowych ani programu finansowo-księgowego (FK)**:
+  - System nie prowadzi kont bilansowych ani wynikowych (brak dekretacji dwustronnej Wn/Ma).
+  - System nie tworzy Dziennika księgowań ani Księgi Głównej.
+  - Generowane agregacje przychodów i kosztów personelu mają wyłącznie charakter zarządczy (Business Intelligence / Management Information System) dla wewnętrznych potrzeb właściciela i kadry menadżerskiej.
+  - Oficjalne księgi rachunkowe przedsiębiorstwa prowadzone są poza aplikacją Gastro App – przez licencjonowane biuro rachunkowe lub w certyfikowanym programie FK (np. Comarch ERP Optima, Enova365, Symfonia).
+
+#### 2. Wykładnia Ustawy o podatku od towarów i usług (Ustawa o VAT - t.j. Dz.U. z 2024 r. poz. 361 ze zm.):
+* **Art. 106na – 106nd Ustawy o VAT (Krajowy System e-Faktur):**
+  Przepisy te określają zasady wystawiania i odbierania faktur ustrukturyzowanych w systemie teleinformatycznym KSeF prowadzonym przez Szefa Krajowej Administracji Skarbowej. Dokument staje się oficjalną fakturą prawną z chwilą przydzielenia numeru KSeF i wygenerowania UPO.
+* **Status prawny modułu KSeF w Gastro App:**
+  Aplikacja Gastro App funkcjonuje w architekturze **wyłącznie pasywnego podglądu (Read-Only Mirror)**:
+  - Aplikacja łączy się z API KSeF wyłącznie w celu asynchronicznego pobrania metadanych faktur zakupowych/kosztowych wystawionych przez zewnętrznych dostawców, celem ich wewnętrznej analizy i kategoryzacji.
+  - Aplikacja **nie wystawia faktur w obrocie cywilnoprawnym i podatkowym**, nie modyfikuje urzędowych faktur w KSeF, nie emituje korekt i nie generuje Urzędowych Poświadczeń Odbioru (UPO).
+  - Połączenie nie służy celom formalno-skarbowym, lecz usprawnieniu zarządzania płynnością finansową lokali.
+* **Art. 111 Ustawy o VAT (Kasy rejestrujące):**
+  Zapisy utargów dziennych w modułach raportowania personelu stanowią wewnętrzną procedurę kontrolno-rozliczeniową gotówki i kart. Nie są one raportami fiskalnymi i nie zastępują kas rejestrujących online.
+
+#### 3. Kwestia jurysdykcji Krajowej Administracji Skarbowej (KAS) i audytu oprogramowania:
+* Zgodnie z art. 193a Ordynacji podatkowej (Jednolity Plik Kontrolny), organy podatkowe mogą w toku kontroli żądać przekazania struktur JPK (JPK_KR, JPK_V7, JPK_MAG) wyłącznie z programów stanowiących księgi podatkowe i ewidencje magazynowo-księgowe.
+* Ponieważ Gastro App:
+  1. Nie generuje urzędowych plików JPK_KR ani JPK_V7 do wysyłki do Urzędu Skarbowego,
+  2. Nie dokonuje wiążących dekretacji podatkowych,
+  3. Prezentuje wartości szacunkowe i zarządcze,
+* system **nie podlega certyfikacji, rejestracji ani jurysdykcji audytowej Krajowej Administracji Skarbowej (KAS) i Urzędów Skarbowych**.
+
+---
+
+### 3.6 Oficjalna klauzula prawna (Legal Disclaimer) i wytyczne operacyjne
+
+W celu pełnego zabezpieczenia prawnego przedsiębiorstwa, twórców oprogramowania oraz personelu, w systemie wdrożono oficjalną klauzulę prawną oraz zestaw reguł operacyjnych.
+
+#### 1. Treść Klauzuli Prawnej (Legal Disclaimer):
+
+> ### NOTA PRAWNA I ZASTRZEŻENIE ZARZĄDCZE (LEGAL DISCLAIMER)
+> **Niniejsza aplikacja (Gastro App) oraz prezentowane w niej pulpity analityczne, zestawienia przychodów, estymacje kosztów pracowniczych oraz moduł podglądu faktur z Krajowego Systemu e-Faktur (KSeF) stanowią wyłącznie wewnętrzne narzędzie zarządcze i analityczne (Business Intelligence / Management Information System) dla właścicieli oraz kadry kierowniczej.**
+>
+> **System ten kategorycznie NIE stanowi ksiąg rachunkowych, ewidencji podatkowej ani oprogramowania finansowo-księgowego w rozumieniu przepisów Ustawy o rachunkowości z dnia 29 września 1994 r. (w szczególności art. 10 i art. 13) oraz Ustawy o podatku od towarów i usług z dnia 11 marca 2004 r. (w szczególności art. 106na–106nd oraz art. 111).**
+>
+> **Moduł KSeF funkcjonuje wyłącznie w trybie pasywnego agregatora podglądu (Read-Only Mirror), pobierającego dane w celach statystycznych i wewnętrznej kategoryzacji kosztów. Prezentowane wskaźniki rentowności, marż oraz szacowanego wyniku operacyjnego mają charakter poglądowy (estymacyjny). Wyłączną i wiążącą podstawą wszelkich rozliczeń podatkowo-księgowych, deklaracji podatkowych oraz sprawozdań finansowych składanych organom Krajowej Administracji Skarbowej (KAS) pozostają księgi rachunkowe prowadzone w certyfikowanych systemach FK przez uprawnione podmioty (biuro rachunkowe) oraz oficjalne dokumenty źródłowe zarejestrowane na platformie KSeF Ministerstwa Finansów.**
+
+#### 2. Wytyczne Operacyjne (Guidelines):
+1. **Zasada Pasywności KSeF (Read-Only Policy):** Token KSeF wprowadzany w systemie powinien posiadać wyłącznie uprawnienia do odczytu faktur. Aplikacja nie może być wykorzystywana do wprowadzania faktur sprzedażowych do obiegu prawnego bez odrębnego certyfikowanego modułu e-fakturowania.
+2. **Rozdział Funkcji Zarządczych i Finansowo-Księgowych:** Wszelkie analizy marżowe i zestawienia kosztów służą do bieżącego podejmowania decyzji operacyjnych (kontrola food/beverage cost, optymalizacja obsady barmańskiej) i nie mogą być przekazywane organom kontroli skarbowej jako dowód księgowy w rozumieniu art. 21 UoR.
+3. **Poglądowy Charakter Wskaźnika Zysku Operacyjnego:** Wyliczany w pulpicie zysk operacyjny ma charakter operacyjny (zbliżony do EBITDA obiektu) i nie uwzględnia podatków dochodowych, odpisów amortyzacyjnych, kosztów finansowych ani składek ZUS pracodawcy.
+4. **Niezależność Ewidencji Fiskalnej:** Zamykanie zmiany i rozliczanie utargów w Gastro App nie zwalnia menadżerów z obowiązku drukowania dobowych i miesięcznych raportów fiskalnych na kasie rejestrującej.
+5. **Audyt Danych przed Bilancem:** Przed zamknięciem miesiąca i przekazaniem dokumentów do biura rachunkowego, uprawniony pracownik powinien zweryfikować zgodność pobranych w KSeF faktur z fizycznym stanem magazynowym i dostawami.
+
+---
+
+### 3.7 Analiza repozytorium Git i ocena usunięcia gałęzi `feature/update-tankownia-case`
+
+W związku z zakończeniem prac nad wersją v2.0.0 i rozpoczęciem gałęzi `feature/update-owner` przeprowadzono audyt historii systemu kontroli wersji Git w repozytorium `gastro-app`.
+
+#### 1. Stan techniczny gałęzi w grafie commitów (DAG):
+* **Commit scalający (Merge Commit):** `bc88859ce31c8d8d80f4a9dbdadb34b02f024f58` w gałęzi `main`.
+* **Tag wydania:** Na commit scalający nałożono trwały, opatrzony podpisem tag wydaniowy **`v2.0.0`** (*"Wydanie Gastro App v2.0.0 (Aktualizacja Tankownia Case)"*).
+* **Weryfikacja zawartości commitów:**
+  - Wszystkie 13 commitów gałęzi `feature/update-tankownia-case` (od `b221820` do `db3e37d`) zostały włączone do historii gałęzi `main`.
+  - Polecenie weryfikacyjne:
+    ```bash
+    git log main..feature/update-tankownia-case
+    ```
+    zwraca pusty wynik (0 unmerged commits).
+  - Polecenie `git branch --merged main` jednoznacznie wymienia gałąź `feature/update-tankownia-case` jako w pełni scaloną.
+
+#### 2. Ocena bezpieczeństwa usunięcia gałęzi:
+* **Ocena:** Usunięcie gałęzi `feature/update-tankownia-case` (zarówno lokalnej, jak i zdalnej na serwerze origin) jest **w 100% bezpieczne i wskazane**.
+* **Uzasadnienie inżynieryjne:**
+  1. *Integralność historii:* Żaden commit, różnica w kodzie (diff) ani metadane autorów nie zostaną utracone, ponieważ są one trwale powiązane z historią gałęzi `main` oraz chronione referencją tagu `v2.0.0`.
+  2. *Higiena repozytorium (Branch Cleanliness):* Zgodnie ze standardami Git Flow oraz GitHub Flow, gałęzie funkcjonalne (feature branches) po pomyślnym scaleniu i przetestowaniu powinny zostać usunięte, aby uniknąć pomyłkowych commitów do nieaktualnych odgałęzień oraz redukować narzut poznawczy zespołu programistycznego.
+  3. *Ochrona przed Garbage Collection:* Obecność tagu `v2.0.0` uniemożliwia silnikowi Gita usunięcie jakichkolwiek obiektów powiązanych z tym wdrożeniem podczas operacji `git gc`.
+
+#### 3. Rekomendowane polecenia czyszczące:
+```bash
+# 1. Usunięcie lokalnej gałęzi (bezpieczna flaga -d weryfikuje pełne scalenie)
+git branch -d feature/update-tankownia-case
+
+# 2. Usunięcie gałęzi ze zdalnego repozytorium (GitHub / GitLab)
+git push origin --delete feature/update-tankownia-case
+```
+
+#### 4. Procedura natychmiastowego odtworzenia (Fallback):
+Gdyby z jakichkolwiek względów zaistniała konieczność powrotu do odrębnej gałęzi o tej samej nazwie, można ją w ułamku sekundy odtworzyć bezpośrednio ze znacznika wydania:
+```bash
+git checkout -b feature/update-tankownia-case v2.0.0
+```
+
+---
+
+# Rozdział 4: Zestawienie skryptów migracyjnych i rekomendacje wdrożeniowe
+
+### 4.1 Zestawienie wykonanych migracji bazodanowych (SQL)
+
+Wszystkie modyfikacje schematu bazy danych zostały przygotowane w formie idempotentnych, bezpiecznych skryptów SQL w katalogu `scripts/`:
+
+| Skrypt Migracyjny | Dotknięte Tabele i Obiekty | Opis Wprowadzonych Zmian | Gałąź / Wersja |
+|---|---|---|---|
+| `migration_todos_completed_by.sql` | `restaurant_todos` | Dodanie kolumn `completed_by_user_id` i `completed_at` oraz indeksów B-tree. | `feature/update-tankownia-case` (v2.0.0) |
+| `migration_day_requirements.sql` | `restaurant_day_requirements`, `restaurant_operating_hours` | Utworzenie tabeli zapotrzebowania miesięcznego, kolumna `shift_roles`, uprawnienia RLS. | `feature/update-tankownia-case` (v2.0.0) |
+| `migration_revenue_fields.sql` | `restaurant_revenue_fields`, `daily_revenues` | Pola konfiguracji utargu, flagi `include_in_total`, `deduct_previous_day`, kolumna `breakdown jsonb`. | `feature/update-tankownia-case` (v2.0.0) |
+| `migration_reservations.sql` | `restaurant_reservations` | Utworzenie tabeli rezerwacji stolików w stylu To-Do wraz z indeksami i uprawnieniami RLS. | `feature/update-tankownia-case` (v2.0.0) |
+| `migration_reservations_status.sql` | `restaurant_reservations` | Rozszerzenie statusów (`pending`, `arrived`, `no_show`, `cancelled`) oraz kolumny `actual_arrival_time`. | `feature/update-tankownia-case` (v2.0.0) |
+| `migration_restaurant_color.sql` | `restaurants` | Dodanie kolumny `color` do identyfikacji wizualnej lokali w kalendarzu wieloobiektowym. | `feature/update-tankownia-case` (v2.0.0) |
+| `migration_bonus_rules_schedule.sql` | `bonus_rules` | Kolumny `schedule_type`, `applicable_days int[]`, `applicable_dates text[]`. | `feature/update-tankownia-case` (v2.0.0) |
+| `migration_announcements.sql` | `restaurant_announcements` | Dodanie kolumn `image_url`, `keep_in_history`, bucket `announcement-images` i procedury retencji 30 dni. | `feature/update-tankownia-case` (v2.0.0) |
+| `migration_owner_ksef.sql` | `restaurant_users`, `restaurant_ksef_config`, `ksef_invoices` | Obsługa roli `owner`, funkcje RLS (`is_restaurant_owner`, `is_any_owner`), tabela konfiguracji KSeF per lokal, tabela faktur KSeF z metadanymi XML i rozbiciem stawek, polityki RLS wyłącznego dostępu dla roli owner/service_role oraz dane demonstracyjne seed. | `feature/update-owner` |
+
+---
+
+### 4.2 Rekomendacje architektoniczne i wdrożeniowe
+
 1. **Wdrożenie na środowisko produkcyjne Supabase:**
-   - Wykonać skrypty migracyjne w kolejności chronologicznej w konsoli Supabase SQL Editor.
-   - Upewnić się, że powiadomienie `NOTIFY pgrst, 'reload schema';` zostało wyemitowane, aby odświeżyć pamięć podręczną schematu API PostgREST.
-   - W sekcji Supabase Storage utworzyć bucket `announcement-images` z flagą Public oraz politykami odczytu dla wszystkich i zapisu dla zalogowanych (`authenticated`).
-2. **Optymalizacja wydajnościowa:**
-   - Zastosowane w gałęzi indeksy B-tree na `(restaurant_id, work_date)` oraz `(completed_by_user_id)` zapewniają czas odpowiedzi poniżej 20 ms nawet przy setkach tysięcy rekordów.
-   - Retencja wygasłych ogłoszeń i kompresja Canvas do WebP eliminują problem niekontrolowanego wzrostu bazy i kosztów przechowywania danych w chmurze.
-3. **Spójność interfejsu i ergonomia pracy:**
-   - Nowe moduły w pełni respektują konwencję stylistyczną Next.js / Tailwind CSS, a wprowadzenie widoku tabelarycznego w magazynie oraz rezerwacji w stylu To-Do stanowi bezpośrednią odpowiedź na specyfikę dynamicznej pracy personelu gastronomicznego.
+   - Wykonać skrypty migracyjne w kolejności chronologicznej w konsoli Supabase SQL Editor (w szczególności nową migrację `scripts/migration_owner_ksef.sql`).
+   - Upewnić się, że powiadomienie `NOTIFY pgrst, 'reload schema';` zostało wyemitowane po wykonaniu migracji, aby odświeżyć pamięć podręczną schematu PostgREST API.
+   - W sekcji Supabase Storage zweryfikować istnienie i uprawnienia bucketu `announcement-images` (flaga Public, zapis dla uwierzytelnionych użytkowników).
+2. **Bezpieczeństwo tokenów i integracji KSeF:**
+   - Tokeny sesyjne KSeF przechowywane w tabeli `restaurant_ksef_config` są zabezpieczone politykami RLS i dostępne wyłącznie dla roli `owner` oraz procesów backendowych (`service_role`).
+   - Przed podłączeniem środowiska produkcyjnego (`prod`) zaleca się przeprowadzenie pełnych testów synchronizacji na środowisku `test` (`https://ksef-test.mf.gov.pl/api`) lub w trybie symulacyjnym Gastro Sandbox.
+3. **Optymalizacja wydajnościowa i indeksowanie:**
+   - Indeksy B-tree na `(restaurant_id, issue_date)` oraz `(ksef_number)` w tabeli `ksef_invoices` zapewniają błyskawiczne filtrowanie i wyszukiwanie faktur nawet przy wieloletniej historii rozliczeniowej.
+   - W tabeli `restaurant_users` indeksy złożone na `(user_id, role)` gwarantują natychmiastowe sprawdzanie uprawnień RLS bez wpływu na czas renderowania widoków.
+4. **Spójność interfejsu i ergonomia pracy:**
+   - Nowy pulpit właściciela (`/owner`) w pełni harmonizuje z konwencją graficzną aplikacji (Tailwind CSS, ciemny motyw, responsywność).
+   - Wdrożenie jasnego komunikatu prawnego (Legal Disclaimer Banner) na pulpicie właściciela oraz w dokumentacji gwarantuje pełną przejrzystość regulacyjną systemu.
 
 ---
-*Dokument zatwierdzony do użytku projektowego i wdrożeniowego w ramach gałęzi `feature/update-tankownia-case`.*
+*Dokument zatwierdzony do użytku projektowego, analitycznego i wdrożeniowego w ramach gałęzi `feature/update-owner`.*

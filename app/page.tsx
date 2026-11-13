@@ -40,7 +40,10 @@ export default function AuthPage() {
 
     const rolesList = (memberships || []).map((m: { role: string }) => m.role)
 
-    if (rolesList.includes("manager")) {
+    if (rolesList.includes("owner")) {
+      setLoading(false)
+      router.replace("/owner")
+    } else if (rolesList.includes("manager")) {
       setLoading(false)
       router.replace("/manager")
     } else if (rolesList.length > 0) {
