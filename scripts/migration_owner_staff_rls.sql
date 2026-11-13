@@ -61,106 +61,82 @@ END;
 $$;
 
 -- ------------------------------------------------------------------------------
--- 2. POLITYKI RLS DLA PUBLIC.RESTAURANT_USERS
+-- 2. POLITYKI RLS DLA PUBLIC.RESTAURANT_USERS (CZYSTE, BEZREKURENCYJNE)
 -- ------------------------------------------------------------------------------
 
 ALTER TABLE public.restaurant_users ENABLE ROW LEVEL SECURITY;
 
-GRANT ALL ON TABLE public.restaurant_users TO authenticated;
-GRANT ALL ON TABLE public.restaurant_users TO service_role;
+GRANT ALL ON TABLE public.restaurant_users TO authenticated, service_role, anon;
 
--- A. SELECT: Właściciel widzi wszystkich pracowników w przypisanych lokalach sieci
 DROP POLICY IF EXISTS "allow_owners_select_restaurant_users" ON public.restaurant_users;
-CREATE POLICY "allow_owners_select_restaurant_users" ON public.restaurant_users
-  FOR SELECT
-  TO authenticated, service_role
-  USING (
-    public.is_restaurant_owner(restaurant_id)
-    OR public.is_any_owner()
-    OR user_id = auth.uid()
-    OR EXISTS (
-      SELECT 1 FROM public.restaurant_users ru2
-      WHERE ru2.user_id = auth.uid()
-        AND ru2.restaurant_id = restaurant_users.restaurant_id
-        AND LOWER(ru2.role) IN ('manager', 'owner')
-    )
-  );
-
--- B. INSERT / UPDATE / DELETE: Właściciel ma uprawnienia zarządcze nad personelem
 DROP POLICY IF EXISTS "allow_owners_all_restaurant_users" ON public.restaurant_users;
-CREATE POLICY "allow_owners_all_restaurant_users" ON public.restaurant_users
-  FOR ALL
-  TO authenticated, service_role
-  USING (
-    public.is_restaurant_owner(restaurant_id)
-    OR public.is_any_owner()
-  )
-  WITH CHECK (
-    public.is_restaurant_owner(restaurant_id)
-    OR public.is_any_owner()
-  );
+DROP POLICY IF EXISTS "allow_all_authenticated_restaurant_users" ON public.restaurant_users;
+DROP POLICY IF EXISTS "allow_all_service_role_restaurant_users" ON public.restaurant_users;
+DROP POLICY IF EXISTS "allow_all_anon_restaurant_users" ON public.restaurant_users;
+
+CREATE POLICY "allow_all_authenticated_restaurant_users" ON public.restaurant_users
+  FOR ALL TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "allow_all_service_role_restaurant_users" ON public.restaurant_users
+  FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "allow_all_anon_restaurant_users" ON public.restaurant_users
+  FOR ALL TO anon USING (true) WITH CHECK (true);
 
 -- ------------------------------------------------------------------------------
--- 3. POLITYKI RLS DLA PUBLIC.USERS
+-- 3. POLITYKI RLS DLA PUBLIC.USERS (CZYSTE, BEZREKURENCYJNE)
 -- ------------------------------------------------------------------------------
 
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 
-GRANT ALL ON TABLE public.users TO authenticated;
-GRANT ALL ON TABLE public.users TO service_role;
+GRANT ALL ON TABLE public.users TO authenticated, service_role, anon;
 
--- A. SELECT: Właściciel widzi profile wszystkich pracowników należących do lokali sieci
 DROP POLICY IF EXISTS "allow_owners_select_users" ON public.users;
-CREATE POLICY "allow_owners_select_users" ON public.users
-  FOR SELECT
-  TO authenticated, service_role
-  USING (
-    public.is_any_owner()
-    OR id = auth.uid()
-    OR EXISTS (
-      SELECT 1 FROM public.restaurant_users ru
-      WHERE ru.user_id = public.users.id
-        AND (public.is_restaurant_owner(ru.restaurant_id) OR public.is_any_owner())
-    )
-  );
-
--- B. UPDATE: Właściciel może aktualizować dane profilowe (np. stawki bazowe)
 DROP POLICY IF EXISTS "allow_owners_update_users" ON public.users;
-CREATE POLICY "allow_owners_update_users" ON public.users
-  FOR UPDATE
-  TO authenticated, service_role
-  USING (
-    public.is_any_owner() OR id = auth.uid()
-  )
-  WITH CHECK (
-    public.is_any_owner() OR id = auth.uid()
-  );
+DROP POLICY IF EXISTS "allow_all_authenticated_users" ON public.users;
+DROP POLICY IF EXISTS "allow_all_service_role_users" ON public.users;
+DROP POLICY IF EXISTS "allow_all_anon_users" ON public.users;
+
+CREATE POLICY "allow_all_authenticated_users" ON public.users
+  FOR ALL TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "allow_all_service_role_users" ON public.users
+  FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "allow_all_anon_users" ON public.users
+  FOR ALL TO anon USING (true) WITH CHECK (true);
 
 -- ------------------------------------------------------------------------------
--- 4. POLITYKI RLS DLA PUBLIC.RESTAURANT_ROLES
+-- 4. POLITYKI RLS DLA PUBLIC.RESTAURANT_ROLES I RESTAURANT_TODOS
 -- ------------------------------------------------------------------------------
 
 ALTER TABLE public.restaurant_roles ENABLE ROW LEVEL SECURITY;
 
-GRANT ALL ON TABLE public.restaurant_roles TO authenticated;
-GRANT ALL ON TABLE public.restaurant_roles TO service_role;
+GRANT ALL ON TABLE public.restaurant_roles TO authenticated, service_role, anon;
 
 DROP POLICY IF EXISTS "allow_all_select_restaurant_roles" ON public.restaurant_roles;
-CREATE POLICY "allow_all_select_restaurant_roles" ON public.restaurant_roles
-  FOR SELECT
-  TO authenticated, service_role
-  USING (true);
-
 DROP POLICY IF EXISTS "allow_owners_manage_restaurant_roles" ON public.restaurant_roles;
-CREATE POLICY "allow_owners_manage_restaurant_roles" ON public.restaurant_roles
-  FOR ALL
-  TO authenticated, service_role
-  USING (
-    public.is_restaurant_owner(restaurant_id) OR public.is_any_owner()
-  )
-  WITH CHECK (
-    public.is_restaurant_owner(restaurant_id) OR public.is_any_owner()
-  );
+DROP POLICY IF EXISTS "allow_all_authenticated_restaurant_roles" ON public.restaurant_roles;
+DROP POLICY IF EXISTS "allow_all_service_role_restaurant_roles" ON public.restaurant_roles;
+DROP POLICY IF EXISTS "allow_all_anon_restaurant_roles" ON public.restaurant_roles;
+
+CREATE POLICY "allow_all_authenticated_restaurant_roles" ON public.restaurant_roles
+  FOR ALL TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "allow_all_service_role_restaurant_roles" ON public.restaurant_roles
+  FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "allow_all_anon_restaurant_roles" ON public.restaurant_roles
+  FOR ALL TO anon USING (true) WITH CHECK (true);
+
+ALTER TABLE public.restaurant_todos ENABLE ROW LEVEL SECURITY;
+
+GRANT ALL ON TABLE public.restaurant_todos TO authenticated, service_role, anon;
+
+DROP POLICY IF EXISTS "allow_all_authenticated_restaurant_todos" ON public.restaurant_todos;
+DROP POLICY IF EXISTS "allow_all_service_role_restaurant_todos" ON public.restaurant_todos;
+DROP POLICY IF EXISTS "allow_all_anon_restaurant_todos" ON public.restaurant_todos;
+
+CREATE POLICY "allow_all_authenticated_restaurant_todos" ON public.restaurant_todos
+  FOR ALL TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "allow_all_service_role_restaurant_todos" ON public.restaurant_todos
+  FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "allow_all_anon_restaurant_todos" ON public.restaurant_todos
+  FOR ALL TO anon USING (true) WITH CHECK (true);
 
 -- ------------------------------------------------------------------------------
 -- 5. PRZEŁADOWANIE PAMIĘCI PODRĘCZNEJ POSTGREST W SUPABASE

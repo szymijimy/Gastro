@@ -13,20 +13,22 @@ import {
   Check,
   X,
   Sparkles,
-  ArrowRight,
-  ShieldAlert,
-  UserPlus,
+  ArrowUpDown,
 } from "lucide-react"
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { supabase } from "@/lib/supabase"
 import type { OwnerStaffUser, OwnerVenue } from "@/types/owner"
 
+export type QuickStaffFilter = "all" | "owner" | "manager" | "staff" | "multivenue"
+export type StaffSortOption = "name_asc" | "name_desc" | "role" | "rate_desc" | "rate_asc"
+
 interface OwnerStaffTabProps {
   staffUsers: OwnerStaffUser[]
   venues: OwnerVenue[]
+  selectedVenueId?: string
   currentUserId: string | null
   availableRoles?: string[]
   onSaveStaffAssignment: (data: {
@@ -40,13 +42,23 @@ interface OwnerStaffTabProps {
 export function OwnerStaffTab({
   staffUsers,
   venues,
+  selectedVenueId = "all",
   currentUserId,
   availableRoles = [],
   onSaveStaffAssignment,
 }: OwnerStaffTabProps) {
   const [searchQuery, setSearchQuery] = useState("")
   const [roleFilter, setRoleFilter] = useState<string>("all")
-  const [venueFilter, setVenueFilter] = useState<string>("all")
+  const [venueFilter, setVenueFilter] = useState<string>(selectedVenueId)
+  const [quickFilter, setQuickFilter] = useState<QuickStaffFilter>("all")
+  const [sortBy, setSortBy] = useState<StaffSortOption>("name_asc")
+
+  // Synchronizacja venueFilter z wybranym lokalem w głównym pasku nawigacyjnym (Issue 3)
+  useEffect(() => {
+    if (selectedVenueId !== undefined) {
+      setVenueFilter(selectedVenueId)
+    }
+  }, [selectedVenueId])
 
   // Pobieranie ról z bazy restaurant_roles dla lokali właściciela
   const [dbRoles, setDbRoles] = useState<string[]>([])
@@ -72,7 +84,7 @@ export function OwnerStaffTab({
     fetchDbRoles()
   }, [venues])
 
-  // Dynamiczna lista unikalnych ról (role systemowe + role z lokali + role występujące u pracowników)
+  // Dynamiczna lista unikalnych ról (Issue 5: DOKŁADNE role z bazy, brak sfabrykowanego "Barman / Obsługa")
   const dynamicRoles = useMemo(() => {
     const roleMap = new Map<string, { value: string; label: string }>()
 
@@ -86,11 +98,7 @@ export function OwnerStaffTab({
       const trimmed = roleName.trim()
       const key = trimmed.toLowerCase()
       if (!roleMap.has(key)) {
-        let label = trimmed
-        if (key === "bartender" || key === "barman") {
-          label = "Barman / Obsługa"
-        }
-        roleMap.set(key, { value: trimmed, label })
+        roleMap.set(key, { value: trimmed, label: trimmed })
       }
     })
 
@@ -101,11 +109,7 @@ export function OwnerStaffTab({
           const trimmed = m.role.trim()
           const key = trimmed.toLowerCase()
           if (!roleMap.has(key)) {
-            let label = trimmed
-            if (key === "bartender" || key === "barman") {
-              label = "Barman / Obsługa"
-            }
-            roleMap.set(key, { value: trimmed, label })
+            roleMap.set(key, { value: trimmed, label: trimmed })
           }
         }
       })
@@ -116,14 +120,15 @@ export function OwnerStaffTab({
 
   // Stan modalu edycji
   const [editingUser, setEditingUser] = useState<OwnerStaffUser | null>(null)
-  const [modalRole, setModalRole] = useState<string>("bartender")
-  const [modalHourlyRate, setModalHourlyRate] = useState<number>(30)
+  const [modalRole, setModalRole] = useState<string>("Barman")
+  const [modalHourlyRate, setModalHourlyRate] = useState<number>(0)
   const [modalVenueIds, setModalVenueIds] = useState<string[]>([])
   const [isSaving, setIsSaving] = useState(false)
 
-  // Otwarcie modalu edycji dla danego pracownika
+  // Otwarcie modalu edycji dla danego pracownika (Issue 8: zerowa/ukryta stawka dla właściciela)
   const handleOpenEditModal = (user: OwnerStaffUser) => {
     setEditingUser(user)
+    const isOwner = user.memberships.some((m) => m.role.toLowerCase() === "owner")
     const primaryRole =
       user.memberships.find((m) => m.role.toLowerCase() === "owner")?.role ||
       user.memberships.find((m) => m.role.toLowerCase() === "manager")?.role ||
@@ -131,8 +136,19 @@ export function OwnerStaffTab({
       (dynamicRoles[2]?.value || "Barman")
 
     setModalRole(primaryRole)
-    const initialRate = user.memberships[0]?.hourly_rate || user.default_hourly_rate || 30
-    setModalHourlyRate(initialRate)
+
+    if (isOwner || primaryRole.toLowerCase() === "owner") {
+      setModalHourlyRate(0)
+    } else {
+      const firstRate = user.memberships[0]?.hourly_rate
+      const initialRate =
+        firstRate !== null && firstRate !== undefined
+          ? Number(firstRate)
+          : user.default_hourly_rate !== null && user.default_hourly_rate !== undefined
+          ? Number(user.default_hourly_rate)
+          : 0
+      setModalHourlyRate(initialRate)
+    }
     setModalVenueIds(user.memberships.map((m) => m.restaurant_id))
   }
 
@@ -140,12 +156,18 @@ export function OwnerStaffTab({
   const handleQuickPromoteToManager = (user: OwnerStaffUser) => {
     setEditingUser(user)
     setModalRole("manager")
-    const initialRate = user.memberships[0]?.hourly_rate || user.default_hourly_rate || 35
+    const firstRate = user.memberships[0]?.hourly_rate
+    const initialRate =
+      firstRate !== null && firstRate !== undefined
+        ? Number(firstRate)
+        : user.default_hourly_rate !== null && user.default_hourly_rate !== undefined
+        ? Number(user.default_hourly_rate)
+        : 35
     setModalHourlyRate(initialRate)
-    // Domyślnie zaznacz wszystkie lokale lub obecne
-    const targetVenues = user.memberships.length > 0
-      ? user.memberships.map((m) => m.restaurant_id)
-      : venues.map((v) => v.id)
+    const targetVenues =
+      user.memberships.length > 0
+        ? user.memberships.map((m) => m.restaurant_id)
+        : venues.map((v) => v.id)
     setModalVenueIds(targetVenues)
   }
 
@@ -158,14 +180,21 @@ export function OwnerStaffTab({
     }
   }
 
-  // Zapis formularza
+  // Zapis formularza uprawnień i stawek (Issue 8: stawka 0 dla właściciela)
   const handleSaveModal = async () => {
     if (!editingUser) return
     setIsSaving(true)
+    const effectiveRate =
+      modalRole.toLowerCase() === "owner"
+        ? 0
+        : modalHourlyRate !== null && modalHourlyRate !== undefined && !isNaN(Number(modalHourlyRate))
+        ? Number(modalHourlyRate)
+        : 0
+
     const success = await onSaveStaffAssignment({
       userId: editingUser.id,
       role: modalRole,
-      hourlyRate: Number(modalHourlyRate) || 0,
+      hourlyRate: effectiveRate,
       selectedVenueIds: modalVenueIds,
     })
     setIsSaving(false)
@@ -174,33 +203,89 @@ export function OwnerStaffTab({
     }
   }
 
-  // Filtrowanie użytkowników
+  // Filtrowanie i sortowanie pracowników (Issue 3: pills, sync navbar, sortowanie A-Z, rola, stawka)
   const filteredUsers = useMemo(() => {
-    return staffUsers.filter((u) => {
-      // Wyszukiwanie tekstowe
+    const list = staffUsers.filter((u) => {
+      // 1. Wyszukiwanie tekstowe
       const q = searchQuery.toLowerCase().trim()
       const matchText =
         !q ||
         (u.full_name && u.full_name.toLowerCase().includes(q)) ||
         (u.email && u.email.toLowerCase().includes(q))
 
-      // Filtr roli
-      let matchRole = true
+      if (!matchText) return false
+
+      const isOwner = u.memberships.some((m) => m.role.toLowerCase() === "owner")
+      const isManager = u.memberships.some((m) => m.role.toLowerCase() === "manager")
+
+      // 2. Quick filter pills ('Wszyscy', 'Właściciel', 'Managerowie', 'Pracownicy', 'Multi-lokal')
+      if (quickFilter === "owner" && !isOwner) return false
+      if (quickFilter === "manager" && !isManager) return false
+      if (quickFilter === "staff" && (isOwner || isManager)) return false
+      if (quickFilter === "multivenue" && u.memberships.length <= 1) return false
+
+      // 3. Filtr roli ze selecta
       if (roleFilter !== "all") {
-        matchRole = u.memberships.some(
+        const matchRole = u.memberships.some(
           (m) => m.role.toLowerCase() === roleFilter.toLowerCase()
         )
+        if (!matchRole) return false
       }
 
-      // Filtr lokalu
-      let matchVenue = true
+      // 4. Filtr lokalu
       if (venueFilter !== "all") {
-        matchVenue = u.memberships.some((m) => m.restaurant_id === venueFilter)
+        const matchVenue = u.memberships.some((m) => m.restaurant_id === venueFilter)
+        if (!matchVenue) return false
       }
 
-      return matchText && matchRole && matchVenue
+      return true
     })
-  }, [staffUsers, searchQuery, roleFilter, venueFilter])
+
+    // Sortowanie listy
+    return list.sort((a, b) => {
+      if (sortBy === "name_asc") {
+        return (a.full_name || "").localeCompare(b.full_name || "", "pl")
+      }
+      if (sortBy === "name_desc") {
+        return (b.full_name || "").localeCompare(a.full_name || "", "pl")
+      }
+      if (sortBy === "role") {
+        const getWeight = (u: OwnerStaffUser) => {
+          if (u.memberships.some((m) => m.role.toLowerCase() === "owner")) return 1
+          if (u.memberships.some((m) => m.role.toLowerCase() === "manager")) return 2
+          return 3
+        }
+        const diff = getWeight(a) - getWeight(b)
+        if (diff !== 0) return diff
+        const roleA = a.memberships[0]?.role || ""
+        const roleB = b.memberships[0]?.role || ""
+        const rDiff = roleA.localeCompare(roleB, "pl")
+        if (rDiff !== 0) return rDiff
+        return (a.full_name || "").localeCompare(b.full_name || "", "pl")
+      }
+      if (sortBy === "rate_desc" || sortBy === "rate_asc") {
+        const getRate = (u: OwnerStaffUser) => {
+          if (u.memberships.some((m) => m.role.toLowerCase() === "owner")) return -1
+          const rates = u.memberships
+            .map((m) =>
+              m.hourly_rate !== null && m.hourly_rate !== undefined
+                ? Number(m.hourly_rate)
+                : 0
+            )
+            .concat(
+              u.default_hourly_rate !== null && u.default_hourly_rate !== undefined
+                ? Number(u.default_hourly_rate)
+                : 0
+            )
+          return Math.max(...rates, 0)
+        }
+        const rateA = getRate(a)
+        const rateB = getRate(b)
+        return sortBy === "rate_desc" ? rateB - rateA : rateA - rateB
+      }
+      return 0
+    })
+  }, [staffUsers, searchQuery, quickFilter, roleFilter, venueFilter, sortBy])
 
   // Statystyki podsumowujące
   const totalStaffCount = staffUsers.length
@@ -208,6 +293,12 @@ export function OwnerStaffTab({
     u.memberships.some((m) => m.role.toLowerCase() === "manager")
   ).length
   const multiVenueCount = staffUsers.filter((u) => u.memberships.length > 1).length
+  const totalOwnerCount = staffUsers.filter((u) =>
+    u.memberships.some((m) => m.role.toLowerCase() === "owner")
+  ).length
+  const regularEmployeeCount = staffUsers.filter(
+    (u) => !u.memberships.some((m) => m.role.toLowerCase() === "owner" || m.role.toLowerCase() === "manager")
+  ).length
 
   return (
     <div className="space-y-6">
@@ -267,7 +358,7 @@ export function OwnerStaffTab({
         <Card className="shadow-xs">
           <CardHeader className="pb-2 flex flex-row items-center justify-between space-y-0">
             <CardTitle className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-              Dostęp do Wielu Lokali (Multi-venue)
+              Dostęp do Wielu Lokali (Multi-lokal)
             </CardTitle>
             <div className="p-2 rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400">
               <Building2 className="w-4 h-4" />
@@ -286,8 +377,49 @@ export function OwnerStaffTab({
 
       {/* Pasek filtrowania i wyszukiwania */}
       <Card className="shadow-xs">
-        <CardContent className="pt-6">
-          <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
+        <CardContent className="pt-6 space-y-4">
+          {/* Szybkie filtry (Quick Filter Pills - Issue 3) */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium text-zinc-500 mr-1 flex items-center gap-1">
+              <Filter className="w-3.5 h-3.5" />
+              Szybkie filtry:
+            </span>
+            {[
+              { id: "all", label: "Wszyscy", count: totalStaffCount },
+              { id: "owner", label: "Właściciel", count: totalOwnerCount },
+              { id: "manager", label: "Managerowie", count: totalManagerCount },
+              { id: "staff", label: "Pracownicy", count: regularEmployeeCount },
+              { id: "multivenue", label: "Multi-lokal", count: multiVenueCount },
+            ].map((pill) => {
+              const isActive = quickFilter === pill.id
+              return (
+                <button
+                  key={pill.id}
+                  type="button"
+                  onClick={() => setQuickFilter(pill.id as QuickStaffFilter)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors cursor-pointer border ${
+                    isActive
+                      ? "bg-indigo-600 border-indigo-600 text-white shadow-xs"
+                      : "bg-white dark:bg-zinc-800/80 border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700/50"
+                  }`}
+                >
+                  <span>{pill.label}</span>
+                  <span
+                    className={`px-1.5 py-0.2 rounded-full text-[10px] font-semibold ${
+                      isActive
+                        ? "bg-indigo-700/80 text-white"
+                        : "bg-zinc-100 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-400"
+                    }`}
+                  >
+                    {pill.count}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Narzędzia wyszukiwania, selektory i sortowanie */}
+          <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 pt-1 border-t border-zinc-100 dark:border-zinc-800">
             <div className="relative flex-1">
               <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <Input
@@ -305,7 +437,7 @@ export function OwnerStaffTab({
                 <select
                   value={roleFilter}
                   onChange={(e) => setRoleFilter(e.target.value)}
-                  className="text-xs h-9 rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-2 py-1 text-zinc-800 dark:text-zinc-200"
+                  className="text-xs h-9 rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-2.5 py-1 text-zinc-800 dark:text-zinc-200 cursor-pointer"
                 >
                   <option value="all">Wszystkie role</option>
                   {dynamicRoles.map((r) => (
@@ -321,7 +453,7 @@ export function OwnerStaffTab({
                 <select
                   value={venueFilter}
                   onChange={(e) => setVenueFilter(e.target.value)}
-                  className="text-xs h-9 rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-2 py-1 text-zinc-800 dark:text-zinc-200"
+                  className="text-xs h-9 rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-2.5 py-1 text-zinc-800 dark:text-zinc-200 cursor-pointer"
                 >
                   <option value="all">Wszystkie lokale</option>
                   {venues.map((v) => (
@@ -332,16 +464,36 @@ export function OwnerStaffTab({
                 </select>
               </div>
 
-              {(searchQuery || roleFilter !== "all" || venueFilter !== "all") && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-zinc-500 whitespace-nowrap">Sortowanie:</span>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as StaffSortOption)}
+                  className="text-xs h-9 rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-2.5 py-1 text-zinc-800 dark:text-zinc-200 cursor-pointer"
+                >
+                  <option value="name_asc">Nazwisko i imię (A-Z)</option>
+                  <option value="name_desc">Nazwisko i imię (Z-A)</option>
+                  <option value="role">Rola (Właściciel → Manager → Pracownicy)</option>
+                  <option value="rate_desc">Stawka godzinowa (od najwyższej)</option>
+                  <option value="rate_asc">Stawka godzinowa (od najniższej)</option>
+                </select>
+              </div>
+
+              {(searchQuery ||
+                quickFilter !== "all" ||
+                roleFilter !== "all" ||
+                venueFilter !== (selectedVenueId || "all")) && (
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => {
                     setSearchQuery("")
+                    setQuickFilter("all")
                     setRoleFilter("all")
-                    setVenueFilter("all")
+                    setVenueFilter(selectedVenueId || "all")
+                    setSortBy("name_asc")
                   }}
-                  className="text-xs h-9 text-zinc-500"
+                  className="text-xs h-9 text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
                 >
                   Wyczyść filtry
                 </Button>
@@ -356,10 +508,37 @@ export function OwnerStaffTab({
         <Table>
           <TableHeader>
             <TableRow className="bg-zinc-50/80 dark:bg-zinc-800/50">
-              <TableHead className="text-xs font-semibold">Pracownik</TableHead>
-              <TableHead className="text-xs font-semibold">Główna Rola</TableHead>
+              <TableHead
+                className="text-xs font-semibold cursor-pointer select-none hover:text-indigo-600 transition-colors"
+                onClick={() => setSortBy(sortBy === "name_asc" ? "name_desc" : "name_asc")}
+                title="Sortuj po nazwisku i imieniu"
+              >
+                <div className="flex items-center gap-1.5">
+                  <span>Pracownik</span>
+                  <ArrowUpDown className="w-3.5 h-3.5 text-zinc-400" />
+                </div>
+              </TableHead>
+              <TableHead
+                className="text-xs font-semibold cursor-pointer select-none hover:text-indigo-600 transition-colors"
+                onClick={() => setSortBy("role")}
+                title="Sortuj po hierarchii ról"
+              >
+                <div className="flex items-center gap-1.5">
+                  <span>Główna Rola</span>
+                  <ArrowUpDown className="w-3.5 h-3.5 text-zinc-400" />
+                </div>
+              </TableHead>
               <TableHead className="text-xs font-semibold">Przypisane Lokale</TableHead>
-              <TableHead className="text-xs font-semibold text-right">Stawka godzinowa</TableHead>
+              <TableHead
+                className="text-xs font-semibold text-right cursor-pointer select-none hover:text-indigo-600 transition-colors"
+                onClick={() => setSortBy(sortBy === "rate_desc" ? "rate_asc" : "rate_desc")}
+                title="Sortuj po stawce godzinowej"
+              >
+                <div className="flex items-center justify-end gap-1.5">
+                  <span>Stawka godzinowa</span>
+                  <ArrowUpDown className="w-3.5 h-3.5 text-zinc-400" />
+                </div>
+              </TableHead>
               <TableHead className="text-xs font-semibold text-right">Akcje Właściciela</TableHead>
             </TableRow>
           </TableHeader>
@@ -375,14 +554,27 @@ export function OwnerStaffTab({
                 const isOwner = user.memberships.some((m) => m.role.toLowerCase() === "owner")
                 const isManager = user.memberships.some((m) => m.role.toLowerCase() === "manager")
                 const primaryMembership = user.memberships[0]
-                const matchedRole = primaryMembership
-                  ? dynamicRoles.find((r) => r.value.toLowerCase() === primaryMembership.role.toLowerCase())
-                  : null
-                const roleBadgeLabel = matchedRole?.label || primaryMembership?.role || "Barman / Obsługa"
-                const highestRate = Math.max(
-                  ...user.memberships.map((m) => m.hourly_rate || 0),
-                  user.default_hourly_rate || 0
-                )
+
+                // Issue 5: Dokładna nazwa roli z bazy danych bez fabrykowanego 'Barman / Obsługa'
+                const exactRoleName = isOwner
+                  ? "Właściciel Sieci"
+                  : isManager
+                  ? "Manager"
+                  : primaryMembership?.role || "Pracownik"
+
+                // Issue 8: Prawdziwe stawki godzinowe z bazy, bez val || 30
+                const userRates = user.memberships
+                  .map((m) =>
+                    m.hourly_rate !== null && m.hourly_rate !== undefined
+                      ? Number(m.hourly_rate)
+                      : 0
+                  )
+                  .concat(
+                    user.default_hourly_rate !== null && user.default_hourly_rate !== undefined
+                      ? Number(user.default_hourly_rate)
+                      : 0
+                  )
+                const highestRate = Math.max(...userRates, 0)
 
                 return (
                   <TableRow key={user.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30">
@@ -415,7 +607,7 @@ export function OwnerStaffTab({
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
-                          {roleBadgeLabel}
+                          {exactRoleName}
                         </span>
                       )}
                     </TableCell>
@@ -452,7 +644,14 @@ export function OwnerStaffTab({
                     </TableCell>
 
                     <TableCell className="text-right font-medium text-xs text-zinc-900 dark:text-zinc-100">
-                      {highestRate > 0 ? `${highestRate.toFixed(2)} zł/h` : "Stawka bazowa"}
+                      {/* Issue 8: Dla właściciela "Nie dotyczy (Właściciel)", dla pracowników realna stawka */}
+                      {isOwner ? (
+                        <span className="text-zinc-400 italic">Nie dotyczy (Właściciel)</span>
+                      ) : highestRate > 0 ? (
+                        `${highestRate.toFixed(2)} zł/h`
+                      ) : (
+                        <span className="text-zinc-400 font-mono">0.00 zł/h</span>
+                      )}
                     </TableCell>
 
                     <TableCell className="text-right">
@@ -501,7 +700,7 @@ export function OwnerStaffTab({
               <button
                 type="button"
                 onClick={() => setEditingUser(null)}
-                className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -579,23 +778,33 @@ export function OwnerStaffTab({
                 </div>
               </div>
 
-              {/* Stawka godzinowa */}
+              {/* Stawka godzinowa (Issue 8: Właściciel nie pobiera stawki godzinowej) */}
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">
                   Stawka godzinowa (PLN/h):
                 </label>
-                <div className="relative">
-                  <DollarSign className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <Input
-                    type="number"
-                    step="0.50"
-                    min="0"
-                    value={modalHourlyRate}
-                    onChange={(e) => setModalHourlyRate(Number(e.target.value))}
-                    className="pl-9 text-xs h-9"
-                    placeholder="np. 32.50"
-                  />
-                </div>
+                {modalRole.toLowerCase() === "owner" ? (
+                  <div className="p-2.5 rounded-lg bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 text-xs text-amber-800 dark:text-amber-300 flex items-center gap-2">
+                    <Shield className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                    <span>Właściciel nie pobiera stawki godzinowej</span>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <DollarSign className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <Input
+                      type="number"
+                      step="0.50"
+                      min="0"
+                      value={modalHourlyRate}
+                      onChange={(e) => {
+                        const val = e.target.value
+                        setModalHourlyRate(val === "" ? 0 : Number(val))
+                      }}
+                      className="pl-9 text-xs h-9"
+                      placeholder="np. 32.50"
+                    />
+                  </div>
+                )}
               </div>
             </div>
 

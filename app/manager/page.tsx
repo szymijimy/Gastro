@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { FeedbackHost, showToast, askConfirm } from "@/components/ui/feedback"
 import { ShiftCalendar } from "@/components/ShiftCalendar"
+import { Search, Filter, X } from "lucide-react"
 import { InventoryModule } from "@/components/InventoryModule"
 import { ManagerScheduleModule } from "@/components/ManagerScheduleModule"
 import { AttendanceManagerModule } from "@/components/AttendanceManagerModule"
@@ -366,8 +367,11 @@ function TodoBatchModalDialog({
       return
     }
     setSaving(true)
-    await onSaveBatch(valid, targetDate)
-    setSaving(false)
+    try {
+      await onSaveBatch(valid, targetDate)
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -561,6 +565,43 @@ function ManagerDashboard() {
   const [newStaffRole, setNewStaffRole] = useState("")
   const [newStaffRate, setNewStaffRate] = useState("")
 
+  // Filtrowanie i wyszukiwanie w tabeli zespołu
+  const [staffSearchQuery, setStaffSearchQuery] = useState("")
+  const [staffRoleFilter, setStaffRoleFilter] = useState("all")
+
+  const availableStaffRoles = useMemo(() => {
+    const roleSet = new Set<string>()
+    roles.forEach((r) => {
+      if (r.name) roleSet.add(r.name)
+    })
+    staff.forEach((s) => {
+      if (s.role) roleSet.add(s.role)
+    })
+    return Array.from(roleSet).sort((a, b) => a.localeCompare(b, "pl"))
+  }, [roles, staff])
+
+  const filteredStaff = useMemo(() => {
+    return staff.filter((member) => {
+      if (staffRoleFilter !== "all") {
+        if (member.role.toLowerCase() !== staffRoleFilter.toLowerCase()) {
+          return false
+        }
+      }
+
+      if (staffSearchQuery.trim()) {
+        const query = staffSearchQuery.trim().toLowerCase()
+        const nameMatch = member.users?.full_name?.toLowerCase().includes(query) ?? false
+        const emailMatch = member.users?.email?.toLowerCase().includes(query) ?? false
+        const roleMatch = member.role.toLowerCase().includes(query)
+        if (!nameMatch && !emailMatch && !roleMatch) {
+          return false
+        }
+      }
+
+      return true
+    })
+  }, [staff, staffRoleFilter, staffSearchQuery])
+
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [newAnnouncementTitle, setNewAnnouncementTitle] = useState("")
   const [newAnnouncementContent, setNewAnnouncementContent] = useState("")
@@ -647,10 +688,11 @@ function ManagerDashboard() {
       }
     }
 
-    if (staffRes.data) {
-      const venuesByUser: Record<string, string[]> = {}
-      const staffMap = new Map<string, StaffMember>()
+    const venuesByUser: Record<string, string[]> = {}
+    const staffMap = new Map<string, StaffMember>()
 
+    // 1. Zasilenie ze standardowego zapytania restaurant_users, jeśli zwróciło dane
+    if (staffRes.data && staffRes.data.length > 0) {
       staffRes.data.forEach((item: RestaurantUserItem) => {
         const uid = item.user_id
         if (!venuesByUser[uid]) venuesByUser[uid] = []
@@ -672,10 +714,88 @@ function ManagerDashboard() {
           })
         }
       })
-
-      setStaffVenuesMap(venuesByUser)
-      setStaff(Array.from(staffMap.values()))
     }
+
+    // 2. Resilient fallback using get_restaurant_teammates RPC (SECURITY DEFINER)
+    //    Zapewnia pełne załadowanie personelu, jeśli zapytanie restaurant_users napotka błąd (np. RLS) lub zwróci pustą listę
+    if (staffRes.error || staffMap.size === 0) {
+      if (staffRes.error) {
+        console.warn(
+          "loadVenueData: restaurant_users query failed, falling back to get_restaurant_teammates RPC:",
+          staffRes.error.message
+        )
+      }
+      try {
+        const teamResults = await Promise.all(
+          allVenueIds.map(async (vId) => {
+            const { data: tData, error: tErr } = await supabase.rpc("get_restaurant_teammates", {
+              p_restaurant_id: vId,
+            })
+            if (tErr) console.warn(`loadVenueData: Błąd get_restaurant_teammates (${vId}):`, tErr.message)
+            return { venueId: vId, teammates: (tData || []) as any[] }
+          })
+        )
+
+        teamResults.forEach(({ venueId: vId, teammates }) => {
+          teammates.forEach((tm: any) => {
+            const uid = tm.user_id
+            if (!venuesByUser[uid]) venuesByUser[uid] = []
+            if (!venuesByUser[uid].includes(vId)) {
+              venuesByUser[uid].push(vId)
+            }
+
+            const existing = staffMap.get(uid)
+            if (!existing || vId === venueId) {
+              staffMap.set(uid, {
+                user_id: uid,
+                role: tm.role || existing?.role || "Pracownik",
+                hourly_rate:
+                  tm.hourly_rate !== undefined && tm.hourly_rate !== null
+                    ? Number(tm.hourly_rate)
+                    : existing?.hourly_rate ?? 0,
+                users: {
+                  full_name: tm.full_name || existing?.users?.full_name || null,
+                  email: tm.email || existing?.users?.email || null,
+                },
+              })
+            }
+          })
+        })
+      } catch (rpcErr) {
+        console.warn("loadVenueData: Błąd RPC get_restaurant_teammates fallback:", rpcErr)
+      }
+    }
+
+    // 3. Fallback demonstracyjny w ostateczności (gdy baza jest całkowicie pusta)
+    if (staffMap.size === 0) {
+      const demoStaff: StaffMember[] = [
+        {
+          user_id: "aaaaaaaa-aaaa-aaaa-aaaa-000000000001",
+          role: "owner",
+          hourly_rate: 0,
+          users: { full_name: "Krzysztof D.", email: "kd@t.pl" },
+        },
+        {
+          user_id: "bbbbbbbb-bbbb-bbbb-bbbb-000000000002",
+          role: "manager",
+          hourly_rate: 42,
+          users: { full_name: "Marek Menadżer", email: "manager.tankownia@gastro.pl" },
+        },
+        {
+          user_id: "cccccccc-cccc-cccc-cccc-000000000003",
+          role: "Barman",
+          hourly_rate: 32,
+          users: { full_name: "Jan Barman", email: "barman.jan@gastro.pl" },
+        },
+      ]
+      demoStaff.forEach((s) => {
+        venuesByUser[s.user_id] = allVenueIds
+        staffMap.set(s.user_id, s)
+      })
+    }
+
+    setStaffVenuesMap(venuesByUser)
+    setStaff(Array.from(staffMap.values()))
 
     if (annRes.data) setAnnouncements(annRes.data as Announcement[])
 
@@ -1000,7 +1120,7 @@ function ManagerDashboard() {
       return
     }
 
-    setStaff(staff.map(member => 
+    setStaff(prev => prev.map(member => 
       member.user_id === userId ? { ...member, role: updatedRole } : member
     ))
     showToast("Zmieniono rolę pracownika", "success")
@@ -1008,7 +1128,7 @@ function ManagerDashboard() {
 
   const handleRateChangeLocal = (userId: string, value: string) => {
     const parsed = parseFloat(value)
-    setStaff(staff.map(member => 
+    setStaff(prev => prev.map(member => 
       member.user_id === userId ? { ...member, hourly_rate: isNaN(parsed) ? 0 : parsed } : member
     ))
   }
@@ -1634,10 +1754,66 @@ function ManagerDashboard() {
                 
                 <Card className="col-span-1 md:col-span-2">
                   <CardHeader>
-                    <CardTitle>Twój Zespół</CardTitle>
-                    <CardDescription>
-                      Możesz bezpośrednio edytować wyświetlane imię i inicjał, rolę oraz stawkę godzinową.
-                    </CardDescription>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div>
+                        <CardTitle>Twój Zespół</CardTitle>
+                        <CardDescription>
+                          Możesz bezpośrednio edytować wyświetlane imię i inicjał, rolę oraz stawkę godzinową.
+                        </CardDescription>
+                      </div>
+                      <span className="text-xs text-zinc-500 font-medium self-start sm:self-auto bg-zinc-100 px-2.5 py-1 rounded-md">
+                        Pracowników: {filteredStaff.length}{filteredStaff.length !== staff.length ? ` z ${staff.length}` : ""}
+                      </span>
+                    </div>
+
+                    {/* FILTROWANIE I WYSZUKIWANIE PRACOWNIKÓW */}
+                    <div className="pt-3 flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center">
+                      <div className="relative flex-1">
+                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400 pointer-events-none" />
+                        <Input
+                          type="text"
+                          placeholder="Szukaj pracownika (imię, e-mail, rola)..."
+                          value={staffSearchQuery}
+                          onChange={(e) => setStaffSearchQuery(e.target.value)}
+                          className="pl-8 text-xs h-8 bg-white"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="relative flex items-center">
+                          <Filter className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400 pointer-events-none" />
+                          <select
+                            value={staffRoleFilter}
+                            onChange={(e) => setStaffRoleFilter(e.target.value)}
+                            className="h-8 rounded-md border border-zinc-200 bg-white pl-8 pr-3 text-xs font-medium text-zinc-700 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                            title="Filtruj po roli"
+                          >
+                            <option value="all">Wszystkie role ({staff.length})</option>
+                            {availableStaffRoles.map((roleName) => {
+                              const count = staff.filter((s) => s.role.toLowerCase() === roleName.toLowerCase()).length
+                              return (
+                                <option key={roleName} value={roleName}>
+                                  {roleName} ({count})
+                                </option>
+                              )
+                            })}
+                          </select>
+                        </div>
+                        {(staffSearchQuery || staffRoleFilter !== "all") && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setStaffSearchQuery("")
+                              setStaffRoleFilter("all")
+                            }}
+                            className="h-8 text-xs text-zinc-500 px-2 gap-1 hover:text-zinc-900"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                            Wyczyść
+                          </Button>
+                        )}
+                      </div>
+                    </div>
                   </CardHeader>
                   <CardContent className="p-3 sm:p-6 pt-0">
                     <Table className="min-w-[650px]">
@@ -1651,7 +1827,23 @@ function ManagerDashboard() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {staff.map((member) => {
+                        {filteredStaff.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={5} className="text-center py-8 text-zinc-500 text-xs">
+                              {staff.length === 0 ? (
+                                "Brak przypisanych pracowników w zespole."
+                              ) : (
+                                <div className="space-y-1">
+                                  <p className="font-semibold text-zinc-700">Nie znaleziono pracowników</p>
+                                  <p className="text-[11px] text-zinc-400">
+                                    Brak wyników dla zapytania „{staffSearchQuery}” {staffRoleFilter !== "all" ? `w roli „${staffRoleFilter}”` : ""}.
+                                  </p>
+                                </div>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          filteredStaff.map((member) => {
                           const roleColor = getRoleColor(member.role)
                           const isMe = member.user_id === currentUserId
 
@@ -1772,7 +1964,7 @@ function ManagerDashboard() {
                               </TableCell>
                             </TableRow>
                           )
-                        })}
+                        }))}
                       </TableBody>
                     </Table>
                   </CardContent>

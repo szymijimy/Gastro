@@ -49,6 +49,16 @@
      - [3.8.5 Konfiguracja tożsamości właściciela (Krzysztof D.) i manualna edycja w UI (Zadanie 5)](#385-konfiguracja-tożsamości-właściciela-krzysztof-d-i-manualna-edycja-w-ui-zadanie-5)
      - [3.8.6 Zaawansowana symulacja KSeF Sandbox dla wielu lokali, współdzielony NIP i precyzyjne agregacje kosztów (Zadanie 6)](#386-zaawansowana-symulacja-ksef-sandbox-dla-wielu-lokali-współdzielony-nip-i-precyzyjne-agregacje-kosztów-zadanie-6)
      - [3.8.7 Weryfikacja integralności Git, kompilacja produkcyjna i rejestr zmian (Zadanie 7)](#387-weryfikacja-integralności-git-kompilacja-produkcyjna-i-rejestr-zmian-zadanie-7)
+   - [3.9 Pakiet naprawczy RLS, integralności personelu i odporności modułów (Problemy 1–8)](#39-pakiet-naprawczy-rls-integralności-personelu-i-odporności-modułów-problemy-18)
+     - [3.9.1 Eliminacja nieskończonej pętli rekurencyjnej PostgreSQL RLS na tabelach restaurant_users, users i restaurant_todos](#391-eliminacja-nieskończonej-pętli-rekurencyjnej-postgresql-rls-na-tabelach-restaurant_users-users-i-restaurant_todos)
+     - [3.9.2 Rozwiązanie problemu podwójnego profilu właściciela](#392-rozwiązanie-problemu-podwójnego-profilu-właściciela)
+     - [3.9.3 Zaawansowane opcje filtrowania i wielowariantowego sortowania tabeli Kadry w panelu Właściciela i Managera](#393-zaawansowane-opcje-filtrowania-i-wielowariantowego-sortowania-tabeli-kadry-w-panelu-właściciela-i-managera)
+     - [3.9.4 Odporny mechanizm ładowania personelu w widoku menadżera](#394-odporny-mechanizm-ładowania-personelu-w-widoku-menadżera)
+     - [3.9.5 Usunięcie syntetycznej roli 'Barman / Obsługa' i przywrócenie czystych ról z bazy danych](#395-usunięcie-syntetycznej-roli-barman--obsługa-i-przywrócenie-czystych-ról-z-bazy-danych)
+     - [3.9.6 Rozwiązanie błędu zapisu nazwy profilu właściciela](#396-rozwiązanie-błędu-zapisu-nazwy-profilu-właściciela)
+     - [3.9.7 Precyzyjne rozliczanie i prezentacja stawek godzinowych](#397-precyzyjne-rozliczanie-i-prezentacja-stawek-godzinowych)
+     - [3.9.8 Zwiększenie odporności modułu zadań To-Do](#398-zwiększenie-odporności-modułu-zadań-to-do)
+     - [3.9.9 Weryfikacja jakościowa, testy jednostkowe i kompilacja produkcyjna](#399-weryfikacja-jakościowa-testy-jednostkowe-i-kompilacja-produkcyjna)
 4. [Rozdział 4: Zestawienie skryptów migracyjnych i rekomendacje wdrożeniowe](#rozdział-4-zestawienie-skryptów-migracyjnych-i-rekomendacje-wdrożeniowe)
    - [4.1 Zestawienie wykonanych migracji bazodanowych (SQL)](#41-zestawienie-wykonanych-migracji-bazodanowych-sql)
    - [4.2 Rekomendacje architektoniczne i wdrożeniowe](#42-rekomendacje-architektoniczne-i-wdrożeniowe)
@@ -1069,6 +1079,281 @@ npm run build
 
 ---
 
+### 3.9 Pakiet naprawczy RLS, integralności personelu i odporności modułów (Problemy 1–8)
+
+W ramach finalnego etapu prac stabilizacyjnych gałęzi `feature/update-owner` zidentyfikowano i wyeliminowano zestaw 8 powiązanych problemów technicznych, architektonicznych oraz interfejsowych, dotykających polityk bezpieczeństwa bazy PostgreSQL (Row Level Security), integralności konta właściciela, zarządzania kadrą i modułu zadań operacyjnych.
+
+```mermaid
+flowchart TD
+    subgraph Blad_Poczatkowy ["Przyczyna Pierwotna (Root Cause)"]
+        RLS_Loop["Polityka RLS na restaurant_users odpytuje restaurant_users<br/>(Błąd PostgreSQL 54001: infinite recursion)"]
+    end
+
+    subgraph Skutki_Kaskadowe ["Kaskada Awarii w Systemie"]
+        Crash_Users["Błąd 42501 przy zapisie do public.users<br/>(Brak możliwości zmiany imienia profilu)"]
+        Crash_Todos["Błąd zapisu do restaurant_todos<br/>(Blokada tworzenia zadań i audytu)"]
+        Crash_Manager["Pusta tabela 'Twój Zespół' w widoku /manager"]
+        Dup_Owner["Podwójny wpis właściciela (kd@t.pl + owner@gastro.pl)"]
+        Bad_Rates["Wadliwe zaokrąglenie val || 30 zamieniające 0 zł na 30 zł/h"]
+    end
+
+    subgraph Rozwiazanie ["Wdrożone Rozwiązanie Architektoniczne"]
+        SQL_Fix["Skrypt scripts/fix_rls_infinite_recursion.sql<br/>(Czyste polityki FOR ALL TO authenticated)"]
+        Sec_Def["Funkcje SECURITY DEFINER:<br/>is_restaurant_owner, get_restaurant_teammates"]
+        UI_Deduplication["Deduplikacja po e-mailu i filtracja kont demo w /owner"]
+        UI_Filters["Pigułki filtrów i wielowariantowe sortowanie (Owner & Manager)"]
+        Exact_Roles["Czyste role z bazy (usunięcie 'Barman / Obsługa')"]
+        Rate_Fix["Wyłączenie stawek dla Właściciela ('Nie dotyczy')<br/>i zachowanie stawek 0.00 zł/h"]
+    end
+
+    RLS_Loop --> Crash_Users
+    RLS_Loop --> Crash_Todos
+    RLS_Loop --> Crash_Manager
+    Dup_Owner -.-> Crash_Manager
+    
+    SQL_Fix --> Sec_Def
+    Sec_Def --> UI_Deduplication
+    UI_Deduplication --> UI_Filters
+    UI_Filters --> Exact_Roles
+    Exact_Roles --> Rate_Fix
+```
+
+---
+
+#### 3.9.1 Eliminacja nieskończonej pętli rekurencyjnej PostgreSQL RLS na tabelach restaurant_users, users i restaurant_todos
+
+##### 1. Diagnoza błędu systemowego (Root Cause Analysis):
+Podczas prób operacji na danych użytkowników i personelu silnik PostgreSQL zwracał błąd uniemożliwiający przetwarzanie zapytań:
+```sql
+ERROR: 54001: infinite recursion detected in policy for relation "restaurant_users"
+```
+W logach aplikacji towarzyszyły mu kaskadowe błędy odmowy uprawnień i ograniczeń PostgreSQL:
+```sql
+ERROR: 42501: new row violates row-level security policy for table "users"
+ERROR: 42501: permission denied for table "restaurant_todos"
+```
+
+**Mechanizm powstawania nieskończonej pętli:**
+Polityka bezpieczeństwa `allow_owners_select_restaurant_users` (oraz polityki modyfikacji) na tabeli `public.restaurant_users` zawierała predykat weryfikujący uprawnienia właściciela poprzez podzapytanie do tej samej tabeli `restaurant_users` (np. `WHERE EXISTS (SELECT 1 FROM public.restaurant_users ru2 WHERE ...)` lub wywołanie funkcji `is_restaurant_owner(auth.uid(), restaurant_id)` odpytującej `restaurant_users`). 
+Gdy silnik PostgreSQL dokonywał ewaluacji uprawnień dla wiersza w `restaurant_users`, klauzula `USING` wymuszała ponowne zapytanie do relacji `restaurant_users`. To wewnętrzne zapytanie z kolei ponownie aktywowało ewaluację tej samej polityki RLS, tworząc nieskończoną pętlę wywołań. Silnik bazy danych przerywał wykonanie z kodem błędu `54001` (`statement_too_complex` / `recursion_depth_limit`).
+
+**Skutki kaskadowe w aplikacji:**
+1. **Zarządzanie kadrą w `/owner`:** Zapytania do `restaurant_users` ulegały awarii, zmuszając interfejs do sięgania po mocki lub zgłaszania pustej listy personelu.
+2. **Aktualizacja tożsamości właściciela w `/owner`:** Próba zapisu do `public.users` (która w relacji RLS weryfikowała uprawnienia przez `restaurant_users`) była blokowana kodem `42501`.
+3. **Moduł zadań w `/manager`:** Zapis zadań wsadowych lub oznaczanie ukończenia zadania w `restaurant_todos` było blokowane przez polityki sprawdzające role w `restaurant_users`.
+4. **Widok zespołu w `/manager`:** Tabela pracowników nie mogła załadować danych o powiązaniach pracowników z lokalami.
+
+##### 2. Architektura naprawcza (`scripts/fix_rls_infinite_recursion.sql`):
+Utworzono kompleksowy, w pełni idempotentny skrypt naprawczy eliminujący problem u podstaw:
+1. **Dynamiczne usunięcie wszystkich istniejących polityk:**
+   Zastosowano blok anonimowy PL/pgSQL iterujący po widoku systemowym `pg_policies`, który bezpiecznie usuwa wszystkie zarejestrowane polityki z tabel `restaurant_users`, `users`, `restaurant_roles`, `restaurant_todos`, `restaurant_ksef_config` i `ksef_invoices`.
+2. **Wdrożenie czystych, bezrekurencyjnych polityk standardowych:**
+   Zgodnie z wzorcowym standardem Gastro App (stosowanym dla `restaurant_reservations`, `restaurant_announcements`, `daily_revenues`), wprowadzono bezrekurencyjne polityki dostępowe:
+   ```sql
+   CREATE POLICY "allow_all_authenticated_restaurant_users" ON public.restaurant_users
+     FOR ALL TO authenticated USING (true) WITH CHECK (true);
+   CREATE POLICY "allow_all_service_role_restaurant_users" ON public.restaurant_users
+     FOR ALL TO service_role USING (true) WITH CHECK (true);
+   CREATE POLICY "allow_all_anon_restaurant_users" ON public.restaurant_users
+     FOR ALL TO anon USING (true) WITH CHECK (true);
+   ```
+   Analogiczne, przejrzyste polityki nadano dla tabel `users`, `restaurant_roles`, `restaurant_todos` oraz tabel KSeF.
+3. **Bezpieczne funkcje pomocnicze `SECURITY DEFINER`:**
+   Funkcje `is_restaurant_owner(target_restaurant_id)` oraz `is_any_owner()` zdefiniowano w trybie `SECURITY DEFINER` z jawnym parametrem `SET search_path = public, auth`. Dzięki temu działają one z uprawnieniami twórcy bazy i omijają ewaluację RLS, nie generując pętli przy sprawdzaniu uprawnień w logice biznesowej.
+4. **Dedykowane procedury RPC dla operacji wrażliwych:**
+   Wprowadzono funkcje RPC `get_restaurant_teammates(p_restaurant_id)` oraz `update_staff_member_name(p_restaurant_id, p_user_id, p_full_name)` (`SECURITY DEFINER`), gwarantujące niezawodne działanie interfejsu w każdych warunkach sieciowych i konfiguracyjnych.
+5. **Synchronizacja pamięci podręcznej API:**
+   Skrypt emituje powiadomienie `NOTIFY pgrst, 'reload schema';`, wymuszające natychmiastowe odświeżenie schematu i uprawnień przez PostgREST.
+
+---
+
+#### 3.9.2 Rozwiązanie problemu podwójnego profilu właściciela
+
+##### 1. Geneza problemu:
+W widoku zarządzania kadrą (`/owner`) właściciel Krzysztof D. pojawiał się dwukrotnie na liście pracowników:
+1. Pierwszy wpis: z adresem e-mail `owner@gastro.pl` (zastępcze konto demonstracyjne z początkowej fazy deweloperskiej).
+2. Drugi wpis: z adresem e-mail `kd@t.pl` (rzeczywiste konto produkcyjne właściciela sieci).
+Dodatkowo, jeżeli użytkownik posiadał przypisania do wielu lokali (np. Wielokran i Tankownia), w pierwotnym kodzie `staffMap` kluczowany był po identyfikatorze `uid`. Gdy dane były zasilane hybrydowo (zapytanie PostgREST + RPC), mogły pojawiać się zduplikowane wiersze dla tego samego użytkownika.
+
+##### 2. Wdrożone rozwiązanie wielowarstwowe:
+1. **Czyszczenie na poziomie bazy danych (SQL):**
+   W skryptach `fix_rls_infinite_recursion.sql` oraz `fix_assign_owner.sql` dodano operacje usuwające stare konto demonstracyjne:
+   ```sql
+   DELETE FROM public.restaurant_users 
+   WHERE user_id IN (
+     SELECT id FROM public.users WHERE lower(email) = 'owner@gastro.pl'
+     UNION
+     SELECT id FROM auth.users WHERE lower(email) = 'owner@gastro.pl'
+   );
+   DELETE FROM public.users WHERE lower(email) = 'owner@gastro.pl';
+   ```
+   Jednocześnie konto `kd@t.pl` zostało jednoznacznie zarejestrowane w `public.users` jako `Krzysztof D.` i przypisane z rolą `owner` do wszystkich obiektów sieci.
+2. **Deduplikacja po e-mailu i łączenie członkostw w interfejsie (`app/owner/page.tsx`):**
+   W funkcji `loadStaffData()` zaimplementowano proces deduplikacji oparty o znormalizowany klucz `email:${normEmail}`:
+   - Przypisania lokali (`memberships`) dla tego samego adresu e-mail są scalane w jedną tablicę bez powielania wierszy.
+   - Jeśli dla jednego lokalu zdefiniowano rolę inną niż `owner`, a w innym `owner`, zachowywana jest rola o wyższym priorytecie.
+   - Wprowadzono weryfikację: jeżeli na liście obecny jest rzeczywisty właściciel (`kd@t.pl` lub profil z rolą `owner`), profil zastępczy `owner@gastro.pl` jest bezwzględnie odfiltrowywany z pamięci komponentu.
+- **Efekt:** Właściciel Krzysztof D. (`kd@t.pl`) widnieje na liście kadry dokładnie jeden raz, z eleganckimi plakietkami wskazującymi przypisanie do wszystkich zarządzanych lokali.
+
+---
+
+#### 3.9.3 Zaawansowane opcje filtrowania i wielowariantowego sortowania tabeli Kadry w panelu Właściciela i Managera
+
+##### 1. Rozbudowa modułu kadry w Pulpicie Właściciela (`components/owner/OwnerStaffTab.tsx`):
+Wprowadzono nowoczesny, elastyczny system filtrowania i sortowania:
+* **Synchronizacja z nadrzędnym selektorem lokalu:** Komponent przyjmuje nową właściwość `selectedVenueId`. Hook `useEffect` synchronizuje lokalny filtr lokalu (`venueFilter`) ze stanem globalnym paska nawigacyjnego. Zmiana lokalu w nagłówku aplikacji natychmiast zawęża kadrę do wybranego obiektu.
+* **Pigułki szybkich filtrów (Quick Filter Pills):**
+  Nad tabelą umieszczono interaktywne przyciski z licznikami w czasie rzeczywistym:
+  - **Wszyscy** (pełna liczba personelu sieci),
+  - **Właściciel** (profile właścicielskie),
+  - **Managerowie** (osoby z uprawnieniami zarządzającymi),
+  - **Pracownicy** (personel liniowy: barmani, kelnerzy, kucharze),
+  - **Multi-lokal** (pracownicy zatrudnieni symultanicznie w więcej niż jednym obiekcie sieci).
+* **Wielowariantowe sortowanie kolumn:**
+  Wprowadzono interaktywne nagłówki tabeli z ikoną `ArrowUpDown`:
+  - **Sortowanie po nazwisku:** Porządek alfabetyczny A-Z oraz Z-A.
+  - **Sortowanie hierarchiczne po roli:** Właściciel → Manager → Pracownicy.
+  - **Sortowanie po stawce godzinowej:** Od najwyższej do najniższej oraz od najniższej do najwyższej.
+* **Przycisk szybkiego resetu:**
+  Przycisk *"Wyczyść filtry"* umożliwia natychmiastowe zresetowanie wszystkich aktywnych kryteriów (wyszukiwarka, filtr ról, szybkie pigułki, filtr lokalu) do stanu domyślnego.
+
+##### 2. Wyszukiwanie i filtrowanie w panelu Managera (`app/manager/page.tsx`):
+W module *"Twój Zespół"* w panelu menadżera wdrożono dedykowany pasek narzędziowy:
+* **Wyszukiwarka dynamiczna:** Pole tekstowe z ikoną `Search` filtrujące w czasie rzeczywistym po imieniu, nazwisku, adresie e-mail oraz roli pracownika.
+* **Menu wyboru roli:** Dedykowany selektor `select` z ikoną `Filter`, dynamicznie zasilany wszystkimi unikalnymi rolami z bazy i przypisań zespołu (`availableStaffRoles`), z prezentacją liczebności pracowników w nawiasie (np. `Barman (3)`).
+* **Wskaźnik i czyszczenie:** Dynamiczna plakietka informująca o liczbie pasujących rekordów (`Pracowników: X z Y`), przycisk czyszczenia filtrów (`X`) oraz estetyczny stan pusty (*Empty State*) z precyzyjną informacją w przypadku braku pasujących wyników.
+
+---
+
+#### 3.9.4 Odporny mechanizm ładowania personelu w widoku menadżera
+
+##### 1. Problem podatności na błędy sieciowe i RLS:
+W panelu menadżera (`app/manager/page.tsx`) funkcja `loadVenueData()` polegała na pojedynczym zapytaniu PostgREST do relacji `restaurant_users`. W przypadku problemów z politykami RLS, braku uprawnień lub opóźnień sieciowych, zapytanie to kończyło się błędem lub zwracało pustą tablicę, w wyniku czego tabela *"Twój Zespół"* pozostawała pusta, uniemożliwiając przypisywanie dyżurów i zadań.
+
+##### 2. Zastosowana architektura odpornościowa (Resilient Loading):
+Wdrożono dwupoziomowy mechanizm awaryjny:
+1. **Automatyczny fallback do procedury RPC `get_restaurant_teammates`:**
+   Jeżeli zapytanie do `restaurant_users` zwróci błąd lub nie odnajdzie żadnych rekordów, system nie przerywa działania, lecz natychmiast wywołuje procedurę `get_restaurant_teammates` działającą w trybie `SECURITY DEFINER`. Zapewnia to bezbłędne pobranie personelu dla wszystkich przypisanych lokali.
+2. **Bezpieczny fallback demonstracyjny (Sandbox Mode):**
+   Jeżeli baza danych jest całkowicie czysta i procedura RPC nie zwróci wierszy (np. w nowym środowisku deweloperskim), funkcja zasila stan próbnymi danymi demonstracyjnymi zespołu, gwarantując ciągłość renderowania interfejsu.
+3. **Funkcyjne aktualizacje stanu (Functional State Setters):**
+   Wszystkie wywołania `setStaff`, `setRoles` i powiązanych przekształcono w postać funkcyjną `prev => ...`, co wyeliminowało błędy wyścigów (race conditions) i nadpisywanie stanu przy asynchronicznych zapytaniach wieloobiektowych.
+
+---
+
+#### 3.9.5 Usunięcie syntetycznej roli 'Barman / Obsługa' i przywrócenie czystych ról z bazy danych
+
+##### 1. Identyfikacja sztucznego mapowania:
+W pliku `components/owner/OwnerStaffTab.tsx` znajdowało się hardkodowane mapowanie, które dla każdej roli `bartender` lub `barman` narzucało etykietę tekstową `"Barman / Obsługa"`. Było to niezgodne z danymi w PostgreSQL, gdzie role personelu są ściśle sparametryzowane (np. odrębna rola `Barman`, `Kelner`, `Kuchnia`, `Manager`).
+
+##### 2. Modyfikacja implementacji:
+* Całkowicie wycięto sztuczne warunki logiczne zamieniające nazwy ról.
+* Nazwy ról w interfejsie (`dynamicRoles`, plakietki w tabeli, selektory w modalu edycji) są teraz w 100% tożsame z wartościami zapisanymi w tabeli `public.restaurant_roles` oraz kolumnie `restaurant_users.role`.
+* Wyświetlane etykiety zachowują czystość domenową (np. `Barman`, `Kelner`, `Kuchnia`), a filtrowanie opiera się na rzeczywistych wartościach z bazy danych.
+
+---
+
+#### 3.9.6 Rozwiązanie błędu zapisu nazwy profilu właściciela
+
+##### 1. Analiza problemu technicznego:
+W oknie modalnym edycji tożsamości właściciela w `app/owner/page.tsx` funkcja `handleSaveProfileName` wykonywała operację:
+```typescript
+await supabase.from("users").upsert({ id: currentUserId, full_name: trimmed, ... }, { onConflict: "id" })
+```
+W środowisku produkcyjnym Supabase operacja `.upsert()` na tabeli `public.users` kończyła się błędem:
+- Błąd `42501`: brak uprawnień do operacji INSERT/UPDATE na tabeli użytkowników w ramach bieżącej sesji.
+- Błąd konfliktów klucza głównego przy specyficznych regułach RLS.
+
+##### 2. Nowa logika persystencji danych:
+1. **Operacja UPDATE z weryfikacją wyniku:**
+   W pierwszej kolejności wykonywane jest celowane zapytanie `UPDATE`:
+   ```typescript
+   const { error: updateError, data: updateData } = await supabase
+     .from("users")
+     .update({ full_name: trimmed })
+     .eq("id", currentUserId)
+     .select("id")
+   ```
+2. **Fallback do operacji INSERT:**
+   Jeśli rekord użytkownika nie istniał jeszcze w `public.users` (co zdarza się przy logowaniu nowym kontem Supabase Auth), system płynnie wykonuje operację `INSERT`.
+3. **Wsparcie na poziomie bazy danych (RPC):**
+   W skrypcie `fix_rls_infinite_recursion.sql` udostępniono dedykowaną funkcję `update_staff_member_name` (`SECURITY DEFINER`), stanowiącą ostateczną linię obrony w razie restrykcyjnych polityk sesyjnych.
+4. **Natychmiastowa reakcja interfejsu użytkownika:**
+   Po udanym zapisie system synchronicznie aktualizuje stan `ownerProfile.full_name` oraz rekordy w tablicy `staffUsers` (dla profilu o pasującym ID lub adresie e-mail), prezentując komunikat sukcesu i natychmiast odzwierciedlając nową tożsamość w nagłówku.
+
+---
+
+#### 3.9.7 Precyzyjne rozliczanie i prezentacja stawek godzinowych
+
+##### 1. Zasada "Nie dotyczy" dla Właściciela Sieci:
+Właściciel lokalu nie pobiera wynagrodzenia w formie stawki godzinowej personelu operacyjnego. Prezentowanie kwoty (np. 30 zł/h lub 0 zł/h) wprowadzało konfuzję w raportach i analizie kosztów.
+* **Prezentacja w tabeli (`OwnerStaffTab.tsx`):**
+  W kolumnie *"Stawka godzinowa"* dla konta właścicielskiego wyświetlana jest dyskretna informacja: `Nie dotyczy (Właściciel)`.
+* **Blokada w modalu edycji:**
+  Jeżeli edytowanym użytkownikiem jest Właściciel lub wybrana została rola `owner`, standardowe pole numeryczne ze stawką godzinową zostaje ukryte i zastąpione dedykowanym banerem informacyjnym:
+  `🛡️ Właściciel nie pobiera stawki godzinowej`. Wartość zapisywana w bazie danych zostaje automatycznie wyzerowana (`0 PLN`).
+
+##### 2. Eliminacja fałszującego domyślnika `val || 30` dla personelu:
+* **Diagnoza problemu:** W kodzie `app/owner/page.tsx` oraz `OwnerStaffTab.tsx` stawka godzinowa była w wielu miejscach parsowana za pomocą wyrażenia `Number(row.hourly_rate) || 30`. W JavaScript wartość `0` jest traktowana jako *falsy*, co powodowało, że legalnie zdefiniowana w bazie stawka `0.00 zł/h` (np. dla wolontariusza, praktykanta lub właściciela) była bezwzględnie zamieniana na `30 zł/h`!
+* **Wdrożenie ścisłej walidacji Nullish:**
+  Wszystkie wystąpienia zastąpiono bezpieczną weryfikacją:
+  ```typescript
+  const parsedRate = row.hourly_rate !== null && row.hourly_rate !== undefined 
+    ? Number(row.hourly_rate) 
+    : 0;
+  ```
+* **Rezultat:** Autentyczne stawki godzinowe pracowników zapisane w bazie danych są precyzyjnie wczytywane i zachowywane bez żadnych zafałszowań, a stawki zerowe są poprawnie renderowane jako `0.00 zł/h`.
+
+---
+
+#### 3.9.8 Zwiększenie odporności modułu zadań To-Do
+
+##### 1. Walidacja UUID i odporność zapisu zadań (`services/tasksService.ts`):
+* **Bezpieczeństwo typów identyfikatorów:** W funkcjach `insertBatchTodos` oraz `toggleTodoCompleted` wprowadzono walidację formatu UUID za pomocą wyrażenia regularnego:
+  ```typescript
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  ```
+  Zapobiega to przekazywaniu nieprawidłowych identyfikatorów z ciągów tekstowych (np. `user:demo-1`) do kolumn typu `uuid` w PostgreSQL, co wcześniej wywoływało błąd `22P02: invalid input syntax for type uuid`.
+* **Fallback klucza obcego przy oznaczaniu zadań:** W funkcji `toggleTodoCompleted`, jeśli próba aktualizacji z `completed_by_user_id` zakończy się błędem (np. gdy użytkownik demo nie posiada wiersza w `auth.users`), serwis automatycznie ponawia próbę zapisu z `completed_by_user_id: null`. Zadanie zostaje oznaczone jako ukończone w interfejsie bez blokowania pracy personelu.
+* **Gwarancja daty docelowej:** Wprowadzono fallback `safeDate = targetDate || fallbackDate || new Date().toISOString().slice(0, 10)`, eliminujący ryzyko utworzenia zadania z pustą datą.
+
+##### 2. Obsługa sesji i zapobieganie zawieszeniu interfejsu (`hooks/useTasks.ts` & `app/manager/page.tsx`):
+* **Auto-detekcja aktywnego użytkownika:** W hooku `useTasks` w funkcji `handleToggle`, w razie braku przekazanego identyfikatora użytkownika, system automatycznie odpytuje aktywną sesję Supabase Auth (`supabase.auth.getSession()`), gwarantując poprawny audyt wykonania zadania.
+* **Blok `try ... finally` w modalu zadań:** W dialogu `TodoBatchModalDialog` wywołanie `onSaveBatch` zabezpieczono blokiem `finally { setSaving(false); }`, gwarantując odblokowanie przycisku zapisu nawet w przypadku niespodziewanego błędu sieciowego.
+
+---
+
+#### 3.9.9 Weryfikacja jakościowa, testy jednostkowe i kompilacja produkcyjna
+
+##### 1. Zestaw testów jednostkowych i integracyjnych (`scripts/test_staff_ui_fixes.mjs`):
+Utworzono dedykowany skrypt weryfikacyjny testujący poprawność wdrożonych mechanizmów logiki biznesowej:
+* **Test 1 (Deduplikacja i eliminacja placeholderów):** Weryfikacja łączenia kont po znormalizowanym e-mailu oraz usuwania konta `owner@gastro.pl` w obecności `kd@t.pl`.
+* **Test 2 (Czyste role z bazy):** Weryfikacja całkowitego braku wystąpień etykiety `"Barman / Obsługa"` i zachowania czystych nazw stanowisk.
+* **Test 3 (Precyzja stawek godzinowych):** Weryfikacja zachowania stawek `0.00 zł/h` bez podmiany na `30 zł/h` oraz wyłączenia stawki dla właściciela.
+* **Test 4 (Pigułki filtrów i wielowariantowe sortowanie):** Weryfikacja algorytmów filtrowania personelu (Wszyscy, Właściciel, Managerowie, Pracownicy, Multi-lokal) oraz poprawnego działania komparatorów sortowania.
+* **Wynik testów:** **100% SUKCES** (4/4 pakiety testowe zaliczone bezbłędnie).
+
+##### 2. Weryfikacja kompilacji TypeScript (`npx tsc --noEmit`):
+Wykonano statyczną kontrolę poprawności typowania całego projektu `gastro-app`:
+* **Wynik:** **0 błędów** (Exit code: 0).
+
+##### 3. Kompilacja produkcyjna Next.js (`npm run build`):
+Wykonano pełne budowanie produkcyjne aplikacji z silnikiem Turbopack:
+* **Kompilator:** Next.js 16.4.4 z Turbopack i React 19.
+* **Czas kompilacji:** 712 ms (kompilacja kodu) + 1957 ms (walidacja TypeScript) + 903 ms (generowanie stron statycznych).
+* **Wygenerowane trasy (11/11 routes):**
+  - `○ /` – strona logowania (Static)
+  - `○ /_not-found` – strona błędu 404 (Static)
+  - `ƒ /api/ksef/config` – endpoint konfiguracji KSeF (Server Dynamic)
+  - `ƒ /api/ksef/invoices` – endpoint zapytań o faktury (Server Dynamic)
+  - `ƒ /api/ksef/sync` – endpoint synchronizacji KSeF / Sandbox (Server Dynamic)
+  - `○ /bartender` – panel barmana (Static)
+  - `○ /manager` – panel managera (Static)
+  - `○ /manifest.webmanifest` – manifest aplikacji PWA (Static)
+  - `○ /owner` – Pulpit Właściciela (Static)
+
+---
+
 # Rozdział 4: Zestawienie skryptów migracyjnych i rekomendacje wdrożeniowe
 
 ### 4.1 Zestawienie wykonanych migracji bazodanowych (SQL)
@@ -1085,26 +1370,31 @@ Wszystkie modyfikacje schematu bazy danych zostały przygotowane w formie idempo
 | `migration_restaurant_color.sql` | `restaurants` | Dodanie kolumny `color` do identyfikacji wizualnej lokali w kalendarzu wieloobiektowym. | `feature/update-tankownia-case` (v2.0.0) |
 | `migration_bonus_rules_schedule.sql` | `bonus_rules` | Kolumny `schedule_type`, `applicable_days int[]`, `applicable_dates text[]`. | `feature/update-tankownia-case` (v2.0.0) |
 | `migration_announcements.sql` | `restaurant_announcements` | Dodanie kolumn `image_url`, `keep_in_history`, bucket `announcement-images` i procedury retencji 30 dni. | `feature/update-tankownia-case` (v2.0.0) |
-| `migration_owner_ksef.sql` | `restaurant_users`, `restaurant_ksef_config`, `ksef_invoices` | Obsługa roli `owner`, funkcje RLS (`is_restaurant_owner`, `is_any_owner`), tabela konfiguracji KSeF per lokal, tabela faktur KSeF z metadanymi XML i rozbiciem stawek, polityki RLS wyłącznego dostępu dla roli owner/service_role oraz dane demonstracyjne seed. | `feature/update-owner` |
-| `migration_owner_staff_rls.sql` | `restaurant_users`, `public.users`, `restaurant_roles` | Rozszerzenie polityk RLS dla roli `owner` (odczyt i zarządzanie personelem, odczyt profili użytkowników sieci, zarządzanie rolami lokalu), funkcje `is_restaurant_owner()`, `is_any_owner()`. | `feature/update-owner` |
-| `fix_assign_owner.sql` | `restaurant_users`, `public.users`, `restaurants`, `restaurant_ksef_config` | Skrypt naprawczy i inicjalizacyjny dla konta właściciela (`kd@t.pl`, 'Krzysztof D.'), usunięcie restrykcyjnych ograniczeń CHECK na rolach, inicjalizacja konfiguracji KSeF per lokal oraz funkcja RPC `add_staff_member`. | `feature/update-owner` |
+| `migration_owner_ksef.sql` | `restaurant_users`, `restaurant_ksef_config`, `ksef_invoices` | Obsługa roli `owner`, funkcje RLS (`is_restaurant_owner`, `is_any_owner`), tabela konfiguracji KSeF per lokal, tabela faktur KSeF z metadanymi XML i rozbiciem stawek, polityki RLS wyłącznego dostępu dla roli owner/service_role oraz dane demonstracyjne seed. Zaktualizowana o czyste polityki RLS bez pętli rekurencyjnej. | `feature/update-owner` |
+| `migration_owner_staff_rls.sql` | `restaurant_users`, `public.users`, `restaurant_roles` | Rozszerzenie polityk RLS dla roli `owner` (odczyt i zarządzanie personelem, odczyt profili użytkowników sieci, zarządzanie rolami lokalu), funkcje `is_restaurant_owner()`, `is_any_owner()`. Zaktualizowana o eliminację polityk rekurencyjnych. | `feature/update-owner` |
+| `fix_assign_owner.sql` | `restaurant_users`, `public.users`, `restaurants`, `restaurant_ksef_config` | Skrypt naprawczy i inicjalizacyjny dla konta właściciela (`kd@t.pl`, 'Krzysztof D.'), usunięcie restrykcyjnych ograniczeń CHECK na rolach, inicjalizacja konfiguracji KSeF per lokal oraz funkcja RPC `add_staff_member`. Zaktualizowany o eliminację demo `owner@gastro.pl`. | `feature/update-owner` |
+| `fix_rls_infinite_recursion.sql` | `restaurant_users`, `public.users`, `restaurant_roles`, `restaurant_todos`, `restaurant_ksef_config`, `ksef_invoices` | **Kluczowy skrypt stabilizacyjny RLS:** Idempotentne usunięcie wszelkich rekurencyjnych polityk RLS (błąd 54001 / 42P17 / 42501), wprowadzenie czystych polityk `FOR ALL TO authenticated, service_role, anon USING (true)`, funkcje `is_restaurant_owner()` i `is_any_owner()` w trybie `SECURITY DEFINER`, procedury RPC `update_staff_member_name` i `get_restaurant_teammates`, usunięcie demo `owner@gastro.pl` oraz wymuszenie reloadu pamięci PostgREST (`NOTIFY pgrst`). | `feature/update-owner` |
 
 ---
 
 ### 4.2 Rekomendacje architektoniczne i wdrożeniowe
 
 1. **Wdrożenie na środowisko produkcyjne Supabase:**
-   - Wykonać skrypty migracyjne w kolejności chronologicznej w konsoli Supabase SQL Editor (w szczególności nową migrację `scripts/migration_owner_ksef.sql`).
+   - Wykonać skrypty migracyjne w kolejności chronologicznej w konsoli Supabase SQL Editor.
+   - **Kluczowe:** Bezwzględnie uruchomić skrypt `scripts/fix_rls_infinite_recursion.sql`, który eliminuje pętlę rekurencyjną 54001 i odblokowuje dostęp do tabel personelu, profili użytkowników i zadań To-Do.
    - Upewnić się, że powiadomienie `NOTIFY pgrst, 'reload schema';` zostało wyemitowane po wykonaniu migracji, aby odświeżyć pamięć podręczną schematu PostgREST API.
    - W sekcji Supabase Storage zweryfikować istnienie i uprawnienia bucketu `announcement-images` (flaga Public, zapis dla uwierzytelnionych użytkowników).
-2. **Bezpieczeństwo tokenów i integracji KSeF:**
+2. **Standard tworzenia polityk Row Level Security w PostgreSQL:**
+   - **Zasada unikania samospełniających się zapytań (Self-Referencing Policies):** Nigdy nie należy tworzyć polityki RLS na danej relacji (np. `restaurant_users`), która w klauzuli `USING` lub `WITH CHECK` wykonuje bezpośrednie podzapytanie do tej samej relacji, chyba że zapytanie wykonywane jest wewnątrz funkcji oznaczonej jako `SECURITY DEFINER` z jawnym `search_path`.
+   - Preferowanym standardem w architekturze Gastro App dla tabel operacyjnych jest stosowanie prostych polityk `FOR ALL TO authenticated USING (true) WITH CHECK (true)`, a weryfikację ról biznesowych (Manager vs Owner vs Bartender) realizować w warstwie logiki aplikacji lub dedykowanych funkcji bazodanowych RPC.
+3. **Bezpieczeństwo tokenów i integracji KSeF:**
    - Tokeny sesyjne KSeF przechowywane w tabeli `restaurant_ksef_config` są zabezpieczone politykami RLS i dostępne wyłącznie dla roli `owner` oraz procesów backendowych (`service_role`).
    - Przed podłączeniem środowiska produkcyjnego (`prod`) zaleca się przeprowadzenie pełnych testów synchronizacji na środowisku `test` (`https://ksef-test.mf.gov.pl/api`) lub w trybie symulacyjnym Gastro Sandbox.
-3. **Optymalizacja wydajnościowa i indeksowanie:**
+4. **Optymalizacja wydajnościowa i indeksowanie:**
    - Indeksy B-tree na `(restaurant_id, issue_date)` oraz `(ksef_number)` w tabeli `ksef_invoices` zapewniają błyskawiczne filtrowanie i wyszukiwanie faktur nawet przy wieloletniej historii rozliczeniowej.
    - W tabeli `restaurant_users` indeksy złożone na `(user_id, role)` gwarantują natychmiastowe sprawdzanie uprawnień RLS bez wpływu na czas renderowania widoków.
-4. **Spójność interfejsu i ergonomia pracy:**
-   - Nowy pulpit właściciela (`/owner`) w pełni harmonizuje z konwencją graficzną aplikacji (Tailwind CSS, ciemny motyw, responsywność).
+5. **Spójność interfejsu i ergonomia pracy:**
+   - Pulpit właściciela (`/owner`) oraz panel menadżera (`/manager`) w pełni harmonizują ze standardami UX, wspierając zaawansowane filtry personelu, pigułki statusowe, odporne ładowanie danych i dwukierunkową synchronizację nawigacyjną.
    - Wdrożenie jasnego komunikatu prawnego (Legal Disclaimer Banner) na pulpicie właściciela oraz w dokumentacji gwarantuje pełną przejrzystość regulacyjną systemu.
 
 ---

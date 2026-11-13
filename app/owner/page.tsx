@@ -151,12 +151,17 @@ function OwnerDashboard() {
             resolvedName = "Krzysztof D."
             // Automatyczna inicjalizacja domyślnego imienia w public.users i auth
             if (session?.user?.id) {
-              await supabase
+              const { error: upErr, data: upData } = await supabase
                 .from("users")
-                .upsert(
-                  { id: uid, email, full_name: "Krzysztof D.", is_active: true },
-                  { onConflict: "id" }
-                )
+                .update({ full_name: "Krzysztof D." })
+                .eq("id", uid)
+                .select("id")
+
+              if (upErr || !upData || upData.length === 0) {
+                await supabase
+                  .from("users")
+                  .insert({ id: uid, email, full_name: "Krzysztof D.", is_active: true })
+              }
               await supabase.auth.updateUser({ data: { full_name: "Krzysztof D." } })
             }
           }
@@ -309,13 +314,20 @@ function OwnerDashboard() {
           const userObj = Array.isArray(row.users) ? row.users[0] : row.users
           const venueObj = activeVenues.find((v) => v.id === row.restaurant_id)
 
+          const parsedDefaultRate =
+            row.hourly_rate !== null && row.hourly_rate !== undefined
+              ? Number(row.hourly_rate)
+              : userObj?.default_hourly_rate !== null && userObj?.default_hourly_rate !== undefined
+              ? Number(userObj.default_hourly_rate)
+              : 0
+
           if (!staffMap.has(uid)) {
             staffMap.set(uid, {
               id: uid,
               email: userObj?.email || "pracownik@gastro.pl",
               full_name: userObj?.full_name || "Pracownik",
               is_active: true,
-              default_hourly_rate: Number(row.hourly_rate) || Number(userObj?.default_hourly_rate) || 30,
+              default_hourly_rate: parsedDefaultRate,
               memberships: [],
             })
           }
@@ -328,12 +340,17 @@ function OwnerDashboard() {
             existingUser.full_name = userObj.full_name
           }
 
+          const venueRate =
+            row.hourly_rate !== null && row.hourly_rate !== undefined
+              ? Number(row.hourly_rate)
+              : 0
+
           if (!existingUser.memberships.some((m) => m.restaurant_id === row.restaurant_id)) {
             existingUser.memberships.push({
               restaurant_id: row.restaurant_id,
               restaurant_name: venueObj?.name || "Lokal",
               role: row.role,
-              hourly_rate: Number(row.hourly_rate) || 30,
+              hourly_rate: venueRate,
             })
           }
         })
@@ -357,13 +374,18 @@ function OwnerDashboard() {
           const venueObj = activeVenues.find((v) => v.id === venueId)
           teammates.forEach((tm: any) => {
             const uid = tm.user_id
+            const tmRate =
+              tm.hourly_rate !== null && tm.hourly_rate !== undefined
+                ? Number(tm.hourly_rate)
+                : 0
+
             if (!staffMap.has(uid)) {
               staffMap.set(uid, {
                 id: uid,
                 email: tm.email || "pracownik@gastro.pl",
                 full_name: tm.full_name || "Pracownik",
                 is_active: true,
-                default_hourly_rate: 30,
+                default_hourly_rate: tmRate,
                 memberships: [],
               })
             }
@@ -381,7 +403,7 @@ function OwnerDashboard() {
                 restaurant_id: venueId,
                 restaurant_name: venueObj?.name || "Lokal",
                 role: tm.role || "Barman",
-                hourly_rate: 30,
+                hourly_rate: tmRate,
               })
             }
           })
@@ -390,8 +412,63 @@ function OwnerDashboard() {
         console.warn("loadStaffData: Błąd RPC get_restaurant_teammates:", rpcErr)
       }
 
-      if (staffMap.size > 0) {
-        setStaffUsers(Array.from(staffMap.values()))
+      // 3. Deduplikacja personelu po znormalizowanym adresie email oraz łączenie przypisań (memberships)
+      const deduplicatedMap = new Map<string, OwnerStaffUser>()
+
+      Array.from(staffMap.values()).forEach((staff) => {
+        const normEmail = staff.email ? staff.email.trim().toLowerCase() : ""
+        const key =
+          normEmail && normEmail !== "pracownik@gastro.pl" ? `email:${normEmail}` : `id:${staff.id}`
+
+        if (!deduplicatedMap.has(key)) {
+          deduplicatedMap.set(key, { ...staff, memberships: [...staff.memberships] })
+        } else {
+          const existing = deduplicatedMap.get(key)!
+          if (staff.id === currentUserId) {
+            existing.id = staff.id
+          }
+          if (
+            staff.full_name &&
+            staff.full_name !== "Pracownik" &&
+            (!existing.full_name || existing.full_name === "Pracownik")
+          ) {
+            existing.full_name = staff.full_name
+          }
+          staff.memberships.forEach((m) => {
+            const existingMem = existing.memberships.find((em) => em.restaurant_id === m.restaurant_id)
+            if (!existingMem) {
+              existing.memberships.push(m)
+            } else {
+              if (m.role.toLowerCase() === "owner" && existingMem.role.toLowerCase() !== "owner") {
+                existingMem.role = m.role
+              }
+              if (existingMem.hourly_rate === 0 && m.hourly_rate > 0) {
+                existingMem.hourly_rate = m.hourly_rate
+              }
+            }
+          })
+          if (existing.default_hourly_rate === 0 && staff.default_hourly_rate > 0) {
+            existing.default_hourly_rate = staff.default_hourly_rate
+          }
+        }
+      })
+
+      let finalStaffList = Array.from(deduplicatedMap.values())
+
+      // Sprawdź czy na liście znajduje się rzeczywisty właściciel (np. kd@t.pl lub użytkownik z rolą owner)
+      const hasRealOwner = finalStaffList.some((s) => {
+        const normEmail = s.email.trim().toLowerCase()
+        const hasOwnerRole = s.memberships.some((m) => m.role.toLowerCase() === "owner")
+        return (normEmail === "kd@t.pl" || hasOwnerRole) && normEmail !== "owner@gastro.pl"
+      })
+
+      // Jeśli istnieje prawdziwy właściciel, usuwamy demonstracyjnego placeholdera owner@gastro.pl
+      if (hasRealOwner) {
+        finalStaffList = finalStaffList.filter((s) => s.email.trim().toLowerCase() !== "owner@gastro.pl")
+      }
+
+      if (finalStaffList.length > 0) {
+        setStaffUsers(finalStaffList)
       } else {
         // Mock demonstracyjny kadry wyłącznie gdy baza jest całkowicie pusta
         setStaffUsers([
@@ -776,11 +853,14 @@ function OwnerDashboard() {
         }
       }
 
-      // Synchronizacja bazowej stawki godzinowej w profilu użytkownika
-      if (hourlyRate > 0) {
+      const effectiveRate =
+        role === "owner" ? 0 : hourlyRate !== null && hourlyRate !== undefined ? Number(hourlyRate) : 0
+
+      // Synchronizacja bazowej stawki godzinowej w profilu użytkownika (dla personelu)
+      if (role !== "owner" && effectiveRate >= 0) {
         await supabase
           .from("users")
-          .update({ default_hourly_rate: hourlyRate })
+          .update({ default_hourly_rate: effectiveRate })
           .eq("id", userId)
       }
 
@@ -795,13 +875,13 @@ function OwnerDashboard() {
               restaurant_id: vId,
               restaurant_name: vObj?.name || "Lokal",
               role: role,
-              hourly_rate: hourlyRate,
+              hourly_rate: effectiveRate,
             }
           })
 
           return {
             ...user,
-            default_hourly_rate: hourlyRate,
+            default_hourly_rate: effectiveRate,
             memberships: updatedMemberships,
           }
         })
@@ -863,23 +943,30 @@ function OwnerDashboard() {
 
     setIsSavingProfile(true)
     try {
-      // 1. Zapis w public.users w Supabase
+      // 1. Zapis w public.users w Supabase (update z fallbackiem do insert)
       if (currentUserId) {
-        const { error: dbError } = await supabase
+        const { error: updateError, data: updateData } = await supabase
           .from("users")
-          .upsert(
-            {
-              id: currentUserId,
-              email: currentUserEmail,
-              full_name: trimmed,
-              is_active: true,
-            },
-            { onConflict: "id" }
-          )
+          .update({ full_name: trimmed })
+          .eq("id", currentUserId)
+          .select("id")
 
-        if (dbError) {
-          console.error("Błąd zapisu w public.users:", dbError)
-          throw new Error(dbError.message)
+        if (updateError || !updateData || updateData.length === 0) {
+          console.warn(
+            "Update w public.users nie powiódł się lub brak wiersza, próba insert:",
+            updateError?.message
+          )
+          const { error: insertError } = await supabase.from("users").insert({
+            id: currentUserId,
+            email: currentUserEmail,
+            full_name: trimmed,
+            is_active: true,
+          })
+
+          if (insertError) {
+            console.error("Błąd zapisu w public.users (insert fallback):", insertError)
+            throw new Error(insertError.message)
+          }
         }
       }
 
@@ -902,7 +989,12 @@ function OwnerDashboard() {
 
       // 4. Aktualizacja w staffUsers
       setStaffUsers((prev) =>
-        prev.map((u) => (u.id === currentUserId ? { ...u, full_name: trimmed } : u))
+        prev.map((u) =>
+          u.id === currentUserId ||
+          (currentUserEmail && u.email.toLowerCase() === currentUserEmail.toLowerCase())
+            ? { ...u, full_name: trimmed }
+            : u
+        )
       )
 
       showToast("Pomyślnie zaktualizowano dane właściciela.", "success")
@@ -1161,6 +1253,7 @@ function OwnerDashboard() {
             <OwnerStaffTab
               staffUsers={staffUsers}
               venues={venues}
+              selectedVenueId={selectedVenueId}
               currentUserId={currentUserId}
               availableRoles={availableRoles}
               onSaveStaffAssignment={handleSaveStaffAssignment}
