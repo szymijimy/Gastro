@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 
-export type ToastType = "success" | "error" | "info"
+export type ToastType = "success" | "error" | "info" | "warning"
 
 type ToastItem = {
   id: string
@@ -80,16 +80,20 @@ export function FeedbackHost() {
               ? "bg-emerald-950 text-white border-emerald-700"
               : t.type === "error"
               ? "bg-red-950 text-white border-red-700"
+              : t.type === "warning"
+              ? "bg-amber-950 text-white border-amber-700"
               : "bg-zinc-900 text-white border-zinc-700"
 
           const badgeIcon =
-            t.type === "success" ? "✓" : t.type === "error" ? "!" : "i"
+            t.type === "success" ? "✓" : t.type === "error" ? "!" : t.type === "warning" ? "⚠️" : "i"
 
           const badgeColor =
             t.type === "success"
               ? "bg-emerald-500 text-emerald-950"
               : t.type === "error"
               ? "bg-red-500 text-white"
+              : t.type === "warning"
+              ? "bg-amber-500 text-amber-950"
               : "bg-zinc-700 text-zinc-200"
 
           return (

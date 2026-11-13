@@ -8,6 +8,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { askConfirm, showToast } from "@/components/ui/feedback"
+import {
+  MonthlyScheduleRequirementsModal,
+  type DayRequirement,
+} from "@/components/MonthlyScheduleRequirementsModal"
 
 type StaffMember = {
   user_id: string
@@ -70,6 +74,7 @@ type OperatingHourConfig = {
   is_closed: boolean
   default_start_time: string
   shift_start_times: string[]
+  shift_roles?: string[]
   default_end_time: string
   min_staff_needed: number
   day_color: string
@@ -149,6 +154,20 @@ const normalizeStartTimesArray = (
   return result
 }
 
+const normalizeRolesArray = (
+  rolesList: string[] | null | undefined,
+  count: number,
+  fallback = ""
+): string[] => {
+  const safeCount = Math.max(1, count)
+  const base = Array.isArray(rolesList) ? [...rolesList] : []
+  const result: string[] = []
+  for (let i = 0; i < safeCount; i++) {
+    result.push(base[i] || fallback)
+  }
+  return result
+}
+
 const getDefaultOperatingHours = (): Record<number, OperatingHourConfig> => {
   const map: Record<number, OperatingHourConfig> = {}
   for (let d = 0; d <= 6; d++) {
@@ -169,8 +188,9 @@ const getDefaultOperatingHours = (): Record<number, OperatingHourConfig> => {
 }
 
 const getDayOfWeekNumber = (dateStr: string): number => {
+  if (!dateStr || !dateStr.includes("-")) return 0
   const [y, m, d] = dateStr.split("-").map(Number)
-  return new Date(y, m - 1, d).getDay()
+  return new Date(y, m - 1, d, 12, 0, 0).getDay()
 }
 
 const toDatetimeLocalStr = (isoStr: string | null): string => {
@@ -189,11 +209,11 @@ const getDatesInRange = (startStr: string, endStr: string): string[] => {
   if (!startStr || !endStr) return []
   const [sy, sm, sd] = startStr.split("-").map(Number)
   const [ey, em, ed] = endStr.split("-").map(Number)
-  const cur = new Date(sy, sm - 1, sd)
-  const end = new Date(ey, em - 1, ed)
+  const cur = new Date(sy, sm - 1, sd, 12, 0, 0)
+  const end = new Date(ey, em - 1, ed, 12, 0, 0)
   const dates: string[] = []
   let safety = 0
-  while (cur <= end && safety < 65) {
+  while (cur <= end && safety < 180) {
     const yyyy = cur.getFullYear()
     const mm = String(cur.getMonth() + 1).padStart(2, "0")
     const dd = String(cur.getDate()).padStart(2, "0")
@@ -205,17 +225,20 @@ const getDatesInRange = (startStr: string, endStr: string): string[] => {
 }
 
 const formatDayChip = (dateStr: string) => {
+  if (!dateStr || !dateStr.includes("-")) return { weekday: "", dayMonth: dateStr || "" }
   const [y, m, d] = dateStr.split("-").map(Number)
-  const dateObj = new Date(y, m - 1, d)
+  const dateObj = new Date(y, m - 1, d, 12, 0, 0)
+  if (isNaN(dateObj.getTime())) return { weekday: "", dayMonth: dateStr }
   const weekday = dateObj.toLocaleDateString("pl-PL", { weekday: "short" })
   const dayMonth = dateObj.toLocaleDateString("pl-PL", { day: "2-digit", month: "2-digit" })
   return { weekday: weekday.replace(".", ""), dayMonth }
 }
 
 const formatFullDayTitle = (dateStr: string) => {
-  if (!dateStr) return ""
+  if (!dateStr || !dateStr.includes("-")) return ""
   const [y, m, d] = dateStr.split("-").map(Number)
-  const dateObj = new Date(y, m - 1, d)
+  const dateObj = new Date(y, m - 1, d, 12, 0, 0)
+  if (isNaN(dateObj.getTime())) return dateStr
   return dateObj.toLocaleDateString("pl-PL", {
     weekday: "long",
     day: "numeric",
@@ -272,6 +295,9 @@ export function ManagerScheduleModule({
   const [staffRules, setStaffRules] = useState<Record<string, StaffGeneratorRule>>({})
   const [generatorReport, setGeneratorReport] = useState<GeneratorReport | null>(null)
 
+  const [dayRequirements, setDayRequirements] = useState<Record<string, Record<string, DayRequirement>>>({})
+  const [isMonthlyRequirementsModalOpen, setIsMonthlyRequirementsModalOpen] = useState(false)
+  const [scheduleRequirementsTab, setScheduleRequirementsTab] = useState<"month" | "weekly">("month")
   const [isOperatingHoursModalOpen, setIsOperatingHoursModalOpen] = useState(false)
   const [savingOperatingHours, setSavingOperatingHours] = useState(false)
 
@@ -316,7 +342,8 @@ export function ManagerScheduleModule({
     day_of_week: number
     is_closed: boolean | null
     default_start_time: string | null
-    shift_start_times: string[] | null
+    shift_start_times: string[]
+  shift_roles?: string[] | null
     default_end_time: string | null
     min_staff_needed: number | null
     day_color: string | null
@@ -378,11 +405,12 @@ export function ManagerScheduleModule({
 
       const venueIds = venuesList.length > 0 ? venuesList.map((v) => v.id) : [restaurantId]
 
-      const [periodsRes, opHoursRes, rulesRes, allStaffRes] = await Promise.all([
+      const [periodsRes, opHoursRes, rulesRes, allStaffRes, dayReqRes] = await Promise.all([
         supabase.from("schedule_periods").select("*").eq("restaurant_id", restaurantId).order("start_date", { ascending: false }),
         supabase.from("restaurant_operating_hours").select("*").in("restaurant_id", venueIds),
         supabase.from("staff_schedule_rules").select("*").in("restaurant_id", venueIds),
         supabase.from("restaurant_users").select("restaurant_id, user_id, role, hourly_rate, users (full_name, email)").in("restaurant_id", venueIds),
+        supabase.from("restaurant_day_requirements").select("*").in("restaurant_id", venueIds),
       ])
 
       if (periodsRes.data) {
@@ -405,6 +433,7 @@ export function ManagerScheduleModule({
             is_closed: Boolean(row.is_closed),
             default_start_time: normalizedTimes[0] || fallbackStart,
             shift_start_times: normalizedTimes,
+            shift_roles: normalizeRolesArray(row.shift_roles, count),
             default_end_time: row.default_end_time || "",
             min_staff_needed: count,
             day_color: row.day_color || "",
@@ -412,6 +441,30 @@ export function ManagerScheduleModule({
         })
       }
       setAllVenuesOpHours(opMapByVenue)
+
+      const dayReqMap: Record<string, Record<string, DayRequirement>> = {}
+      venueIds.forEach((vId) => {
+        dayReqMap[vId] = {}
+      })
+      if (dayReqRes?.data) {
+        dayReqRes.data.forEach((row: any) => {
+          const vId = row.restaurant_id
+          if (!dayReqMap[vId]) dayReqMap[vId] = {}
+          const count = Math.max(1, Number(row.min_staff_needed) || 1)
+          dayReqMap[vId][row.work_date] = {
+            restaurant_id: vId,
+            work_date: row.work_date,
+            is_closed: Boolean(row.is_closed),
+            min_staff_needed: count,
+            shift_start_times: normalizeStartTimesArray(row.shift_start_times, count),
+            shift_roles: normalizeRolesArray(row.shift_roles, count),
+            default_start_time: row.shift_start_times?.[0] || "16:00",
+            default_end_time: row.default_end_time || "",
+            day_color: row.day_color || "",
+          }
+        })
+      }
+      setDayRequirements(dayReqMap)
 
       const membershipMap: Record<string, string[]> = {}
       const dedupStaffMap: Record<string, StaffMember> = {}
@@ -502,17 +555,81 @@ export function ManagerScheduleModule({
     setShifts(fetchedShifts)
     setOtherVenueShifts(fetchedExternal)
 
-    prepareDayDrafts(firstDay, fetchedShifts, fetchedAvail, operatingHours)
+    prepareDayDrafts(firstDay, fetchedShifts, fetchedAvail)
+  }
+
+  const getDayConfigForDate = (venueId: string, dateStr: string): DayRequirement => {
+    if (dayRequirements[venueId]?.[dateStr]) {
+      return dayRequirements[venueId][dateStr]
+    }
+    const dow = getDayOfWeekNumber(dateStr)
+    const baseOp = (allVenuesOpHours[venueId] || getDefaultOperatingHours())[dow] || {
+      day_of_week: dow,
+      is_closed: false,
+      default_start_time: "16:00",
+      shift_start_times: ["16:00", "18:00"],
+      default_end_time: "",
+      min_staff_needed: 2,
+      day_color: "",
+    }
+    const count = Math.max(1, Number(baseOp.min_staff_needed) || 1)
+    return {
+      restaurant_id: venueId,
+      work_date: dateStr,
+      is_closed: Boolean(baseOp.is_closed),
+      min_staff_needed: count,
+      shift_start_times: normalizeStartTimesArray(baseOp.shift_start_times, count, baseOp.default_start_time || "16:00"),
+      shift_roles: normalizeRolesArray(baseOp.shift_roles, count),
+      default_start_time: baseOp.default_start_time || baseOp.shift_start_times?.[0] || "16:00",
+      default_end_time: baseOp.default_end_time || "",
+      day_color: baseOp.day_color || "",
+    }
+  }
+
+  const handleSaveMonthlyRequirements = async (venueId: string, days: DayRequirement[]) => {
+    const rows = days.map((d) => ({
+      restaurant_id: venueId,
+      work_date: d.work_date,
+      is_closed: d.is_closed,
+      min_staff_needed: d.min_staff_needed,
+      shift_start_times: d.shift_start_times,
+      shift_roles: d.shift_roles,
+      default_end_time: d.default_end_time.trim() || null,
+      day_color: d.day_color || null,
+    }))
+
+    const { error } = await supabase
+      .from("restaurant_day_requirements")
+      .upsert(rows, { onConflict: "restaurant_id,work_date" })
+
+    if (error) {
+      showToast("Błąd zapisu planu miesiąca: " + error.message, "error")
+      return
+    }
+
+    setDayRequirements((prev) => {
+      const vMap = { ...(prev[venueId] || {}) }
+      days.forEach((d) => {
+        vMap[d.work_date] = d
+      })
+      return { ...prev, [venueId]: vMap }
+    })
+
+    if (selectedDate && venueId === restaurantId) {
+      prepareDayDrafts(selectedDate, shifts, availabilities)
+    }
+
+    showToast("Zapisano pomyślnie plan miesiąca i obsadę ról.", "success")
   }
 
   const prepareDayDrafts = (
     dateStr: string,
     allShifts: ShiftRecord[],
     allAvail: AvailabilityRecord[],
-    opHoursMap: Record<number, OperatingHourConfig>
+    opHoursMap?: Record<number, OperatingHourConfig>
   ) => {
     const dow = getDayOfWeekNumber(dateStr)
-    const dayConfig = opHoursMap[dow] || {
+    const dayConfig = getDayConfigForDate(restaurantId || "", dateStr) || {
       is_closed: false,
       default_start_time: "16:00",
       shift_start_times: ["16:00", "18:00"],
@@ -595,6 +712,51 @@ export function ManagerScheduleModule({
       nextStatus === "open" ? "Otwarto zapisy dyspozycyjności." : "Zamknięto zapisy dyspozycyjności.",
       "info"
     )
+  }
+
+  const handleSaveWeeklyTemplate = async (
+    venueId: string,
+    targetMap: Record<number, OperatingHourConfig>
+  ) => {
+    const rows = Object.values(targetMap).map((cfg) => {
+      const count = Math.max(1, Number(cfg.min_staff_needed) || 1)
+      const normalizedSlots = normalizeStartTimesArray(
+        cfg.shift_start_times,
+        count,
+        cfg.default_start_time || "16:00"
+      )
+      const normalizedRoles = normalizeRolesArray(cfg.shift_roles, count, "")
+      return {
+        restaurant_id: venueId,
+        day_of_week: cfg.day_of_week,
+        is_closed: Boolean(cfg.is_closed),
+        default_start_time: normalizedSlots[0] || "16:00",
+        shift_start_times: normalizedSlots,
+        shift_roles: normalizedRoles,
+        default_end_time: cfg.default_end_time?.trim() || null,
+        min_staff_needed: count,
+        day_color: cfg.day_color || null,
+      }
+    })
+
+    const { error } = await supabase
+      .from("restaurant_operating_hours")
+      .upsert(rows, { onConflict: "restaurant_id,day_of_week" })
+
+    if (error) {
+      showToast("Błąd zapisu szablonu tygodniowego: " + error.message, "error")
+      throw error
+    }
+
+    setAllVenuesOpHours((prev) => ({
+      ...prev,
+      [venueId]: targetMap,
+    }))
+
+    if (selectedDate && venueId === restaurantId) {
+      prepareDayDrafts(selectedDate, shifts, availabilities, targetMap)
+    }
+    showToast("Zapisano standardowy szablon tygodniowy lokalu.", "success")
   }
 
   const handleSaveOperatingHours = async (e: React.FormEvent) => {
@@ -949,6 +1111,7 @@ export function ManagerScheduleModule({
         venueName: string
         slotIdx: number
         slotStartTime: string
+        slotRole: string | null
         venueEnd: string
         filled: boolean
         lateWarning?: string
@@ -958,8 +1121,7 @@ export function ManagerScheduleModule({
       const targetCountByVenue: Record<string, number> = {}
 
       targetVenueIds.forEach((vId) => {
-        const venueOpHours = allVenuesOpHours[vId] || getDefaultOperatingHours()
-        const dayCfg = venueOpHours[dow]
+        const dayCfg = getDayConfigForDate(vId, dateStr)
         if (dayCfg?.is_closed) {
           targetCountByVenue[vId] = 0
           return
@@ -967,10 +1129,11 @@ export function ManagerScheduleModule({
 
         const targetCount = Math.max(0, Number(dayCfg?.min_staff_needed) ?? 2)
         targetCountByVenue[vId] = targetCount
+        const slotRoles = normalizeRolesArray(dayCfg?.shift_roles, targetCount)
         const slotTimes = normalizeStartTimesArray(
           dayCfg?.shift_start_times,
           targetCount,
-          dayCfg?.default_start_time || "16:00"
+          (dayCfg?.shift_start_times?.[0] || "16:00") || "16:00"
         )
         const venueEnd = dayCfg?.default_end_time || ""
         const alreadyCount = generatedByVenueAndDate[vId]?.[dateStr]?.length || 0
@@ -981,6 +1144,7 @@ export function ManagerScheduleModule({
             venueName: getVenueNameById(vId),
             slotIdx: sIdx,
             slotStartTime: slotTimes[sIdx] || "16:00",
+            slotRole: slotRoles[sIdx] || null,
             venueEnd,
             filled: false,
           })
@@ -1004,6 +1168,14 @@ export function ManagerScheduleModule({
               const uid = member.user_id
               if (!doesUserBelongToVenue(uid, slot.venueId)) continue
               if (assignedByUser[uid]?.has(dateStr)) continue
+
+              if (slot.slotRole && slot.slotRole.trim() !== "") {
+                const memberRole = (member.role || "").toLowerCase().trim()
+                const targetRole = slot.slotRole.toLowerCase().trim()
+                if (memberRole !== targetRole) {
+                  continue
+                }
+              }
 
               const rule = staffRules[uid] || {
                 min_shifts: 0,
@@ -1117,6 +1289,7 @@ export function ManagerScheduleModule({
             const venueMembers = allVenuesStaff.filter((m) => doesUserBelongToVenue(m.user_id, vId))
             const alreadyInVenue = (generatedByVenueAndDate[vId]?.[dateStr] || []).map((x) => x.user_id)
 
+            let wrongRole = 0
             let noAvail = 0
             let inOtherBar = 0
             let streakLim = 0
@@ -1127,6 +1300,15 @@ export function ManagerScheduleModule({
               if (alreadyInVenue.includes(uid)) return
               if (assignedByUser[uid]?.has(dateStr)) {
                 inOtherBar++
+                return
+              }
+              if (us.slotRole && us.slotRole.trim() !== "") {
+                const mRole = (m.role || "").toLowerCase().trim()
+                const targetRole = us.slotRole.toLowerCase().trim()
+                if (mRole !== targetRole) {
+                  wrongRole++
+                  return
+                }
                 return
               }
               const avail = availabilities.find(
@@ -1147,13 +1329,15 @@ export function ManagerScheduleModule({
             })
 
             const parts: string[] = []
+            if (wrongRole > 0) parts.push(`inna rola (${wrongRole} os.)`)
             if (noAvail > 0) parts.push(`brak dyspozycyjności (${noAvail} os.)`)
             if (inOtherBar > 0) parts.push(`przypisani w drugim barze (${inOtherBar} os.)`)
             if (streakLim > 0) parts.push(`limit ciągu dni (${streakLim} os.)`)
             if (conflictLim > 0) parts.push(`wykluczenia par (${conflictLim} os.)`)
 
+            const roleInfo = us.slotRole ? ` (wymagana rola: ${us.slotRole})` : ""
             reasons.push(
-              `Brak ${us.slotIdx + 1}. osoby na godz. ${us.slotStartTime} (${
+              `Brak ${us.slotIdx + 1}. osoby na godz. ${us.slotStartTime}${roleInfo} (${
                 parts.length > 0 ? parts.join(", ") : "brak wolnych osób"
               })`
             )
@@ -1383,7 +1567,15 @@ export function ManagerScheduleModule({
         showToast("Zaktualizowano terminy okresu.", "success")
       }
     } else {
-      const targetVenues = selectedVenueIdsForPeriod.length > 0 ? selectedVenueIdsForPeriod : [restaurantId]
+      const targetVenues =
+        selectedVenueIdsForPeriod.length > 0
+          ? selectedVenueIdsForPeriod
+          : (restaurantId ? [restaurantId] : [])
+
+      if (targetVenues.length === 0) {
+        showToast("Wybierz przynajmniej jeden lokal dla okresu.", "error")
+        return
+      }
 
       const rowsToInsert = targetVenues.map((vId) => ({
         restaurant_id: vId,
@@ -1440,10 +1632,10 @@ export function ManagerScheduleModule({
       const current = prev[userId] || { selected: false, start_time: "16:00", end_time: "" }
       if (patch.selected === true && !current.selected && selectedDate) {
         const dow = getDayOfWeekNumber(selectedDate)
-        const cfg = operatingHours[dow]
+        const cfg = getDayConfigForDate(restaurantId || "", selectedDate)
         const alreadySelectedCount = Object.values(prev).filter((d) => d.selected).length
         const slotTime =
-          cfg?.shift_start_times?.[alreadySelectedCount] || cfg?.default_start_time || "16:00"
+          cfg?.shift_start_times?.[alreadySelectedCount] || (cfg?.shift_start_times?.[0] || "16:00") || "16:00"
         const userAvail = availabilities.find(
           (a) => a.user_id === userId && a.work_date === selectedDate && a.is_available
         )
@@ -1538,223 +1730,24 @@ export function ManagerScheduleModule({
     }
   }
 
-  const renderOperatingHoursModal = () => {
-    if (!isOperatingHoursModalOpen) return null
-    const targetVenueId = editingOpHoursVenueId || restaurantId || ""
-    const targetOpHours = allVenuesOpHours[targetVenueId] || getDefaultOperatingHours()
-
-    const updateTargetOpDay = (dayIdx: number, patch: Partial<OperatingHourConfig>) => {
-      setAllVenuesOpHours((prev) => {
-        const venueMap = prev[targetVenueId] || getDefaultOperatingHours()
-        const existingDay = venueMap[dayIdx]
-        return {
-          ...prev,
-          [targetVenueId]: { ...venueMap, [dayIdx]: { ...existingDay, ...patch } },
-        }
-      })
-    }
+  const renderMonthlyRequirementsModal = () => {
+    if (!isMonthlyRequirementsModalOpen) return null
 
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-        <div className="bg-white rounded-xl shadow-xl border w-full max-w-4xl overflow-hidden flex flex-col max-h-[92vh]">
-          <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-b bg-zinc-50">
-            <div>
-              <h2 className="text-lg font-bold text-zinc-900">
-                🕒 Godziny otwarcia, kolejne wejścia pracowników i kolory dni
-              </h2>
-              <p className="text-xs text-zinc-500">
-                Ustaw liczbę osób, godzinę przyjścia każdej kolejnej osoby (1. os, 2. os...) oraz kolor dnia.
-              </p>
-            </div>
-
-            {allManagedVenues.length > 1 && (
-              <div className="flex items-center gap-1.5 bg-white p-1 rounded-lg border">
-                {allManagedVenues.map((v) => (
-                  <button
-                    key={v.id}
-                    type="button"
-                    onClick={() => setEditingOpHoursVenueId(v.id)}
-                    className={`px-3 py-1 rounded-md text-xs font-bold transition-all ${
-                      targetVenueId === v.id ? "bg-zinc-900 text-white" : "text-zinc-600 hover:text-zinc-900"
-                    }`}
-                  >
-                    🏠 {v.name}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setIsOperatingHoursModalOpen(false)}
-              className="text-zinc-400 hover:text-zinc-700 text-xl font-bold leading-none px-2"
-            >
-              ×
-            </button>
-          </div>
-
-          <form onSubmit={handleSaveOperatingHours} className="p-6 overflow-y-auto space-y-3.5">
-            {DAYS_OF_WEEK_UI.map(({ dayIndex, full }) => {
-              const cfg = targetOpHours[dayIndex] || {
-                day_of_week: dayIndex,
-                is_closed: false,
-                default_start_time: "16:00",
-                shift_start_times: ["16:00", "18:00"],
-                default_end_time: "",
-                min_staff_needed: 2,
-                day_color: "",
-              }
-
-              const colorStyle = getDayColorStyle(cfg.day_color)
-              const slots = normalizeStartTimesArray(
-                cfg.shift_start_times,
-                cfg.min_staff_needed,
-                cfg.default_start_time || "16:00"
-              )
-
-              return (
-                <div
-                  key={dayIndex}
-                  className={`p-4 rounded-xl border transition-all space-y-3 ${
-                    cfg.is_closed ? "bg-zinc-100/80 border-zinc-200 opacity-75" : "border-zinc-200"
-                  }`}
-                  style={{ backgroundColor: cfg.is_closed ? undefined : colorStyle.cellBg }}
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex flex-wrap items-center gap-3">
-                      <span
-                        className="px-3 py-1 rounded-lg font-bold text-sm text-zinc-900 border"
-                        style={{ backgroundColor: colorStyle.headerBg }}
-                      >
-                        {full}
-                      </span>
-
-                      <label className="flex items-center gap-1.5 text-xs font-semibold text-red-700 cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={cfg.is_closed}
-                          onChange={(e) => updateTargetOpDay(dayIndex, { is_closed: e.target.checked })}
-                          className="rounded border-zinc-300 accent-red-600"
-                        />
-                        Lokal zamknięty
-                      </label>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xs font-medium text-zinc-600">Kolor:</span>
-                      <div className="flex items-center gap-1.5">
-                        {DAY_COLOR_PRESETS.map((preset) => {
-                          const isSelected = (cfg.day_color || "") === preset.value
-                          return (
-                            <button
-                              key={preset.name}
-                              type="button"
-                              title={preset.name}
-                              onClick={() => updateTargetOpDay(dayIndex, { day_color: preset.value })}
-                              className={`w-6 h-6 rounded-full border transition-transform ${
-                                isSelected
-                                  ? "ring-2 ring-zinc-900 scale-110 border-zinc-900"
-                                  : "border-zinc-300 hover:scale-105"
-                              }`}
-                              style={{ backgroundColor: preset.swatch }}
-                            />
-                          )
-                        })}
-                      </div>
-                    </div>
-
-                    {!cfg.is_closed && (
-                      <div className="flex items-center gap-3">
-                        <div className="flex items-center gap-1.5">
-                          <Label className="text-xs font-bold text-zinc-700">Liczba osób:</Label>
-                          <Input
-                            type="number"
-                            min="1"
-                            max="15"
-                            value={cfg.min_staff_needed}
-                            onChange={(e) => {
-                              const newCount = Math.max(1, Math.min(15, parseInt(e.target.value) || 1))
-                              const nextSlots = normalizeStartTimesArray(
-                                cfg.shift_start_times,
-                                newCount,
-                                cfg.default_start_time || "16:00"
-                              )
-                              updateTargetOpDay(dayIndex, {
-                                min_staff_needed: newCount,
-                                shift_start_times: nextSlots,
-                                default_start_time: nextSlots[0] || "16:00",
-                              })
-                            }}
-                            className="h-8 w-16 text-center text-xs font-bold bg-white"
-                            required
-                          />
-                        </div>
-
-                        <div className="flex items-center gap-1.5">
-                          <Label className="text-xs text-zinc-500">Zamknięcie (opcj.):</Label>
-                          <Input
-                            type="time"
-                            value={cfg.default_end_time}
-                            onChange={(e) => updateTargetOpDay(dayIndex, { default_end_time: e.target.value })}
-                            className="h-8 w-28 text-xs bg-white"
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {!cfg.is_closed ? (
-                    <div className="pt-2 border-t border-zinc-200/70 flex flex-wrap items-center gap-3">
-                      <span className="text-xs font-semibold text-zinc-700">
-                        Godziny przyjścia kolejnych osób:
-                      </span>
-                      {slots.map((slotTime, slotIdx) => (
-                        <div
-                          key={slotIdx}
-                          className="flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-lg border border-zinc-200 shadow-2xs"
-                        >
-                          <span className="text-xs font-bold text-zinc-700">
-                            {slotIdx + 1}. os{slotIdx === 0 ? " (Otwarcie)" : ""}:
-                          </span>
-                          <Input
-                            type="time"
-                            value={slotTime}
-                            onChange={(e) => {
-                              const updatedSlots = [...slots]
-                              updatedSlots[slotIdx] = e.target.value
-                              updateTargetOpDay(dayIndex, {
-                                shift_start_times: updatedSlots,
-                                default_start_time: updatedSlots[0] || "16:00",
-                              })
-                            }}
-                            className="h-7 w-24 text-xs font-bold border-0 p-0 focus-visible:ring-0"
-                            required
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-xs font-semibold text-red-600">
-                      🚫 W ten dzień lokal jest zamknięty — generator nie przypisze nikomu zmiany.
-                    </p>
-                  )}
-                </div>
-              )
-            })}
-
-            <div className="pt-4 border-t flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={() => setIsOperatingHoursModalOpen(false)}>
-                Anuluj
-              </Button>
-              <Button type="submit" disabled={savingOperatingHours}>
-                {savingOperatingHours
-                  ? "Zapisywanie..."
-                  : `💾 Zapisz dla: ${getVenueNameById(targetVenueId)}`}
-              </Button>
-            </div>
-          </form>
-        </div>
-      </div>
+      <MonthlyScheduleRequirementsModal
+        isOpen={isMonthlyRequirementsModalOpen}
+        onClose={() => setIsMonthlyRequirementsModalOpen(false)}
+        initialVenueId={editingOpHoursVenueId || restaurantId || ""}
+        allManagedVenues={allManagedVenues}
+        roles={roles}
+        currentMonthStr={activePeriod?.start_date?.slice(0, 7) || new Date().toISOString().slice(0, 7)}
+        existingRequirements={dayRequirements}
+        operatingHoursByVenue={allVenuesOpHours}
+        onSaveMonth={handleSaveMonthlyRequirements}
+        onSaveWeeklyTemplate={handleSaveWeeklyTemplate}
+        getDefaultDayConfig={getDayConfigForDate}
+        initialTab={scheduleRequirementsTab}
+      />
     )
   }
 
@@ -1778,8 +1771,11 @@ export function ManagerScheduleModule({
                 </CardDescription>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <Button type="button" variant="outline" onClick={() => setIsOperatingHoursModalOpen(true)}>
-                  🕒 Godziny otwarcia i kolory dni
+                <Button type="button" variant="outline" onClick={() => { setScheduleRequirementsTab("weekly"); setIsMonthlyRequirementsModalOpen(true); }}>
+                  🕒 Szablon tygodnia (Pn–Nd)
+                </Button>
+                <Button type="button" variant="outline" onClick={() => { setScheduleRequirementsTab("month"); setIsMonthlyRequirementsModalOpen(true); }}>
+                  🗓️ Miesięczny plan obsady i role
                 </Button>
                 <Button onClick={openCreatePeriodModal}>+ Nowy okres grafikowy</Button>
               </div>
@@ -1868,7 +1864,7 @@ export function ManagerScheduleModule({
           </CardContent>
         </Card>
 
-        {renderOperatingHoursModal()}
+        {renderMonthlyRequirementsModal()}
 
         {isPeriodModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -1990,7 +1986,7 @@ export function ManagerScheduleModule({
   const badge = getSubmissionWindowBadge(activePeriod)
   const isCurrentlyAccepting = isPeriodCurrentlyAccepting(activePeriod)
   const selectedDow = selectedDate ? getDayOfWeekNumber(selectedDate) : 1
-  const selectedDayConfig = operatingHours[selectedDow]
+  const selectedDayConfig = selectedDate ? getDayConfigForDate(restaurantId || '', selectedDate) : null
 
   const tierFullAvailable: { member: StaffMember; avail: AvailabilityRecord }[] = []
   const tierRestrictedAvailable: { member: StaffMember; avail: AvailabilityRecord }[] = []
@@ -2197,8 +2193,11 @@ export function ManagerScheduleModule({
                 {isCurrentlyAccepting ? "🔒 Zamknij zapisy" : "🔓 Otwórz ponownie zapisy"}
               </Button>
 
-              <Button type="button" variant="outline" size="sm" onClick={() => setIsOperatingHoursModalOpen(true)}>
-                🕒 Godziny i kolory dni
+              <Button type="button" variant="outline" size="sm" onClick={() => { setScheduleRequirementsTab("weekly"); setIsMonthlyRequirementsModalOpen(true); }}>
+                🕒 Szablon tygodnia
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => { setScheduleRequirementsTab("month"); setIsMonthlyRequirementsModalOpen(true); }}>
+                🗓️ Miesięczny plan obsady i role
               </Button>
 
               <Button
@@ -2382,7 +2381,7 @@ export function ManagerScheduleModule({
                   {periodDays.map((dateStr) => {
                     const { weekday, dayMonth } = formatDayChip(dateStr)
                     const dow = getDayOfWeekNumber(dateStr)
-                    const dayCfg = operatingHours[dow]
+                    const dayCfg = getDayConfigForDate(restaurantId || '', dateStr)
                     const isClosedDay = dayCfg?.is_closed
                     const colorStyle = getDayColorStyle(dayCfg?.day_color)
                     const isSelected = dateStr === selectedDate
@@ -2470,7 +2469,7 @@ export function ManagerScheduleModule({
                         {periodDays.map((dateStr) => {
                           const { weekday, dayMonth } = formatDayChip(dateStr)
                           const dow = getDayOfWeekNumber(dateStr)
-                          const dayCfg = operatingHours[dow]
+                          const dayCfg = getDayConfigForDate(restaurantId || '', dateStr)
                           const isClosedDay = dayCfg?.is_closed
                           const colorStyle = getDayColorStyle(dayCfg?.day_color)
                           const isSelected = dateStr === selectedDate
@@ -2509,7 +2508,7 @@ export function ManagerScheduleModule({
                             {periodDays.map((dateStr) => {
                               const isSelected = dateStr === selectedDate
                               const dow = getDayOfWeekNumber(dateStr)
-                              const dayCfg = operatingHours[dow]
+                              const dayCfg = getDayConfigForDate(restaurantId || '', dateStr)
                               const isClosedDay = dayCfg?.is_closed
                               const colorStyle = getDayColorStyle(dayCfg?.day_color)
 
@@ -2588,7 +2587,7 @@ export function ManagerScheduleModule({
                         <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-zinc-100 text-zinc-700">
                           🕒 Planowane wejścia:{" "}
                           {(selectedDayConfig?.shift_start_times || ["16:00"]).join(", ")} (
-                          {selectedDayConfig?.min_staff_needed ?? 2} os.)
+                          {selectedDayConfig?.min_staff_needed ?? 2} os.${selectedDayConfig?.shift_roles?.some(Boolean) ? ` • ${selectedDayConfig.shift_roles.filter(Boolean).join(', ')}` : ''})
                         </span>
                       )}
                     </div>
@@ -2712,7 +2711,7 @@ export function ManagerScheduleModule({
         </div>
       </div>
 
-      {renderOperatingHoursModal()}
+      {renderMonthlyRequirementsModal()}
 
       {isManagerAvailModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">

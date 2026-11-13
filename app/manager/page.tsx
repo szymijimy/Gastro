@@ -22,11 +22,15 @@ import type { RestaurantRole } from "@/types/restaurant"
 import {
   fetchAnnouncements,
   createAnnouncement,
+  updateAnnouncement,
   toggleAnnouncementPin,
   deleteAnnouncement,
+  uploadAnnouncementImage,
 } from "@/services/announcementsService"
 import { useTasks } from "@/hooks/useTasks"
 import { PriorityIcon } from "@/components/PriorityIcon"
+import { TodoAnalyticsSection } from "@/components/TodoAnalyticsSection"
+import { ReservationsModule } from "@/components/ReservationsModule"
 
 const ROLE_COLORS = [
   { name: "Niebieski", value: "#2563eb" },
@@ -38,6 +42,21 @@ const ROLE_COLORS = [
   { name: "Turkusowy", value: "#06b6d4" },
   { name: "Czerwony", value: "#ef4444" },
 ]
+
+const formatCompletedTime = (isoString: string | null | undefined): string => {
+  if (!isoString) return ""
+  try {
+    const d = new Date(isoString)
+    if (isNaN(d.getTime())) return ""
+    const day = String(d.getDate()).padStart(2, "0")
+    const month = String(d.getMonth() + 1).padStart(2, "0")
+    const hours = String(d.getHours()).padStart(2, "0")
+    const mins = String(d.getMinutes()).padStart(2, "0")
+    return `${day}.${month}, ${hours}:${mins}`
+  } catch {
+    return ""
+  }
+}
 
 
 
@@ -72,6 +91,7 @@ function TodoItemRow({
   todo,
   roleColor,
   staffMemberName,
+  completedByName,
   onToggle,
   onUpdatePriority,
   onSaveNote,
@@ -80,6 +100,7 @@ function TodoItemRow({
   todo: TodoItem
   roleColor: string | null
   staffMemberName: string | null
+  completedByName: string | null
   onToggle: (todo: TodoItem) => void
   onUpdatePriority: (todoId: string, newPriority: PriorityLevel) => void
   onSaveNote: (todoId: string, noteText: string | null) => Promise<void>
@@ -108,24 +129,39 @@ function TodoItemRow({
       }`}
     >
       <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3 flex-1 min-w-0">
+        <div className="flex items-start sm:items-center gap-3 flex-1 min-w-0">
           <input
             type="checkbox"
             checked={todo.is_completed}
             onChange={() => onToggle(todo)}
-            className="w-4 h-4 rounded border-zinc-300 cursor-pointer shrink-0"
+            className="w-4 h-4 rounded border-zinc-300 cursor-pointer shrink-0 mt-0.5 sm:mt-0"
           />
 
           <PriorityIcon priority={priority} />
 
-          <span
-            onClick={() => onToggle(todo)}
-            className={`text-sm font-medium cursor-pointer ${
-              todo.is_completed ? "line-through text-zinc-400" : "text-zinc-800"
-            }`}
-          >
-            {todo.task}
-          </span>
+          <div className="flex flex-col min-w-0 flex-1">
+            <span
+              onClick={() => onToggle(todo)}
+              className={`text-sm font-medium cursor-pointer ${
+                todo.is_completed ? "line-through text-zinc-400" : "text-zinc-800"
+              }`}
+            >
+              {todo.task}
+            </span>
+
+            {todo.is_completed && (
+              <div className="flex items-center gap-1.5 mt-1 text-[11px] text-emerald-700 font-medium">
+                <span className="inline-flex items-center gap-1 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded text-[11px]">
+                  ✓ Wykonał(a): <strong className="font-semibold">{completedByName || "Pracownik"}</strong>
+                  {todo.completed_at && (
+                    <span className="text-zinc-500 font-normal ml-0.5">
+                      • {formatCompletedTime(todo.completed_at)}
+                    </span>
+                  )}
+                </span>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -502,9 +538,12 @@ function ManagerDashboard() {
   const router = useRouter()
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [userName, setUserName] = useState<string>("")
-  const [restaurants, setRestaurants] = useState<{ restaurant_id: string; name: string }[]>([])
+  const [restaurants, setRestaurants] = useState<{ restaurant_id: string; name: string; color?: string }[]>([])
   // Ref utrzymujący aktualną wartość restaurants bez powodowania re-renderu w useCallback
-  const restaurantsRef = useRef<{ restaurant_id: string; name: string }[]>([])
+  const restaurantsRef = useRef<{ restaurant_id: string; name: string; color?: string }[]>([])
+  const [editingVenueColor, setEditingVenueColor] = useState<{ id: string; name: string; color: string } | null>(null)
+  const [tempVenueColor, setTempVenueColor] = useState<string>("#8b5cf6")
+  const [savingVenueColor, setSavingVenueColor] = useState<boolean>(false)
   const [activeRestaurantId, setActiveRestaurantId] = useState<string | null>(null)
   const [defaultRestaurantId, setDefaultRestaurantId] = useState<string | null>(null)
   
@@ -527,9 +566,18 @@ function ManagerDashboard() {
   const [newAnnouncementPinned, setNewAnnouncementPinned] = useState(false)
   const [newAnnouncementFrom, setNewAnnouncementFrom] = useState("")
   const [newAnnouncementUntil, setNewAnnouncementUntil] = useState("")
+  const [newAnnouncementKeepInHistory, setNewAnnouncementKeepInHistory] = useState(false)
+  const [announcementImageFile, setAnnouncementImageFile] = useState<File | null>(null)
+  const [announcementImagePreview, setAnnouncementImagePreview] = useState<string | null>(null)
+  const [existingImageUrl, setExistingImageUrl] = useState<string | null>(null)
+  const [isUploadingImage, setIsUploadingImage] = useState(false)
+  const [editingAnnouncementId, setEditingAnnouncementId] = useState<string | null>(null)
   const [selectedAnnouncementModal, setSelectedAnnouncementModal] = useState<Announcement | null>(null)
+  const [fullScreenImageModalUrl, setFullScreenImageModalUrl] = useState<string | null>(null)
+  const announcementFileInputRef = useRef<HTMLInputElement>(null)
 
-  const tasks = useTasks(activeRestaurantId, todayStr)
+  const [todoActiveTab, setTodoActiveTab] = useState<"list" | "analytics">("list")
+  const tasks = useTasks(activeRestaurantId, todayStr, currentUserId)
   // Stabilna referencja loadTodos – useCallback([], []) w hooku gwarantuje, ze nigdy sie nie zmieni.
   // Dzieki temu loadVenueData i zalezny od niego useEffect nie wpada w petle renderow.
   const loadTodosStable = tasks.loadTodos
@@ -554,7 +602,10 @@ function ManagerDashboard() {
   interface UserRestaurantItem {
     restaurant_id: string
     role: string
-    restaurants: { name: string | null } | { name: string | null }[] | null
+    restaurants:
+      | { name: string | null; color?: string | null }
+      | { name: string | null; color?: string | null }[]
+      | null
   }
 
   const loadVenueData = useCallback(async (
@@ -651,16 +702,21 @@ function ManagerDashboard() {
 
       const { data: userRestaurants } = await supabase
         .from("restaurant_users")
-        .select("restaurant_id, role, restaurants (name)")
+        .select("restaurant_id, role, restaurants (name, color)")
         .eq("user_id", session.user.id)
         .eq("role", "manager")
 
       if (userRestaurants && userRestaurants.length > 0) {
         const formattedVenues = userRestaurants.map((ur: UserRestaurantItem) => {
           const rObj = Array.isArray(ur.restaurants) ? ur.restaurants[0] : ur.restaurants
+          const vName = rObj?.name || "Lokal"
+          const vColor =
+            rObj?.color ||
+            (vName === "Wielokran" ? "#8b5cf6" : vName === "Tankownia" ? "#f97316" : "#6366f1")
           return {
             restaurant_id: ur.restaurant_id,
-            name: rObj?.name || "Lokal",
+            name: vName,
+            color: vColor,
           }
         })
 
@@ -695,6 +751,31 @@ function ManagerDashboard() {
     showToast("Przełączono aktywny lokal", "info")
   }
 
+  const handleSaveVenueColor = async () => {
+    if (!editingVenueColor) return
+    setSavingVenueColor(true)
+    try {
+      const { error } = await supabase
+        .from("restaurants")
+        .update({ color: tempVenueColor })
+        .eq("id", editingVenueColor.id)
+
+      if (error) throw error
+
+      setRestaurants((prev) =>
+        prev.map((r) =>
+          r.restaurant_id === editingVenueColor.id ? { ...r, color: tempVenueColor } : r
+        )
+      )
+      showToast(`Zaktualizowano kolor dla lokalu „${editingVenueColor.name}”`, "success")
+      setEditingVenueColor(null)
+    } catch (err: any) {
+      showToast("Błąd zapisu koloru lokalu: " + err.message, "error")
+    } finally {
+      setSavingVenueColor(false)
+    }
+  }
+
   const handleSetDefaultVenue = (venueId: string, e: React.MouseEvent) => {
     e.stopPropagation()
     if (!currentUserId) return
@@ -719,6 +800,7 @@ function ManagerDashboard() {
   }
 
   const getStaffMemberName = (userId: string) => {
+    if (userId === currentUserId) return `${userName || "Ty"} (Ty)`
     const found = staff.find(s => s.user_id === userId)
     if (!found) return "Pracownik"
     return found.users?.full_name || found.users?.email || "Pracownik"
@@ -969,7 +1051,63 @@ function ManagerDashboard() {
   }
 
   // --- TABLICA OGŁOSZEŃ ---
-  const handleCreateAnnouncement = async (e: React.FormEvent) => {
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!file.type.startsWith("image/")) {
+      showToast("Wybierz poprawny plik graficzny (JPG, PNG, WebP itp.)", "error")
+      return
+    }
+    setAnnouncementImageFile(file)
+    const previewUrl = URL.createObjectURL(file)
+    setAnnouncementImagePreview(previewUrl)
+  }
+
+  const handleClearSelectedImage = () => {
+    if (announcementImagePreview && announcementImagePreview.startsWith("blob:")) {
+      URL.revokeObjectURL(announcementImagePreview)
+    }
+    setAnnouncementImageFile(null)
+    setAnnouncementImagePreview(null)
+    setExistingImageUrl(null)
+    if (announcementFileInputRef.current) {
+      announcementFileInputRef.current.value = ""
+    }
+  }
+
+  const handleStartEditAnnouncement = (item: Announcement, e?: React.MouseEvent) => {
+    e?.stopPropagation()
+    setEditingAnnouncementId(item.id)
+    setNewAnnouncementTitle(item.title)
+    setNewAnnouncementContent(item.content)
+    setNewAnnouncementPinned(item.is_pinned)
+    setNewAnnouncementFrom(item.visible_from || "")
+    setNewAnnouncementUntil(item.visible_until || "")
+    setNewAnnouncementKeepInHistory(Boolean(item.keep_in_history))
+    setAnnouncementImageFile(null)
+    setExistingImageUrl(item.image_url || null)
+    setAnnouncementImagePreview(item.image_url || null)
+    if (selectedAnnouncementModal) {
+      setSelectedAnnouncementModal(null)
+    }
+    const formElement = document.getElementById("announcement-form-card")
+    if (formElement) {
+      formElement.scrollIntoView({ behavior: "smooth", block: "start" })
+    }
+  }
+
+  const handleCancelEditAnnouncement = () => {
+    setEditingAnnouncementId(null)
+    setNewAnnouncementTitle("")
+    setNewAnnouncementContent("")
+    setNewAnnouncementPinned(false)
+    setNewAnnouncementFrom("")
+    setNewAnnouncementUntil("")
+    setNewAnnouncementKeepInHistory(false)
+    handleClearSelectedImage()
+  }
+
+  const handleSaveAnnouncement = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!activeRestaurantId || !newAnnouncementTitle.trim() || !newAnnouncementContent.trim()) return
 
@@ -978,29 +1116,75 @@ function ManagerDashboard() {
       return
     }
 
-    const { data, error } = await createAnnouncement({
-      restaurantId: activeRestaurantId,
-      title: newAnnouncementTitle,
-      content: newAnnouncementContent,
-      isPinned: newAnnouncementPinned,
-      visibleFrom: newAnnouncementFrom || null,
-      visibleUntil: newAnnouncementUntil || null,
-    })
+    setIsUploadingImage(true)
+    try {
+      let finalImageUrl: string | null = existingImageUrl
 
-    if (error) {
-      showToast("Błąd dodawania ogłoszenia: " + error, "error")
-      return
-    }
+      if (announcementImageFile) {
+        // Skalowanie i upload do storage (max 1200px, WebP 0.8)
+        const uploadedUrl = await uploadAnnouncementImage(announcementImageFile, activeRestaurantId)
+        if (uploadedUrl) {
+          finalImageUrl = uploadedUrl
+        } else {
+          showToast("Ostrzeżenie: Nie udało się przetworzyć zdjęcia, zapisuję ogłoszenie bez zdjęcia.", "info")
+        }
+      }
 
-    if (data) {
-      const updated = [data, ...announcements].sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned))
-      setAnnouncements(updated)
-      setNewAnnouncementTitle("")
-      setNewAnnouncementContent("")
-      setNewAnnouncementPinned(false)
-      setNewAnnouncementFrom("")
-      setNewAnnouncementUntil("")
-      showToast("Opublikowano nowe ogłoszenie", "success")
+      if (editingAnnouncementId) {
+        // Tryb aktualizacji istniejącego ogłoszenia
+        const { data, error } = await updateAnnouncement({
+          id: editingAnnouncementId,
+          title: newAnnouncementTitle,
+          content: newAnnouncementContent,
+          isPinned: newAnnouncementPinned,
+          visibleFrom: newAnnouncementFrom || null,
+          visibleUntil: newAnnouncementUntil || null,
+          imageUrl: finalImageUrl,
+          keepInHistory: newAnnouncementKeepInHistory,
+        })
+
+        if (error) {
+          showToast("Błąd aktualizacji ogłoszenia: " + error, "error")
+          return
+        }
+
+        if (data) {
+          const updated = announcements
+            .map((a) => (a.id === editingAnnouncementId ? data : a))
+            .sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned))
+          setAnnouncements(updated)
+          handleCancelEditAnnouncement()
+          showToast("Zaktualizowano ogłoszenie", "success")
+        }
+      } else {
+        // Tryb publikacji nowego ogłoszenia
+        const { data, error } = await createAnnouncement({
+          restaurantId: activeRestaurantId,
+          title: newAnnouncementTitle,
+          content: newAnnouncementContent,
+          isPinned: newAnnouncementPinned,
+          visibleFrom: newAnnouncementFrom || null,
+          visibleUntil: newAnnouncementUntil || null,
+          imageUrl: finalImageUrl,
+          keepInHistory: newAnnouncementKeepInHistory,
+        })
+
+        if (error) {
+          showToast("Błąd dodawania ogłoszenia: " + error, "error")
+          return
+        }
+
+        if (data) {
+          const updated = [data, ...announcements].sort(
+            (a, b) => Number(b.is_pinned) - Number(a.is_pinned)
+          )
+          setAnnouncements(updated)
+          handleCancelEditAnnouncement()
+          showToast("Opublikowano nowe ogłoszenie", "success")
+        }
+      }
+    } finally {
+      setIsUploadingImage(false)
     }
   }
 
@@ -1021,17 +1205,20 @@ function ManagerDashboard() {
     }
   }
 
-  const handleDeleteAnnouncement = async (id: string, e: React.MouseEvent) => {
+  const handleDeleteAnnouncement = async (item: Announcement, e: React.MouseEvent) => {
     e.stopPropagation()
     const confirmed = await askConfirm("Czy na pewno chcesz usunąć to ogłoszenie?", "Usuwanie ogłoszenia")
     if (!confirmed) return
 
-    const { error } = await deleteAnnouncement(id)
+    const { error } = await deleteAnnouncement(item.id, item.image_url)
 
     if (!error) {
-      setAnnouncements(announcements.filter(a => a.id !== id))
-      if (selectedAnnouncementModal?.id === id) {
+      setAnnouncements(announcements.filter(a => a.id !== item.id))
+      if (selectedAnnouncementModal?.id === item.id) {
         setSelectedAnnouncementModal(null)
+      }
+      if (editingAnnouncementId === item.id) {
+        handleCancelEditAnnouncement()
       }
       showToast("Ogłoszenie zostało usunięte", "info")
     }
@@ -1146,7 +1333,28 @@ function ManagerDashboard() {
 
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5">
+                            <span
+                              className="w-3 h-3 rounded-full shrink-0 border border-black/15 shadow-2xs"
+                              style={{ backgroundColor: r.color || "#8b5cf6" }}
+                              title={`Kolor lokalu: ${r.color || "#8b5cf6"}`}
+                            />
                             <p className="text-sm font-bold truncate">{r.name}</p>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setEditingVenueColor({
+                                  id: r.restaurant_id,
+                                  name: r.name,
+                                  color: r.color || "#8b5cf6",
+                                })
+                                setTempVenueColor(r.color || "#8b5cf6")
+                              }}
+                              className="text-xs p-0.5 text-zinc-400 hover:text-zinc-800 rounded hover:bg-black/5"
+                              title="Zmień kolor lokalu"
+                            >
+                              🎨
+                            </button>
                             {isDefault && (
                               <span
                                 className={`text-[10px] font-semibold px-1.5 py-0.2 rounded ${
@@ -1244,6 +1452,13 @@ function ManagerDashboard() {
                   <span className="truncate">To-do list</span>
                 </TabsTrigger>
                 <TabsTrigger
+                  value="reservations"
+                  className="shrink-0 md:shrink md:flex-1 min-w-0 justify-center px-2.5 md:px-1.5 lg:px-2.5 xl:px-3 py-1.5 text-xs lg:text-xs xl:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1"
+                >
+                  <span className="shrink-0">🛎️</span>
+                  <span className="truncate">Rezerwacje</span>
+                </TabsTrigger>
+                <TabsTrigger
                   value="inventory"
                   className="shrink-0 md:shrink md:flex-1 min-w-0 justify-center px-2.5 md:px-1.5 lg:px-2.5 xl:px-3 py-1.5 text-xs lg:text-xs xl:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1"
                 >
@@ -1265,7 +1480,7 @@ function ManagerDashboard() {
 
             {/* 2. ZAKŁADKA KALENDARZA */}
             <TabsContent value="calendar" keepMounted className="mt-6">
-              <ShiftCalendar restaurantId={activeRestaurantId} />
+              <ShiftCalendar restaurantId={activeRestaurantId} isManager={true} />
             </TabsContent>
 
             {/* 3. ZAKŁADKA OBECNOŚCI I PREMII */}
@@ -1274,6 +1489,8 @@ function ManagerDashboard() {
                 restaurantId={activeRestaurantId}
                 staff={staff}
                 roles={roles}
+                currentUserId={currentUserId}
+                currentUserName={userName}
               />
             </TabsContent>
 
@@ -1572,14 +1789,27 @@ function ManagerDashboard() {
             {/* 6. ZAKŁADKA: TABLICA OGŁOSZEŃ */}
             <TabsContent value="announcements" keepMounted className="mt-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <Card className="col-span-1 h-fit">
+                <Card id="announcement-form-card" className="col-span-1 h-fit">
                   <CardHeader>
-                    <CardTitle>Nowe Ogłoszenie</CardTitle>
-                    <CardDescription>Opublikuj komunikat dla zespołu.</CardDescription>
+                    <div className="flex items-center justify-between">
+                      <CardTitle>
+                        {editingAnnouncementId ? "Edycja Ogłoszenia" : "Nowe Ogłoszenie"}
+                      </CardTitle>
+                      {editingAnnouncementId && (
+                        <span className="px-2 py-0.5 text-[10px] font-semibold bg-blue-100 text-blue-800 rounded">
+                          Tryb edycji
+                        </span>
+                      )}
+                    </div>
+                    <CardDescription>
+                      {editingAnnouncementId
+                        ? "Zaktualizuj treść, daty, zdjęcie lub retencję ogłoszenia."
+                        : "Opublikuj komunikat dla zespołu."}
+                    </CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <form onSubmit={handleCreateAnnouncement} className="space-y-4">
-                      <div className="space-y-2">
+                    <form onSubmit={handleSaveAnnouncement} className="space-y-4">
+                      <div className="space-y-1.5">
                         <Label>Tytuł ogłoszenia</Label>
                         <Input 
                           placeholder="Wpisz tytuł..." 
@@ -1588,7 +1818,7 @@ function ManagerDashboard() {
                           required 
                         />
                       </div>
-                      <div className="space-y-2">
+                      <div className="space-y-1.5">
                         <Label>Treść</Label>
                         <textarea 
                           rows={4}
@@ -1598,6 +1828,51 @@ function ManagerDashboard() {
                           required
                           className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         />
+                      </div>
+
+                      {/* ZDJĘCIE OGŁOSZENIA / PLAKAT */}
+                      <div className="space-y-1.5">
+                        <Label className="text-xs font-semibold text-zinc-700">Zdjęcie lub plakat (opcjonalnie)</Label>
+                        {announcementImagePreview ? (
+                          <div className="relative rounded-lg overflow-hidden border border-zinc-200 bg-zinc-50 p-2">
+                            <div className="relative max-h-48 w-full overflow-hidden rounded bg-black/5 flex items-center justify-center">
+                              <img
+                                src={announcementImagePreview}
+                                alt="Podgląd ogłoszenia"
+                                className="max-h-48 w-full object-contain rounded"
+                              />
+                            </div>
+                            <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                              <span className="font-medium text-emerald-600">✓ WebP (max 1200px)</span>
+                              <button
+                                type="button"
+                                onClick={handleClearSelectedImage}
+                                className="text-red-600 hover:text-red-700 font-semibold cursor-pointer"
+                              >
+                                Usuń zdjęcie
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div>
+                            <input
+                              ref={announcementFileInputRef}
+                              type="file"
+                              accept="image/*"
+                              onChange={handleImageSelect}
+                              className="hidden"
+                              id="announcement-image-input"
+                            />
+                            <label
+                              htmlFor="announcement-image-input"
+                              className="flex flex-col items-center justify-center border-2 border-dashed border-zinc-300 hover:border-zinc-400 rounded-lg p-4 cursor-pointer bg-zinc-50 hover:bg-zinc-100 transition-colors text-center"
+                            >
+                              <span className="text-2xl mb-1">🖼️</span>
+                              <span className="text-xs font-semibold text-zinc-700">Wybierz plik graficzny</span>
+                              <span className="text-[11px] text-zinc-400">Automatyczne skalowanie do 1200px (WebP 0.8)</span>
+                            </label>
+                          </div>
+                        )}
                       </div>
 
                       <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 space-y-3">
@@ -1621,16 +1896,51 @@ function ManagerDashboard() {
                         </div>
                       </div>
 
-                      <label className="flex items-center gap-2 text-sm text-zinc-700 cursor-pointer select-none">
-                        <input 
-                          type="checkbox" 
-                          checked={newAnnouncementPinned}
-                          onChange={e => setNewAnnouncementPinned(e.target.checked)}
-                          className="rounded border-zinc-300"
-                        />
-                        Przypnij na górze tablicy 📌
-                      </label>
-                      <Button type="submit" className="w-full">Opublikuj ogłoszenie</Button>
+                      <div className="space-y-2 pt-1">
+                        <label className="flex items-center gap-2 text-sm text-zinc-700 cursor-pointer select-none">
+                          <input 
+                            type="checkbox" 
+                            checked={newAnnouncementPinned}
+                            onChange={e => setNewAnnouncementPinned(e.target.checked)}
+                            className="rounded border-zinc-300"
+                          />
+                          Przypnij na górze tablicy 📌
+                        </label>
+
+                        <label className="flex items-start gap-2 text-sm text-zinc-700 cursor-pointer select-none">
+                          <input 
+                            type="checkbox" 
+                            checked={newAnnouncementKeepInHistory}
+                            onChange={e => setNewAnnouncementKeepInHistory(e.target.checked)}
+                            className="mt-0.5 rounded border-zinc-300"
+                          />
+                          <div className="flex flex-col">
+                            <span className="font-medium text-zinc-800">Zachowaj w historii po wygaśnięciu</span>
+                            <span className="text-[11px] text-zinc-500 leading-snug">
+                              Jeśli odznaczone, po 30 dniach od wygaśnięcia ogłoszenie zostanie automatycznie usunięte.
+                            </span>
+                          </div>
+                        </label>
+                      </div>
+
+                      <div className="flex items-center gap-2 pt-2">
+                        <Button type="submit" disabled={isUploadingImage} className="flex-1">
+                          {isUploadingImage
+                            ? "Przetwarzanie zdjęcia..."
+                            : editingAnnouncementId
+                            ? "Zapisz zmiany"
+                            : "Opublikuj ogłoszenie"}
+                        </Button>
+                        {editingAnnouncementId && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={handleCancelEditAnnouncement}
+                          >
+                            Anuluj
+                          </Button>
+                        )}
+                      </div>
                     </form>
                   </CardContent>
                 </Card>
@@ -1639,7 +1949,7 @@ function ManagerDashboard() {
                   <CardHeader>
                     <CardTitle>Tablica Ogłoszeń</CardTitle>
                     <CardDescription>
-                      Kliknij w ogłoszenie, aby otworzyć pełną treść.
+                      Kliknij w ogłoszenie, aby otworzyć pełną treść i powiększyć zdjęcie.
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
@@ -1670,10 +1980,22 @@ function ManagerDashboard() {
                                     <span className={`px-2 py-0.5 text-[11px] font-medium border rounded-full ${visBadge.className}`}>
                                       {visBadge.label}
                                     </span>
+                                    {item.keep_in_history && (
+                                      <span className="px-2 py-0.5 text-[11px] font-medium bg-purple-50 text-purple-700 border border-purple-200 rounded-full">
+                                        💾 W historii
+                                      </span>
+                                    )}
                                   </div>
                                   <h3 className="font-bold text-zinc-900 pt-0.5">{item.title}</h3>
                                 </div>
                                 <div className="flex items-center gap-2 shrink-0">
+                                  <Button 
+                                    variant="outline" 
+                                    size="sm"
+                                    onClick={(e) => handleStartEditAnnouncement(item, e)}
+                                  >
+                                    Edytuj
+                                  </Button>
                                   <Button 
                                     variant="outline" 
                                     size="sm"
@@ -1684,12 +2006,24 @@ function ManagerDashboard() {
                                   <Button 
                                     variant="destructive" 
                                     size="sm"
-                                    onClick={(e) => handleDeleteAnnouncement(item.id, e)}
+                                    onClick={(e) => handleDeleteAnnouncement(item, e)}
                                   >
                                     Usuń
                                   </Button>
                                 </div>
                               </div>
+
+                              {item.image_url && (
+                                <div className="mt-3 relative w-full h-44 sm:h-52 rounded-lg overflow-hidden border border-zinc-200 bg-zinc-100">
+                                  <img
+                                    src={item.image_url}
+                                    alt={item.title}
+                                    className="w-full h-full object-cover"
+                                    loading="lazy"
+                                  />
+                                </div>
+                              )}
+
                               <p className="mt-2.5 text-sm text-zinc-700 whitespace-pre-wrap line-clamp-3">
                                 {item.content}
                               </p>
@@ -1704,113 +2038,189 @@ function ManagerDashboard() {
             </TabsContent>
 
             {/* 7. ZAKŁADKA: TO-DO LIST */}
-            <TabsContent value="todos" keepMounted className="mt-6">
-              <Card>
-                <CardHeader>
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                    <div>
-                      <CardTitle>Lista Zadań (To-do)</CardTitle>
-                      <CardDescription>
-                        Zarządzaj zadaniami i sprawdzaj uwagi zgłoszone przez załogę.
-                      </CardDescription>
-                    </div>
-                    <Button onClick={() => tasks.openModal()} className="h-9">
-                      + Dodaj zadania
-                    </Button>
-                  </div>
+            <TabsContent value="todos" keepMounted className="mt-6 space-y-4">
+              {/* PRZEŁĄCZNIK WIDOKU TO-DO (LISTA DZIENNA vs EWIDENCJA) */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="inline-flex p-1 bg-zinc-100 rounded-lg">
+                  <button
+                    type="button"
+                    onClick={() => setTodoActiveTab("list")}
+                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                      todoActiveTab === "list"
+                        ? "bg-white text-zinc-900 shadow-2xs font-bold"
+                        : "text-zinc-600 hover:text-zinc-900"
+                    }`}
+                  >
+                    <span>📋 Lista dzienna</span>
+                    <span className="text-[11px] text-zinc-400 font-normal">
+                      ({formatDisplayDate(tasks.selectedDate)})
+                    </span>
+                  </button>
 
-                  <div className="mt-4 pt-4 border-t flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-center gap-1.5 w-full sm:w-auto min-w-0">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => tasks.goToPrevDay()}
-                        className="h-9 w-9 p-0 font-bold shrink-0 shadow-2xs"
-                        title="Poprzedni dzień"
-                      >
-                        ←
-                      </Button>
-
-                      <div className="relative flex-1 sm:flex-initial min-w-0 flex items-center justify-center gap-1.5 bg-zinc-50 hover:bg-zinc-100/90 border border-zinc-200 rounded-lg px-2.5 py-1.5 transition-colors cursor-pointer text-center shadow-2xs">
-                        <span className="text-xs font-bold text-zinc-900 truncate">
-                          📅 {getFriendlyDateLabel(tasks.selectedDate, todayStr)} • {formatDisplayDate(tasks.selectedDate)}
-                        </span>
-                        <input
-                          type="date"
-                          value={tasks.selectedDate}
-                          onChange={(e) => {
-                            if (e.target.value) tasks.setSelectedDate(e.target.value)
-                          }}
-                          className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
-                          title="Kliknij, aby wybrać inną datę"
-                        />
-                      </div>
-
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => tasks.goToNextDay()}
-                        className="h-9 w-9 p-0 font-bold shrink-0 shadow-2xs"
-                        title="Następny dzień"
-                      >
-                        →
-                      </Button>
-
-                      {tasks.selectedDate !== todayStr && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => tasks.goToToday()}
-                          className="h-9 px-2 text-xs text-blue-600 hover:text-blue-700 font-bold shrink-0"
-                          title="Wróć do dzisiejszego dnia"
-                        >
-                          Dzisiaj
-                        </Button>
-                      )}
-                    </div>
-
-                    {tasks.dayTodos.length > 0 && (
-                      <span className="text-xs font-semibold px-3 py-1.5 rounded-full bg-zinc-100 text-zinc-700">
-                        Wykonano: {tasks.completedCount} / {tasks.dayTodos.length}
+                  <button
+                    type="button"
+                    onClick={() => setTodoActiveTab("analytics")}
+                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                      todoActiveTab === "analytics"
+                        ? "bg-white text-zinc-900 shadow-2xs font-bold"
+                        : "text-zinc-600 hover:text-zinc-900"
+                    }`}
+                  >
+                    <span>📊 Ewidencja i analiza wykonania</span>
+                    {tasks.todos.filter((t) => t.is_completed).length > 0 && (
+                      <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-100 text-emerald-800 font-bold">
+                        {tasks.todos.filter((t) => t.is_completed).length}
                       </span>
                     )}
-                  </div>
-                </CardHeader>
+                  </button>
+                </div>
 
-                <CardContent>
-                  {tasks.dayTodos.length === 0 ? (
-                    <div className="text-center py-12 space-y-3 border-2 border-dashed rounded-xl">
-                      <p className="text-sm text-zinc-500">
-                        Brak zadań zaplanowanych na dzień <strong className="text-zinc-800">{tasks.selectedDate}</strong>.
-                      </p>
-                      <Button variant="outline" size="sm" onClick={() => tasks.openModal()}>
-                        + Dodaj zadania na ten dzień
+                {todoActiveTab === "list" && (
+                  <Button onClick={() => tasks.openModal()} className="h-9">
+                    + Dodaj zadania
+                  </Button>
+                )}
+              </div>
+
+              {todoActiveTab === "list" ? (
+                <Card>
+                  <CardHeader>
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div>
+                        <CardTitle>Lista Zadań (To-do)</CardTitle>
+                        <CardDescription>
+                          Zarządzaj zadaniami, sprawdzaj kto je odznaczył oraz uwagi zgłoszone przez załogę.
+                        </CardDescription>
+                      </div>
+                      <Button onClick={() => tasks.openModal()} className="h-9">
+                        + Dodaj zadania
                       </Button>
                     </div>
-                  ) : (
-                    <div className="space-y-2.5">
-                      {tasks.dayTodos.map((todo) => (
-                        <TodoItemRow
-                          key={todo.id}
-                          todo={todo}
-                          roleColor={todo.assigned_role ? getRoleColor(todo.assigned_role) : null}
-                          staffMemberName={todo.assigned_user_id ? getStaffMemberName(todo.assigned_user_id) : null}
-                          onToggle={tasks.handleToggle}
-                          onUpdatePriority={tasks.handleUpdatePriority}
-                          onSaveNote={tasks.handleSaveNote}
-                          onDelete={tasks.handleDelete}
-                        />
-                      ))}
+
+                    <div className="mt-4 pt-4 border-t flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="flex items-center gap-1.5 w-full sm:w-auto min-w-0">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => tasks.goToPrevDay()}
+                          className="h-9 w-9 p-0 font-bold shrink-0 shadow-2xs"
+                          title="Poprzedni dzień"
+                        >
+                          ←
+                        </Button>
+
+                        <div className="relative flex-1 sm:flex-initial min-w-0 flex items-center justify-center gap-1.5 bg-zinc-50 hover:bg-zinc-100/90 border border-zinc-200 rounded-lg px-2.5 py-1.5 transition-colors cursor-pointer text-center shadow-2xs">
+                          <span className="text-xs font-bold text-zinc-900 truncate">
+                            📅 {getFriendlyDateLabel(tasks.selectedDate, todayStr)} • {formatDisplayDate(tasks.selectedDate)}
+                          </span>
+                          <input
+                            type="date"
+                            value={tasks.selectedDate}
+                            onChange={(e) => {
+                              if (e.target.value) tasks.setSelectedDate(e.target.value)
+                            }}
+                            className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                            title="Kliknij, aby wybrać inną datę"
+                          />
+                        </div>
+
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => tasks.goToNextDay()}
+                          className="h-9 w-9 p-0 font-bold shrink-0 shadow-2xs"
+                          title="Następny dzień"
+                        >
+                          →
+                        </Button>
+
+                        {tasks.selectedDate !== todayStr && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => tasks.goToToday()}
+                            className="h-9 px-2 text-xs text-blue-600 hover:text-blue-700 font-bold shrink-0"
+                            title="Wróć do dzisiejszego dnia"
+                          >
+                            Dzisiaj
+                          </Button>
+                        )}
+                      </div>
+
+                      {tasks.dayTodos.length > 0 && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-semibold px-3 py-1.5 rounded-full bg-zinc-100 text-zinc-700">
+                            Wykonano: {tasks.completedCount} / {tasks.dayTodos.length}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setTodoActiveTab("analytics")}
+                            className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
+                          >
+                            Zobacz ewidencję →
+                          </button>
+                        </div>
+                      )}
                     </div>
-                  )}
-                </CardContent>
-              </Card>
+                  </CardHeader>
+
+                  <CardContent>
+                    {tasks.dayTodos.length === 0 ? (
+                      <div className="text-center py-12 space-y-3 border-2 border-dashed rounded-xl">
+                        <p className="text-sm text-zinc-500">
+                          Brak zadań zaplanowanych na dzień <strong className="text-zinc-800">{tasks.selectedDate}</strong>.
+                        </p>
+                        <Button variant="outline" size="sm" onClick={() => tasks.openModal()}>
+                          + Dodaj zadania na ten dzień
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {tasks.dayTodos.map((todo) => (
+                          <TodoItemRow
+                            key={todo.id}
+                            todo={todo}
+                            roleColor={todo.assigned_role ? getRoleColor(todo.assigned_role) : null}
+                            staffMemberName={todo.assigned_user_id ? getStaffMemberName(todo.assigned_user_id) : null}
+                            completedByName={todo.completed_by_user_id ? getStaffMemberName(todo.completed_by_user_id) : null}
+                            onToggle={tasks.handleToggle}
+                            onUpdatePriority={tasks.handleUpdatePriority}
+                            onSaveNote={tasks.handleSaveNote}
+                            onDelete={tasks.handleDelete}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              ) : (
+                <TodoAnalyticsSection
+                  todos={tasks.todos}
+                  selectedDate={tasks.selectedDate}
+                  todayStr={todayStr}
+                  staff={staff}
+                  roles={roles}
+                  currentUserId={currentUserId}
+                  currentUserName={userName}
+                />
+              )}
             </TabsContent>
 
-            {/* 8. ZAKŁADKA MAGAZYNU */}
+            {/* 8. ZAKŁADKA REZERWACJI */}
+            <TabsContent value="reservations" keepMounted className="mt-6">
+              <ReservationsModule
+                restaurantId={activeRestaurantId}
+                restaurantName={restaurants.find((r) => r.restaurant_id === activeRestaurantId)?.name || "Lokal"}
+                currentUserId={currentUserId || undefined}
+                currentUserName={userName || undefined}
+                isManager={true}
+              />
+            </TabsContent>
+
+            {/* 9. ZAKŁADKA MAGAZYNU */}
             <TabsContent value="inventory" keepMounted className="mt-6">
               <InventoryModule restaurantId={activeRestaurantId} />
             </TabsContent>
@@ -1819,6 +2229,101 @@ function ManagerDashboard() {
         </div>
       </div>
 
+      {/* MODAL EDYCJI KOLORU LOKALU DLA MANAGERA */}
+      {editingVenueColor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl border w-full max-w-sm overflow-hidden p-6 space-y-4">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">🎨</span>
+                <h3 className="text-base font-bold text-zinc-900">
+                  Kolor lokalu: {editingVenueColor.name}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingVenueColor(null)}
+                className="text-zinc-400 hover:text-zinc-700 text-xl font-bold leading-none p-1"
+              >
+                ×
+              </button>
+            </div>
+
+            <p className="text-xs text-zinc-500">
+              Wybierz kolor reprezentujący ten lokal w kalendarzu wielolokacyjnym (widok „Wszystkie lokale”).
+            </p>
+
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { name: "Fioletowy", value: "#8b5cf6" },
+                  { name: "Pomarańczowy", value: "#f97316" },
+                  { name: "Niebieski", value: "#2563eb" },
+                  { name: "Szmaragdowy", value: "#10b981" },
+                  { name: "Różowy", value: "#ec4899" },
+                  { name: "Morski", value: "#0d9488" },
+                  { name: "Bursztynowy", value: "#f59e0b" },
+                  { name: "Indygo", value: "#6366f1" },
+                  { name: "Grafitowy", value: "#475569" },
+                ].map((c) => (
+                  <button
+                    key={c.value}
+                    type="button"
+                    onClick={() => setTempVenueColor(c.value)}
+                    className={`p-2 rounded-xl border flex flex-col items-center gap-1.5 transition-all text-center ${
+                      tempVenueColor.toLowerCase() === c.value.toLowerCase()
+                        ? "border-zinc-900 ring-2 ring-zinc-900 bg-zinc-50 shadow-2xs font-bold"
+                        : "border-zinc-200 bg-white hover:bg-zinc-50"
+                    }`}
+                  >
+                    <span
+                      className="w-5 h-5 rounded-full shadow-2xs border border-black/10"
+                      style={{ backgroundColor: c.value }}
+                    />
+                    <span className="text-[11px] text-zinc-700">{c.name}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2 pt-2 border-t">
+                <span className="text-xs font-semibold text-zinc-600">Dowolny hex:</span>
+                <Input
+                  type="text"
+                  value={tempVenueColor}
+                  onChange={(e) => setTempVenueColor(e.target.value)}
+                  className="h-8 text-xs font-mono w-28 uppercase"
+                />
+                <span
+                  className="w-8 h-8 rounded-lg border border-black/10 shadow-2xs shrink-0"
+                  style={{ backgroundColor: tempVenueColor }}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setEditingVenueColor(null)}
+                disabled={savingVenueColor}
+              >
+                Anuluj
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleSaveVenueColor}
+                disabled={savingVenueColor}
+                className="font-bold"
+              >
+                {savingVenueColor ? "Zapis..." : "Zapisz kolor"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* POP-UP PODGLĄDU OGŁOSZENIA */}
       {selectedAnnouncementModal && (
         <div
@@ -1826,33 +2331,100 @@ function ManagerDashboard() {
           onClick={() => setSelectedAnnouncementModal(null)}
         >
           <div
-            className="bg-white rounded-xl shadow-xl border w-full max-w-2xl overflow-hidden"
+            className="bg-white rounded-xl shadow-xl border w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-4 px-6 py-4 border-b bg-zinc-50">
               <div className="space-y-1">
-                <h2 className="text-xl font-bold text-zinc-900">
+                <div className="flex flex-wrap items-center gap-2">
+                  {selectedAnnouncementModal.is_pinned && (
+                    <span className="px-2.5 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-800 rounded-full">
+                      📌 Przypięte
+                    </span>
+                  )}
+                  {selectedAnnouncementModal.visible_until && (
+                    <span className="px-2.5 py-0.5 text-[11px] font-medium bg-zinc-100 text-zinc-600 rounded-full">
+                      Aktualne do: {selectedAnnouncementModal.visible_until}
+                    </span>
+                  )}
+                  {selectedAnnouncementModal.keep_in_history && (
+                    <span className="px-2.5 py-0.5 text-[11px] font-medium bg-purple-50 text-purple-700 rounded-full">
+                      💾 Zachowane w historii
+                    </span>
+                  )}
+                </div>
+                <h2 className="text-xl font-bold text-zinc-900 pt-1">
                   {selectedAnnouncementModal.title}
                 </h2>
+                <p className="text-xs text-zinc-400">
+                  Opublikowano:{" "}
+                  {new Date(selectedAnnouncementModal.created_at).toLocaleString("pl-PL", {
+                    dateStyle: "long",
+                    timeStyle: "short",
+                  })}
+                </p>
               </div>
               <button
                 type="button"
                 onClick={() => setSelectedAnnouncementModal(null)}
-                className="text-zinc-400 hover:text-zinc-700 text-2xl font-bold leading-none px-2"
+                className="text-zinc-400 hover:text-zinc-700 text-2xl font-bold leading-none px-2 cursor-pointer"
               >
                 ×
               </button>
             </div>
 
-            <div className="p-6 max-h-[65vh] overflow-y-auto">
+            <div className="p-6 overflow-y-auto space-y-4">
+              {selectedAnnouncementModal.image_url && (
+                <div className="rounded-xl overflow-hidden border border-zinc-200 bg-zinc-900/5 flex items-center justify-center p-1">
+                  <img
+                    src={selectedAnnouncementModal.image_url}
+                    alt={selectedAnnouncementModal.title}
+                    className="w-full max-h-[45vh] object-contain rounded-lg cursor-zoom-in hover:opacity-95 transition-opacity"
+                    onClick={() => setFullScreenImageModalUrl(selectedAnnouncementModal.image_url)}
+                    title="Kliknij, aby powiększyć zdjęcie"
+                  />
+                </div>
+              )}
               <p className="text-sm text-zinc-800 whitespace-pre-wrap leading-relaxed">
                 {selectedAnnouncementModal.content}
               </p>
             </div>
 
-            <div className="px-6 py-4 bg-zinc-50 border-t flex items-center justify-end">
-              <Button onClick={() => setSelectedAnnouncementModal(null)}>Zamknij</Button>
+            <div className="px-6 py-4 bg-zinc-50 border-t flex items-center justify-between">
+              <Button
+                variant="outline"
+                onClick={() => handleStartEditAnnouncement(selectedAnnouncementModal)}
+              >
+                Edytuj ogłoszenie
+              </Button>
+              <Button onClick={() => setSelectedAnnouncementModal(null)}>
+                Zamknij
+              </Button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* LIGHTBOX PEŁNOEKRANOWY DLA ZDJĘĆ OGŁOSZEŃ */}
+      {fullScreenImageModalUrl && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 p-4 backdrop-blur-xs"
+          onClick={() => setFullScreenImageModalUrl(null)}
+        >
+          <div className="relative max-w-4xl max-h-[90vh]">
+            <button
+              type="button"
+              onClick={() => setFullScreenImageModalUrl(null)}
+              className="absolute -top-10 right-0 text-white text-3xl font-bold hover:text-zinc-300 cursor-pointer"
+            >
+              ×
+            </button>
+            <img
+              src={fullScreenImageModalUrl}
+              alt="Powiększone zdjęcie ogłoszenia"
+              className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            />
           </div>
         </div>
       )}

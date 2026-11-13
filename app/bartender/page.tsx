@@ -27,6 +27,7 @@ import type { RestaurantRole } from "@/types/restaurant"
 import type { StaffMembership, Teammate } from "@/types/staff"
 import type { Category, Product } from "@/types/inventory"
 import { PriorityIcon } from "@/components/PriorityIcon"
+import { ReservationsModule } from "@/components/ReservationsModule"
 import { fetchTodos, toggleTodoCompleted, saveTodoNote } from "@/services/tasksService"
 import { fetchAnnouncements } from "@/services/announcementsService"
 
@@ -63,6 +64,7 @@ function StaffTodoRow({
   todo,
   currentUserId,
   assignedUserName,
+  completedByName,
   roleColor,
   onToggle,
   onSaveNote,
@@ -70,6 +72,7 @@ function StaffTodoRow({
   todo: TodoItem
   currentUserId: string | null
   assignedUserName: string | null
+  completedByName: string | null
   roleColor: string | null
   onToggle: (todo: TodoItem) => void
   onSaveNote: (todoId: string, noteText: string | null) => Promise<void>
@@ -114,14 +117,26 @@ function StaffTodoRow({
             <PriorityIcon priority={priority} />
           </div>
 
-          <span
-            onClick={() => onToggle(todo)}
-            className={`text-sm font-medium cursor-pointer select-none leading-snug break-words flex-1 ${
-              todo.is_completed ? "line-through text-zinc-400" : "text-zinc-900"
-            }`}
-          >
-            {todo.task}
-          </span>
+          <div className="flex flex-col flex-1 min-w-0">
+            <span
+              onClick={() => onToggle(todo)}
+              className={`text-sm font-medium cursor-pointer select-none leading-snug break-words ${
+                todo.is_completed ? "line-through text-zinc-400" : "text-zinc-900"
+              }`}
+            >
+              {todo.task}
+            </span>
+            {todo.is_completed && (
+              <span className="text-[11px] text-emerald-700 font-medium inline-flex items-center gap-1 mt-0.5">
+                ✓ Wykonane{completedByName ? `: ${completedByName}` : ""}
+                {todo.completed_at && (
+                  <span className="text-zinc-400 font-normal">
+                    ({new Date(todo.completed_at).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" })})
+                  </span>
+                )}
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0 pl-8.5 sm:pl-0">
@@ -283,6 +298,7 @@ function BartenderDashboard() {
   const [teammates, setTeammates] = useState<Teammate[]>([])
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [selectedAnnouncementModal, setSelectedAnnouncementModal] = useState<Announcement | null>(null)
+  const [fullScreenImageModalUrl, setFullScreenImageModalUrl] = useState<string | null>(null)
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [products, setProducts] = useState<Product[]>([])
@@ -294,6 +310,27 @@ function BartenderDashboard() {
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null)
   const [showShortagesOnly, setShowShortagesOnly] = useState<boolean>(false)
   const [productSearch, setProductSearch] = useState<string>("")
+  const [productViewMode, setProductViewMode] = useState<"grid" | "list">("grid")
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("bartender_product_view_mode")
+      if (saved === "list" || saved === "grid") {
+        setProductViewMode(saved)
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  const handleSetProductViewMode = (mode: "grid" | "list") => {
+    setProductViewMode(mode)
+    try {
+      localStorage.setItem("bartender_product_view_mode", mode)
+    } catch {
+      // ignore
+    }
+  }
   const [sortBy, setSortBy] = useState<"smart_asc" | "smart_desc" | "name_asc">("smart_asc")
 
   const [loading, setLoading] = useState<boolean>(true)
@@ -581,16 +618,28 @@ function BartenderDashboard() {
   // --- AKCJE TO-DO LIST ---
   const handleToggleTodo = async (todo: TodoItem) => {
     const updatedStatus = !todo.is_completed
+    const actingUserId = updatedStatus ? currentUserId : null
+    const completedAt = updatedStatus ? new Date().toISOString() : null
+
     setTodos((prev) =>
-      prev.map((t) => (t.id === todo.id ? { ...t, is_completed: updatedStatus } : t))
+      prev.map((t) =>
+        t.id === todo.id
+          ? {
+              ...t,
+              is_completed: updatedStatus,
+              completed_by_user_id: actingUserId,
+              completed_at: completedAt,
+            }
+          : t
+      )
     )
 
-    const { error } = await toggleTodoCompleted(todo.id, updatedStatus)
+    const { error } = await toggleTodoCompleted(todo.id, updatedStatus, actingUserId)
 
     if (error) {
       showToast("Nie udało się zaktualizować zadania: " + error, "error")
       setTodos((prev) =>
-        prev.map((t) => (t.id === todo.id ? { ...t, is_completed: todo.is_completed } : t))
+        prev.map((t) => (t.id === todo.id ? todo : t))
       )
     }
   }
@@ -724,6 +773,198 @@ function BartenderDashboard() {
     : []
 
   const myRoleColor = getRoleColor(userRole)
+
+  const renderStaffProductViewModeToggle = () => (
+    <div className="inline-flex items-center rounded-lg border border-zinc-200 bg-zinc-100 p-0.5 shadow-2xs">
+      <button
+        type="button"
+        onClick={() => handleSetProductViewMode("grid")}
+        className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md transition-all ${
+          productViewMode === "grid"
+            ? "bg-white text-zinc-900 shadow-2xs font-bold"
+            : "text-zinc-600 hover:text-zinc-900"
+        }`}
+        title="Widok kafelków"
+      >
+        <span>▦</span>
+        <span className="hidden sm:inline">Kafelki</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => handleSetProductViewMode("list")}
+        className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-md transition-all ${
+          productViewMode === "list"
+            ? "bg-white text-zinc-900 shadow-2xs font-bold"
+            : "text-zinc-600 hover:text-zinc-900"
+        }`}
+        title="Widok listy"
+      >
+        <span>☰</span>
+        <span className="hidden sm:inline">Lista</span>
+      </button>
+    </div>
+  )
+
+  const renderStaffProductListView = (productsToRender: Product[], showCategoryBadge = false) => {
+    return (
+      <div className="rounded-xl border border-zinc-200 bg-white overflow-hidden shadow-2xs">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr className="border-b border-zinc-200 bg-zinc-50/90 text-[11px] font-bold text-zinc-500 uppercase tracking-wider">
+                <th className="py-2.5 px-3 w-12 text-center">Foto</th>
+                <th className="py-2.5 px-4 min-w-[200px]">Produkt</th>
+                <th className="py-2.5 px-3 text-center w-24">Jednostka</th>
+                <th className="py-2.5 px-3 text-center w-32">Próg min.</th>
+                <th className="py-2.5 px-4 text-center w-56">Stan</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-200/80">
+              {productsToRender.map((prod) => {
+                const isZero = Number(prod.quantity) <= 0
+                const isBelowThreshold = !isZero && Number(prod.quantity) < Number(prod.min_quantity)
+
+                return (
+                  <tr
+                    key={prod.id}
+                    className={`transition-colors ${
+                      isZero
+                        ? "bg-red-50/40 hover:bg-red-50/70 border-l-4 border-l-red-500"
+                        : isBelowThreshold
+                        ? "bg-amber-50/40 hover:bg-amber-50/70 border-l-4 border-l-amber-500"
+                        : "hover:bg-zinc-50/70 border-l-4 border-l-transparent"
+                    }`}
+                  >
+                    {/* Foto */}
+                    <td className="py-2 px-3 text-center">
+                      <div className="relative w-9 h-9 rounded-lg bg-zinc-100 border border-zinc-200 overflow-hidden flex items-center justify-center mx-auto shrink-0 shadow-2xs">
+                        {prod.image_url ? (
+                          <Image
+                            src={prod.image_url}
+                            alt={prod.name}
+                            fill
+                            sizes="40px"
+                            className="object-cover"
+                            unoptimized
+                          />
+                        ) : (
+                          <span className="text-sm">🍾</span>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* Produkt + Badges */}
+                    <td className="py-2.5 px-4">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-bold text-zinc-900 text-sm">{prod.name}</span>
+                        {isZero && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-red-600 text-white shadow-2xs">
+                            BRAK (0)
+                          </span>
+                        )}
+                        {isBelowThreshold && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-amber-500 text-white shadow-2xs">
+                            PONIŻEJ PROGU
+                          </span>
+                        )}
+                        {showCategoryBadge && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-100 text-zinc-600 border border-zinc-200">
+                            📁 {getCategoryName(prod.category_id)}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* Jednostka */}
+                    <td className="py-2.5 px-3 text-center">
+                      <span className="px-2 py-0.5 rounded bg-zinc-100 text-zinc-700 font-semibold text-[11px] border border-zinc-200">
+                        {prod.unit}
+                      </span>
+                    </td>
+
+                    {/* Próg min. */}
+                    <td className="py-2.5 px-3 text-center text-zinc-500 font-medium">
+                      {prod.min_quantity > 0 ? `${prod.min_quantity} ${prod.unit}` : "—"}
+                    </td>
+
+                    {/* Stan magazynowy */}
+                    <td className="py-2.5 px-4 text-center">
+                      <div className="inline-flex items-center justify-center gap-1">
+                        {!isZero ? (
+                          <button
+                            type="button"
+                            onClick={() => handleSaveQuantityToDb(prod.id, 0)}
+                            title="Wyzeruj stan (0)"
+                            className="h-8 px-2 rounded-md border border-zinc-300 bg-white text-zinc-600 hover:text-red-600 hover:border-red-300 font-bold text-xs shadow-2xs active:scale-95 transition-all"
+                          >
+                            0
+                          </button>
+                        ) : (
+                          <div className="w-6" />
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleSaveQuantityToDb(prod.id, Number((prod.quantity - 1).toFixed(2)))
+                          }
+                          className="w-8 h-8 rounded-lg border border-zinc-300 bg-white hover:bg-zinc-100 active:scale-95 text-base font-black shrink-0 shadow-2xs flex items-center justify-center transition-all"
+                        >
+                          -
+                        </button>
+
+                        <Input
+                          type="number"
+                          step="any"
+                          min="0"
+                          value={prod.quantity}
+                          onChange={(e) => handleQuantityChangeLocal(prod.id, e.target.value)}
+                          onBlur={(e) =>
+                            handleSaveQuantityToDb(prod.id, parseFloat(e.target.value) || 0)
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") e.currentTarget.blur()
+                          }}
+                          className="h-8 w-16 px-1.5 text-center text-xs font-black bg-white"
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleSaveQuantityToDb(prod.id, Number((prod.quantity + 1).toFixed(2)))
+                          }
+                          className="w-8 h-8 rounded-lg border border-zinc-300 bg-white hover:bg-zinc-100 active:scale-95 text-base font-black shrink-0 shadow-2xs flex items-center justify-center transition-all"
+                        >
+                          +
+                        </button>
+
+                        <span className="text-zinc-600 text-xs font-semibold min-w-[28px]">
+                          {prod.unit}
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    )
+  }
+
+  const renderStaffProductsContainer = (productsToRender: Product[], showCategoryBadge = false) => {
+    if (productsToRender.length === 0) {
+      return null
+    }
+    return productViewMode === "list"
+      ? renderStaffProductListView(productsToRender, showCategoryBadge)
+      : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+          {productsToRender.map((prod) => renderStaffProductCard(prod, showCategoryBadge))}
+        </div>
+      )
+  }
 
   const renderStaffProductCard = (prod: Product, showCategoryBadge = false) => {
     const isZero = Number(prod.quantity) <= 0
@@ -1026,6 +1267,13 @@ function BartenderDashboard() {
                   )}
                 </TabsTrigger>
                 <TabsTrigger
+                  value="reservations"
+                  className="shrink-0 md:shrink md:flex-1 min-w-0 justify-center px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"
+                >
+                  <span className="shrink-0">🛎️</span>
+                  <span className="truncate">Rezerwacje</span>
+                </TabsTrigger>
+                <TabsTrigger
                   value="inventory"
                   className="shrink-0 md:shrink md:flex-1 min-w-0 justify-center px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg data-active:bg-white data-active:text-zinc-900 data-active:shadow-xs transition-all flex items-center gap-1.5"
                 >
@@ -1185,6 +1433,13 @@ function BartenderDashboard() {
                               ? getTeammateName(todo.assigned_user_id)
                               : null
                           }
+                          completedByName={
+                            todo.completed_by_user_id === currentUserId
+                              ? "Ty"
+                              : todo.completed_by_user_id
+                              ? getTeammateName(todo.completed_by_user_id)
+                              : null
+                          }
                           roleColor={
                             todo.assigned_role ? getRoleColor(todo.assigned_role) : null
                           }
@@ -1239,6 +1494,16 @@ function BartenderDashboard() {
                               })}
                             </span>
                           </div>
+                          {item.image_url && (
+                            <div className="mt-2.5 relative w-full h-44 sm:h-52 rounded-lg overflow-hidden border border-zinc-200 bg-zinc-100">
+                              <img
+                                src={item.image_url}
+                                alt={item.title}
+                                className="w-full h-full object-cover"
+                                loading="lazy"
+                              />
+                            </div>
+                          )}
                           <p className="mt-2 text-sm text-zinc-700 whitespace-pre-wrap line-clamp-3 leading-relaxed">
                             {item.content}
                           </p>
@@ -1334,8 +1599,14 @@ function BartenderDashboard() {
                   {(selectedCategory ||
                     showShortagesOnly ||
                     productSearch.trim() !== "") && (
-                    <div className="mt-4 pt-3 border-t flex items-center justify-end gap-2">
-                      <span className="text-xs text-zinc-500">Sortuj:</span>
+                    <div className="mt-4 pt-3 border-t flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs text-zinc-500">Widok:</span>
+                        {renderStaffProductViewModeToggle()}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-zinc-500">Sortuj:</span>
                       <select
                         value={sortBy}
                         onChange={(e) => setSortBy(e.target.value as "smart_asc" | "smart_desc" | "name_asc")}
@@ -1350,7 +1621,8 @@ function BartenderDashboard() {
                         <option value="name_asc">Tylko alfabetycznie (A–Z)</option>
                       </select>
                     </div>
-                  )}
+                  </div>
+                )}
                 </CardHeader>
 
                 <CardContent>
@@ -1360,11 +1632,7 @@ function BartenderDashboard() {
                         Nie znaleziono produktu pasującego do „{productSearch}”.
                       </div>
                     ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                        {searchedProducts.map((prod) =>
-                          renderStaffProductCard(prod, true)
-                        )}
-                      </div>
+                      renderStaffProductsContainer(searchedProducts, true)
                     )
                   ) : showShortagesOnly ? (
                     shortageProducts.length === 0 ? (
@@ -1374,11 +1642,7 @@ function BartenderDashboard() {
                         </p>
                       </div>
                     ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                        {shortageProducts.map((prod) =>
-                          renderStaffProductCard(prod, true)
-                        )}
-                      </div>
+                      renderStaffProductsContainer(shortageProducts, true)
                     )
                   ) : selectedCategory ? (
                     categoryProducts.length === 0 ? (
@@ -1386,11 +1650,7 @@ function BartenderDashboard() {
                         Brak produktów w tej kategorii.
                       </div>
                     ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                        {categoryProducts.map((prod) =>
-                          renderStaffProductCard(prod, false)
-                        )}
-                      </div>
+                      renderStaffProductsContainer(categoryProducts, false)
                     )
                   ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
@@ -1445,12 +1705,22 @@ function BartenderDashboard() {
               </Card>
             </TabsContent>
 
+            <TabsContent value="reservations" keepMounted className="mt-6">
+              <ReservationsModule
+                restaurantId={restaurantId}
+                restaurantName={restaurantName}
+                currentUserId={currentUserId || undefined}
+                currentUserName={userName || undefined}
+                isManager={false}
+              />
+            </TabsContent>
+
             <TabsContent value="schedule" keepMounted className="mt-6 space-y-6">
               <StaffScheduleModule
                 restaurantId={restaurantId}
                 currentUserId={currentUserId}
               />
-              <ShiftCalendar />
+              <ShiftCalendar restaurantId={restaurantId} isManager={false} />
             </TabsContent>
 
             <TabsContent value="attendance" keepMounted className="mt-6 space-y-4">
@@ -1558,7 +1828,7 @@ function BartenderDashboard() {
           onClick={() => setSelectedAnnouncementModal(null)}
         >
           <div
-            className="bg-white rounded-xl shadow-xl border w-full max-w-2xl overflow-hidden"
+            className="bg-white rounded-xl shadow-xl border w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-4 px-6 py-4 border-b bg-zinc-50">
@@ -1592,13 +1862,24 @@ function BartenderDashboard() {
               <button
                 type="button"
                 onClick={() => setSelectedAnnouncementModal(null)}
-                className="text-zinc-400 hover:text-zinc-700 text-2xl font-bold leading-none px-2"
+                className="text-zinc-400 hover:text-zinc-700 text-2xl font-bold leading-none px-2 cursor-pointer"
               >
                 ×
               </button>
             </div>
 
-            <div className="p-6 max-h-[65vh] overflow-y-auto">
+            <div className="p-6 overflow-y-auto space-y-4">
+              {selectedAnnouncementModal.image_url && (
+                <div className="rounded-xl overflow-hidden border border-zinc-200 bg-zinc-900/5 flex items-center justify-center p-1">
+                  <img
+                    src={selectedAnnouncementModal.image_url}
+                    alt={selectedAnnouncementModal.title}
+                    className="w-full max-h-[45vh] object-contain rounded-lg cursor-zoom-in hover:opacity-95 transition-opacity"
+                    onClick={() => setFullScreenImageModalUrl(selectedAnnouncementModal.image_url)}
+                    title="Kliknij, aby powiększyć zdjęcie"
+                  />
+                </div>
+              )}
               <p className="text-sm text-zinc-800 whitespace-pre-wrap leading-relaxed">
                 {selectedAnnouncementModal.content}
               </p>
@@ -1609,6 +1890,30 @@ function BartenderDashboard() {
                 Zamknij
               </Button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* LIGHTBOX PEŁNOEKRANOWY DLA ZDJĘĆ OGŁOSZEŃ */}
+      {fullScreenImageModalUrl && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 p-4 backdrop-blur-xs"
+          onClick={() => setFullScreenImageModalUrl(null)}
+        >
+          <div className="relative max-w-4xl max-h-[90vh]">
+            <button
+              type="button"
+              onClick={() => setFullScreenImageModalUrl(null)}
+              className="absolute -top-10 right-0 text-white text-3xl font-bold hover:text-zinc-300 cursor-pointer"
+            >
+              ×
+            </button>
+            <img
+              src={fullScreenImageModalUrl}
+              alt="Powiększone zdjęcie ogłoszenia"
+              className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            />
           </div>
         </div>
       )}

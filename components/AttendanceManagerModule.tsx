@@ -1,6 +1,8 @@
-﻿"use client"
+"use client"
 
-import { useEffect, useState } from "react"
+import { resolveRevenueFields, DEFAULT_REVENUE_FIELD_PRESETS } from "@/types/attendance"
+
+import { useEffect, useState, useMemo } from "react"
 import { supabase } from "@/lib/supabase"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -31,6 +33,8 @@ export type BonusRuleType =
   | "overtime_per_hour"
   | "hours_fixed_bonus"
 
+export type BonusScheduleType = "all" | "weekdays" | "specific_dates"
+
 export type BonusRule = {
   id: string
   restaurant_id: string
@@ -41,6 +45,9 @@ export type BonusRule = {
   param_z: number
   assigned_role: string | null
   is_active: boolean
+  schedule_type?: BonusScheduleType | null
+  applicable_days?: number[] | null // 1=Pon, 2=Wt, 3=Śr, 4=Czw, 5=Pt, 6=Sob, 0=Nd
+  applicable_dates?: string[] | null // np. ['2026-12-31']
 }
 
 export type AttendanceLog = {
@@ -55,11 +62,26 @@ export type AttendanceLog = {
   created_at: string
 }
 
+export type RevenueBreakdown = Record<string, number>
+
+export type RevenueField = {
+  id: string
+  restaurant_id: string
+  name: string
+  is_active: boolean
+  sort_order: number
+  include_in_total?: boolean
+  deduct_previous_day?: boolean
+}
+
 export type DailyRevenue = {
   id: string
   restaurant_id: string
   work_date: string
   amount: number
+  breakdown?: RevenueBreakdown | null
+  updated_by?: string | null
+  updated_at?: string | null
 }
 
 export type ManualBonus = {
@@ -71,23 +93,57 @@ export type ManualBonus = {
   reason: string
 }
 
+const WEEKDAY_SHORT_LABELS: Record<number, string> = {
+  1: "Pon",
+  2: "Wt",
+  3: "Śr",
+  4: "Czw",
+  5: "Pt",
+  6: "Sob",
+  0: "Nd",
+}
+
+export const formatBonusRuleScheduleLabel = (rule: BonusRule): string => {
+  if (rule.schedule_type === "weekdays" && rule.applicable_days && rule.applicable_days.length > 0) {
+    if (rule.applicable_days.length === 7) return "Cały tydzień"
+    const daysOrder = [1, 2, 3, 4, 5, 6, 0]
+    const matched = daysOrder.filter((d) => rule.applicable_days?.includes(d)).map((d) => WEEKDAY_SHORT_LABELS[d])
+    return `Dni: ${matched.join(", ")}`
+  }
+  if (rule.schedule_type === "specific_dates" && rule.applicable_dates && rule.applicable_dates.length > 0) {
+    return `Daty: ${rule.applicable_dates.join(", ")}`
+  }
+  return "Wszystkie dni"
+}
+
 export const formatBonusRuleSentence = (rule: BonusRule): string => {
   const x = Number(rule.param_x) || 0
   const y = Number(rule.param_y) || 0
   const z = Number(rule.param_z) || 0
 
+  let base = ""
   switch (rule.rule_type) {
     case "revenue_total_step":
-      return `Powyżej ${x} zł utargu dnia: od każdych ${y} zł nadwyżki → +${z} zł`
+      base = `Powyżej ${x} zł utargu dnia: od każdych ${y} zł nadwyżki → +${z} zł`
+      break
     case "revenue_per_worker_step":
-      return `Powyżej ${x} zł utargu na pracownika w pracy: od każdych ${y} zł → +${z} zł`
+      base = `Powyżej ${x} zł utargu na pracownika w pracy: od każdych ${y} zł → +${z} zł`
+      break
     case "overtime_per_hour":
-      return `Powyżej ${x} przepracowanych godzin w mies.: +${y} zł za każdą dodatkową godzinę`
+      base = `Powyżej ${x} przepracowanych godzin w mies.: +${y} zł za każdą dodatkową godzinę`
+      break
     case "hours_fixed_bonus":
-      return `Powyżej ${x} przepracowanych godzin w mies.: stały dodatek +${y} zł`
+      base = `Powyżej ${x} przepracowanych godzin w mies.: stały dodatek +${y} zł`
+      break
     default:
-      return rule.name
+      base = rule.name
   }
+
+  const sched = formatBonusRuleScheduleLabel(rule)
+  if (sched !== "Wszystkie dni") {
+    return `${base} (${sched})`
+  }
+  return base
 }
 
 export function calculateUserMonthlyPayroll({
@@ -121,14 +177,15 @@ export function calculateUserMonthlyPayroll({
     totalHours += Number(log.hours_worked) || 0
   })
 
-  const basePay = totalHours * hourlyRate
+  const safeHourlyRate = Number(hourlyRate) || 0
+  const basePay = totalHours * safeHourlyRate
   let autoBonusPay = 0
   let manualBonusPay = 0
   const triggeredBonuses: { name: string; amount: number }[] = []
 
   const addTriggered = (name: string, amount: number) => {
     const rounded = Math.round(amount * 100) / 100
-    if (rounded <= 0) return
+    if (rounded <= 0 || isNaN(rounded)) return
     const existing = triggeredBonuses.find((b) => b.name === name)
     if (existing) {
       existing.amount = Math.round((existing.amount + rounded) * 100) / 100
@@ -140,6 +197,7 @@ export function calculateUserMonthlyPayroll({
   const workedDates = Array.from(new Set(userLogs.map((l) => l.work_date)))
 
   workedDates.forEach((dateStr) => {
+    if (!dateStr || !dateStr.includes("-")) return
     const revRecord = revenues.find((r) => r.work_date === dateStr)
     const dailyRevenue = Number(revRecord?.amount) || 0
     if (dailyRevenue <= 0) return
@@ -148,7 +206,17 @@ export function calculateUserMonthlyPayroll({
       monthAllLogs.filter((l) => l.work_date === dateStr).map((l) => l.user_id)
     ).size || 1
 
+    const [y, m, d] = dateStr.split("-").map(Number)
+    const dayOfWeek = new Date(y, m - 1, d, 12, 0, 0).getDay() // 0=Nd, 1=Pon, ...
+
     applicableRules.forEach((rule) => {
+      // SPRAWDZENIE CZY REGUŁA MA ZASTOSOWANIE DLA DANEGO DNIA (DNI TYGODNIA LUB KONKRETNE DATY)
+      if (rule.schedule_type === "weekdays" && rule.applicable_days && rule.applicable_days.length > 0) {
+        if (!rule.applicable_days.includes(dayOfWeek)) return
+      } else if (rule.schedule_type === "specific_dates" && rule.applicable_dates && rule.applicable_dates.length > 0) {
+        if (!rule.applicable_dates.includes(dateStr)) return
+      }
+
       const X = Number(rule.param_x) || 0
       const Y = Number(rule.param_y) || 0
       const Z = Number(rule.param_z) || 0
@@ -175,17 +243,34 @@ export function calculateUserMonthlyPayroll({
   })
 
   applicableRules.forEach((rule) => {
+    // Obliczamy godziny pracownika z uwzględnieniem filtra dni, jeśli dotyczy
+    let relevantHours = totalHours
+    if (rule.schedule_type === "weekdays" && rule.applicable_days && rule.applicable_days.length > 0) {
+      relevantHours = userLogs
+        .filter((l) => {
+          if (!l.work_date || !l.work_date.includes("-")) return false
+          const [y, m, d] = l.work_date.split("-").map(Number)
+          const dow = new Date(y, m - 1, d, 12, 0, 0).getDay()
+          return rule.applicable_days!.includes(dow)
+        })
+        .reduce((sum, l) => sum + (Number(l.hours_worked) || 0), 0)
+    } else if (rule.schedule_type === "specific_dates" && rule.applicable_dates && rule.applicable_dates.length > 0) {
+      relevantHours = userLogs
+        .filter((l) => rule.applicable_dates!.includes(l.work_date))
+        .reduce((sum, l) => sum + (Number(l.hours_worked) || 0), 0)
+    }
+
     const X = Number(rule.param_x) || 0
     const Y = Number(rule.param_y) || 0
 
-    if (rule.rule_type === "overtime_per_hour" && totalHours > X) {
-      const extraHours = totalHours - X
+    if (rule.rule_type === "overtime_per_hour" && relevantHours > X) {
+      const extraHours = relevantHours - X
       const amt = extraHours * Y
       if (amt > 0) {
         autoBonusPay += amt
         addTriggered(rule.name, amt)
       }
-    } else if (rule.rule_type === "hours_fixed_bonus" && totalHours > X) {
+    } else if (rule.rule_type === "hours_fixed_bonus" && relevantHours > X) {
       if (Y > 0) {
         autoBonusPay += Y
         addTriggered(rule.name, Y)
@@ -216,6 +301,16 @@ export function calculateUserMonthlyPayroll({
 // ============================================================================
 // POP-UP 1: KREATOR ZASAD PREMIOWANIA
 // ============================================================================
+const WEEKDAYS_CONFIG = [
+  { day: 1, label: "Pon", full: "Poniedziałek" },
+  { day: 2, label: "Wt", full: "Wtorek" },
+  { day: 3, label: "Śr", full: "Środa" },
+  { day: 4, label: "Czw", full: "Czwartek" },
+  { day: 5, label: "Pt", full: "Piątek" },
+  { day: 6, label: "Sob", full: "Sobota" },
+  { day: 0, label: "Nd", full: "Niedziela" },
+]
+
 function BonusRulesModal({
   isOpen,
   onClose,
@@ -239,6 +334,13 @@ function BonusRulesModal({
   const [paramX, setParamX] = useState("5000")
   const [paramY, setParamY] = useState("500")
   const [paramZ, setParamZ] = useState("20")
+
+  // ZAKRES DNI / KALENDARZ
+  const [scheduleType, setScheduleType] = useState<BonusScheduleType>("all")
+  const [applicableDays, setApplicableDays] = useState<number[]>([1, 2, 3, 4, 5, 6, 0])
+  const [applicableDates, setApplicableDates] = useState<string[]>([])
+  const [newSpecificDate, setNewSpecificDate] = useState<string>("")
+
   const [saving, setSaving] = useState(false)
 
   if (!isOpen) return null
@@ -264,9 +366,37 @@ function BonusRulesModal({
     }
   }
 
+  const toggleDay = (d: number) => {
+    setApplicableDays((prev) =>
+      prev.includes(d) ? prev.filter((item) => item !== d) : [...prev, d]
+    )
+  }
+
+  const handleAddSpecificDate = () => {
+    if (!newSpecificDate) return
+    if (!applicableDates.includes(newSpecificDate)) {
+      setApplicableDates((prev) => [...prev, newSpecificDate].sort())
+    }
+    setNewSpecificDate("")
+  }
+
+  const handleRemoveSpecificDate = (dToRemove: string) => {
+    setApplicableDates((prev) => prev.filter((d) => d !== dToRemove))
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim()) return
+
+    if (scheduleType === "weekdays" && applicableDays.length === 0) {
+      showToast("Wybierz przynajmniej jeden dzień tygodnia", "info")
+      return
+    }
+
+    if (scheduleType === "specific_dates" && applicableDates.length === 0) {
+      showToast("Dodaj przynajmniej jedną datę z kalendarza", "info")
+      return
+    }
 
     setSaving(true)
     await onCreateRule({
@@ -276,9 +406,13 @@ function BonusRulesModal({
       param_y: parseFloat(paramY) || 0,
       param_z: parseFloat(paramZ) || 0,
       assigned_role: assignedRole === "all" ? null : assignedRole,
+      schedule_type: scheduleType,
+      applicable_days: scheduleType === "weekdays" ? applicableDays : null,
+      applicable_dates: scheduleType === "specific_dates" ? applicableDates : null,
     })
     setSaving(false)
     setName("")
+    setApplicableDates([])
   }
 
   return (
@@ -403,6 +537,152 @@ function BonusRulesModal({
               )}
             </div>
 
+            {/* SEKCJA ZAKRESU DNI (DNI TYGODNIA / KALENDARZ) */}
+            <div className="p-3.5 rounded-xl bg-white border border-zinc-200 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <Label className="text-xs font-bold text-zinc-900 flex items-center gap-1.5">
+                  <span>📅 Dni obowiązywania reguły premiowania</span>
+                </Label>
+
+                {/* PRZEŁĄCZNIK TRYBU DNI */}
+                <div className="inline-flex rounded-lg border border-zinc-200 bg-zinc-100 p-0.5 shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={() => setScheduleType("all")}
+                    className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${
+                      scheduleType === "all" ? "bg-white text-zinc-900 shadow-2xs" : "text-zinc-600 hover:text-zinc-900"
+                    }`}
+                  >
+                    🌍 Wszystkie dni
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScheduleType("weekdays")}
+                    className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${
+                      scheduleType === "weekdays" ? "bg-white text-zinc-900 shadow-2xs" : "text-zinc-600 hover:text-zinc-900"
+                    }`}
+                  >
+                    📆 Dni tygodnia
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScheduleType("specific_dates")}
+                    className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${
+                      scheduleType === "specific_dates" ? "bg-white text-zinc-900 shadow-2xs" : "text-zinc-600 hover:text-zinc-900"
+                    }`}
+                  >
+                    🎯 Konkretne daty
+                  </button>
+                </div>
+              </div>
+
+              {/* OPCJA 1: DNI TYGODNIA */}
+              {scheduleType === "weekdays" && (
+                <div className="space-y-2.5 pt-1 animate-in fade-in duration-100">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-semibold text-zinc-500 mr-1">Szybki wybór:</span>
+                    <button
+                      type="button"
+                      onClick={() => setApplicableDays([1, 2, 3, 4])}
+                      className="px-2 py-0.5 rounded text-[11px] font-bold bg-zinc-100 hover:bg-zinc-200 text-zinc-700"
+                    >
+                      Pon – Czw (W tygodniu)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setApplicableDays([5, 6, 0])}
+                      className="px-2 py-0.5 rounded text-[11px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200"
+                    >
+                      Pt – Nd (Weekend)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setApplicableDays([6, 0])}
+                      className="px-2 py-0.5 rounded text-[11px] font-bold bg-zinc-100 hover:bg-zinc-200 text-zinc-700"
+                    >
+                      Sob – Nd
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setApplicableDays([1, 2, 3, 4, 5, 6, 0])}
+                      className="px-2 py-0.5 rounded text-[11px] font-bold bg-zinc-100 hover:bg-zinc-200 text-zinc-700"
+                    >
+                      Wszystkie 7 dni
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
+                    {WEEKDAYS_CONFIG.map((item) => {
+                      const isSelected = applicableDays.includes(item.day)
+                      return (
+                        <button
+                          key={item.day}
+                          type="button"
+                          onClick={() => toggleDay(item.day)}
+                          className={`py-2 px-1 rounded-lg border text-center transition-all flex flex-col items-center justify-center ${
+                            isSelected
+                              ? "bg-indigo-600 text-white border-indigo-600 shadow-2xs font-bold"
+                              : "bg-white text-zinc-700 border-zinc-200 hover:border-zinc-400 font-medium"
+                          }`}
+                        >
+                          <span className="text-xs">{item.label}</span>
+                          <span className="text-[9px] opacity-80 hidden sm:inline">{item.full.slice(0, 3)}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* OPCJA 2: KONKRETNE DATY W KALENDARZU */}
+              {scheduleType === "specific_dates" && (
+                <div className="space-y-2.5 pt-1 animate-in fade-in duration-100">
+                  <div className="flex gap-2">
+                    <Input
+                      type="date"
+                      value={newSpecificDate}
+                      onChange={(e) => setNewSpecificDate(e.target.value)}
+                      className="h-9 text-xs bg-zinc-50 w-44 font-semibold"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleAddSpecificDate}
+                      disabled={!newSpecificDate}
+                      className="h-9 text-xs font-bold"
+                    >
+                      + Dodaj datę do reguły
+                    </Button>
+                  </div>
+
+                  {applicableDates.length === 0 ? (
+                    <p className="text-xs text-zinc-400 italic">
+                      Nie wybrano jeszcze żadnych konkretnych dat. Wskaż datę powyżej i kliknij dodaj (np. Sylwester, Halloween, data imprezy).
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {applicableDates.map((dStr) => (
+                        <span
+                          key={dStr}
+                          className="px-2.5 py-1 rounded-md text-xs font-bold bg-amber-50 text-amber-900 border border-amber-300 flex items-center gap-1.5"
+                        >
+                          <span>📅 {dStr}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveSpecificDate(dStr)}
+                            className="hover:text-red-700 font-bold ml-1"
+                            title="Usuń tę datę"
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             <div className="flex justify-end">
               <Button type="submit" size="sm" disabled={saving}>
                 {saving ? "Zapisywanie..." : "+ Dodaj tę zasadę"}
@@ -428,10 +708,19 @@ function BonusRulesModal({
                     }`}
                   >
                     <div className="space-y-0.5">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="font-bold text-sm text-zinc-900">{r.name}</span>
                         <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-zinc-100 text-zinc-700">
                           {r.assigned_role ? `🏷️ ${r.assigned_role}` : "👥 Wszyscy"}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold border ${
+                          r.schedule_type === "weekdays"
+                            ? "bg-indigo-50 text-indigo-800 border-indigo-200"
+                            : r.schedule_type === "specific_dates"
+                            ? "bg-amber-50 text-amber-800 border-amber-300"
+                            : "bg-zinc-100 text-zinc-600 border-zinc-200"
+                        }`}>
+                          {formatBonusRuleScheduleLabel(r)}
                         </span>
                       </div>
                       <p className="text-xs text-emerald-800 font-medium">
@@ -661,22 +950,694 @@ function ManualBonusModal({
   return <ManualBonusModalDialog {...props} />
 }
 
+// DEFAULT_REVENUE_FIELD_PRESETS is re-exported from @/types/attendance
+export { DEFAULT_REVENUE_FIELD_PRESETS } from "@/types/attendance" 
+
+export const getPreviousDayFieldValue = (
+  fieldName: string,
+  targetDate: string,
+  revenuesList: DailyRevenue[]
+): number => {
+  if (!fieldName || !targetDate || !Array.isArray(revenuesList)) return 0
+  const prior = revenuesList
+    .filter(
+      (r) =>
+        r &&
+        r.work_date < targetDate &&
+        r.breakdown &&
+        r.breakdown[fieldName] !== undefined &&
+        r.breakdown[fieldName] !== null &&
+        !isNaN(Number(r.breakdown[fieldName]))
+    )
+    .sort((a, b) => b.work_date.localeCompare(a.work_date))
+  if (prior.length > 0 && prior[0].breakdown) {
+    return Number(prior[0].breakdown[fieldName]) || 0
+  }
+  return 0
+}
+
+// ============================================================================
+// POP-UP 3: KONFIGURACJA POZYCJI UTARGU / RAPORTU LOKALU
+// ============================================================================
+function RevenueFieldsSettingsModal({
+  isOpen,
+  onClose,
+  fields,
+  onAddField,
+  onUpdateField,
+  onDeleteField,
+  onLoadSuggested,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  fields: RevenueField[]
+  onAddField: (name: string, includeInTotal?: boolean, deductPreviousDay?: boolean) => Promise<void>
+  onUpdateField: (id: string, updates: Partial<RevenueField>) => Promise<void>
+  onDeleteField: (id: string, name: string) => Promise<void>
+  onLoadSuggested: () => Promise<void>
+}) {
+  const [newFieldName, setNewFieldName] = useState("")
+  const [newIncludeInTotal, setNewIncludeInTotal] = useState(true)
+  const [newDeductPreviousDay, setNewDeductPreviousDay] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editName, setEditName] = useState("")
+  const [saving, setSaving] = useState(false)
+
+  if (!isOpen) return null
+
+  const handleNameChange = (val: string) => {
+    setNewFieldName(val)
+    if (val.toLowerCase().includes("zasyp")) {
+      setNewDeductPreviousDay(true)
+      setNewIncludeInTotal(true)
+    } else if (val.toLowerCase().includes("fiskaln")) {
+      setNewIncludeInTotal(false)
+      setNewDeductPreviousDay(false)
+    }
+  }
+
+  const handleAdd = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newFieldName.trim()) return
+    setSaving(true)
+    await onAddField(newFieldName.trim(), newIncludeInTotal, newDeductPreviousDay)
+    setNewFieldName("")
+    setNewIncludeInTotal(true)
+    setNewDeductPreviousDay(false)
+    setSaving(false)
+  }
+
+  const handleStartEdit = (f: RevenueField) => {
+    setEditingId(f.id)
+    setEditName(f.name)
+  }
+
+  const handleSaveEdit = async (id: string) => {
+    if (!editName.trim()) return
+    setSaving(true)
+    await onUpdateField(id, { name: editName.trim() })
+    setEditingId(null)
+    setEditName("")
+    setSaving(false)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-in fade-in duration-150">
+      <div className="bg-white rounded-2xl shadow-2xl border border-zinc-200 w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="flex items-center justify-between px-5 py-4 border-b bg-zinc-50">
+          <div>
+            <h2 className="text-base sm:text-lg font-bold text-zinc-900 flex items-center gap-2">
+              <span>⚙️</span>
+              <span>Ustawienia Pozycji Raportu Utargu</span>
+            </h2>
+            <p className="text-xs text-zinc-500 mt-0.5">
+              Skonfiguruj pozycje raportu, wliczanie do utargu całkowitego oraz odejmowanie wczorajszego zasypu.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-zinc-400 hover:text-zinc-700 text-xl font-bold leading-none px-2 py-1 rounded-md"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="p-5 overflow-y-auto space-y-5">
+          {/* INFORMACJA O BAZOWYM UTARGU */}
+          <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed space-y-1">
+            <p>
+              <strong>ℹ️ Zasada działania wzoru:</strong> Utarg całkowity liczy się ze wzoru:{" "}
+              <code className="bg-amber-100/80 px-1.5 py-0.5 rounded font-mono font-bold">
+                Utarg = Karty + Gotówka/Grube + Zasyp - Zasyp_wczorajszy
+              </code>.
+            </p>
+            <p className="text-[11px] text-amber-800">
+              Pozycje kontrolne (np. <strong>Raport fiskalny</strong>) stoją osobno i nie doliczają się do sumy utargu, służąc do weryfikacji kasy.
+            </p>
+          </div>
+
+          {/* FORMULARZ DODAWANIA NOWEJ POZYCJI */}
+          <form onSubmit={handleAdd} className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-200 space-y-3">
+            <Label className="text-xs font-bold text-zinc-700">Dodaj nową pozycję raportu</Label>
+            <div className="flex gap-2">
+              <Input
+                placeholder="np. Karty, Gotówka / Grube, Zasyp, Raport fiskalny, Vouchery..."
+                value={newFieldName}
+                onChange={(e) => handleNameChange(e.target.value)}
+                className="h-9 text-xs bg-white"
+                required
+              />
+              <Button type="submit" size="sm" disabled={saving || !newFieldName.trim()} className="h-9 text-xs shrink-0 font-bold">
+                + Dodaj pozycję
+              </Button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4 pt-1">
+              <label className="flex items-center gap-1.5 text-xs font-medium text-zinc-800 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newIncludeInTotal}
+                  onChange={(e) => setNewIncludeInTotal(e.target.checked)}
+                  className="rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4"
+                />
+                <span>Wliczaj do utargu całkowitego</span>
+              </label>
+
+              <label className="flex items-center gap-1.5 text-xs font-medium text-zinc-800 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newDeductPreviousDay}
+                  onChange={(e) => setNewDeductPreviousDay(e.target.checked)}
+                  className="rounded border-zinc-300 text-amber-600 focus:ring-amber-500 h-4 w-4"
+                />
+                <span>Odejmuj wartość z dnia poprzedniego (jak Zasyp początkowy)</span>
+              </label>
+            </div>
+          </form>
+
+          {/* LISTA SKONFIGUROWANYCH POZYCJI */}
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold text-zinc-800 uppercase tracking-wide">
+                Zdefiniowane pozycje ({fields.length})
+              </h3>
+              {fields.length === 0 && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={onLoadSuggested}
+                  className="h-7 text-xs font-semibold"
+                >
+                  + Załaduj standardowe (Karty, Grube, Zasyp, Raport)
+                </Button>
+              )}
+            </div>
+
+            {fields.length === 0 ? (
+              <div className="p-6 text-center text-xs text-zinc-500 border border-dashed rounded-xl bg-zinc-50 space-y-2">
+                <p>Brak skonfigurowanych pozycji dla tego lokalu.</p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={onLoadSuggested}
+                  className="text-xs font-bold"
+                >
+                  Załaduj sugerowane pozycje
+                </Button>
+              </div>
+            ) : (
+              <div className="divide-y divide-zinc-100 border rounded-xl overflow-hidden bg-white shadow-2xs">
+                {fields.map((f, idx) => (
+                  <div
+                    key={f.id}
+                    className="p-3 flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 hover:bg-zinc-50/70 transition-colors"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                      <span className="w-5 h-5 rounded-full bg-zinc-100 text-zinc-500 text-[10px] font-bold flex items-center justify-center shrink-0">
+                        {idx + 1}
+                      </span>
+
+                      {editingId === f.id ? (
+                        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                          <Input
+                            value={editName}
+                            onChange={(e) => setEditName(e.target.value)}
+                            className="h-8 text-xs bg-white"
+                            autoFocus
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-8 text-xs px-2.5"
+                            onClick={() => handleSaveEdit(f.id)}
+                            disabled={saving}
+                          >
+                            Zapisz
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="h-8 text-xs px-2"
+                            onClick={() => setEditingId(null)}
+                          >
+                            Anuluj
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="min-w-0">
+                          <p className={`text-xs font-bold truncate ${f.is_active ? "text-zinc-900" : "text-zinc-400 line-through"}`}>
+                            {f.name}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                            <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
+                              f.include_in_total !== false ? "bg-emerald-50 text-emerald-800" : "bg-zinc-100 text-zinc-600"
+                            }`}>
+                              {f.include_in_total !== false ? "➕ Wliczana do utargu" : "👁️ Pozycja kontrolna (osobno)"}
+                            </span>
+                            {f.deduct_previous_day && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-50 text-amber-800 border border-amber-200">
+                                🔄 Odejmuje wczorajszy stan
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {editingId !== f.id && (
+                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                        {/* PRZEŁĄCZNIK WLICZANIA DO SUMY */}
+                        <button
+                          type="button"
+                          onClick={() => onUpdateField(f.id, { include_in_total: f.include_in_total === false })}
+                          className={`px-2 py-1 rounded text-[10px] font-bold border transition-colors ${
+                            f.include_in_total !== false
+                              ? "bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100"
+                              : "bg-zinc-100 text-zinc-600 border-zinc-300 hover:bg-zinc-200"
+                          }`}
+                          title="Przełącz czy ta pozycja wlicza się do kalkulacji utargu całkowitego"
+                        >
+                          {f.include_in_total !== false ? "Wliczana" : "Kontrolna"}
+                        </button>
+
+                        {/* PRZEŁĄCZNIK ODEJMOWANIA POPRZEDNIEGO DNIA */}
+                        <button
+                          type="button"
+                          onClick={() => onUpdateField(f.id, { deduct_previous_day: !f.deduct_previous_day })}
+                          className={`px-2 py-1 rounded text-[10px] font-bold border transition-colors ${
+                            f.deduct_previous_day
+                              ? "bg-amber-100 text-amber-900 border-amber-300"
+                              : "bg-white text-zinc-500 border-zinc-200 hover:border-zinc-400"
+                          }`}
+                          title="Przełącz odejmowanie stanu z dnia poprzedniego (wczorajszego zasypu)"
+                        >
+                          {f.deduct_previous_day ? "- Wczorajszy: WŁ" : "- Wczorajszy: WYŁ"}
+                        </button>
+
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => onUpdateField(f.id, { is_active: !f.is_active })}
+                          className={`h-7 px-2 text-[11px] font-bold ${
+                            f.is_active ? "text-zinc-700 hover:bg-zinc-100" : "text-zinc-400 hover:bg-zinc-100"
+                          }`}
+                        >
+                          {f.is_active ? "Aktywna" : "Ukryta"}
+                        </Button>
+
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleStartEdit(f)}
+                          className="h-7 w-7 p-0 text-zinc-500 hover:text-zinc-800"
+                          title="Zmień nazwę"
+                        >
+                          ✏️
+                        </Button>
+
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => onDeleteField(f.id, f.name)}
+                          className="h-7 w-7 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
+                          title="Usuń pozycję"
+                        >
+                          🗑️
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="px-5 py-3.5 bg-zinc-50 border-t flex items-center justify-between">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onLoadSuggested}
+            className="text-xs text-zinc-600 hover:text-zinc-900"
+          >
+            + Załaduj sugerowane standardowe
+          </Button>
+
+          <Button type="button" onClick={onClose} size="sm" className="font-bold">
+            Gotowe / Zamknij
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ============================================================================
 // GŁÓWNY MODUŁ OBECNOŚCI I ROZLICZEŃ U MANAGERA
 // ============================================================================
+
+export const calculateShiftDurationHours = (startTime: string, endTime: string): number => {
+  if (!startTime || !endTime) return 0
+  const [sh, sm] = startTime.split(":").map(Number)
+  const [eh, em] = endTime.split(":").map(Number)
+  if (isNaN(sh) || isNaN(sm) || isNaN(eh) || isNaN(em)) return 0
+  if (sh === eh && sm === em) return 0
+
+  const startMins = sh * 60 + sm
+  let endMins = eh * 60 + em
+  if (endMins < startMins) {
+    endMins += 24 * 60
+  }
+  return Math.round(((endMins - startMins) / 60) * 100) / 100
+}
+
+function AttendanceLogModal({
+  isOpen,
+  onClose,
+  staff,
+  currentUserId,
+  currentUserName,
+  defaultDate,
+  initialLog,
+  targetUserId,
+  onSave,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  staff: StaffMember[]
+  currentUserId?: string | null
+  currentUserName?: string | null
+  defaultDate: string
+  initialLog?: AttendanceLog | null
+  targetUserId?: string
+  onSave: (payload: {
+    id?: string
+    user_id: string
+    work_date: string
+    start_time: string
+    end_time: string
+    hours_worked: number
+    note: string | null
+  }) => Promise<void>
+}) {
+  const [userId, setUserId] = useState<string>("")
+  const [workDate, setWorkDate] = useState<string>(defaultDate)
+  const [startTime, setStartTime] = useState<string>("10:00")
+  const [endTime, setEndTime] = useState<string>("18:00")
+  const [note, setNote] = useState<string>("")
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (initialLog) {
+      setUserId(initialLog.user_id)
+      setWorkDate(initialLog.work_date)
+      setStartTime(initialLog.start_time ? initialLog.start_time.slice(0, 5) : "10:00")
+      setEndTime(initialLog.end_time ? initialLog.end_time.slice(0, 5) : "18:00")
+      setNote(initialLog.note || "")
+    } else {
+      setUserId(targetUserId || currentUserId || staff[0]?.user_id || "")
+      setWorkDate(defaultDate)
+      setStartTime("10:00")
+      setEndTime("18:00")
+      setNote("")
+    }
+  }, [initialLog, targetUserId, currentUserId, staff, defaultDate, isOpen])
+
+  if (!isOpen) return null
+
+  const durationHours = calculateShiftDurationHours(startTime, endTime)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!userId) {
+      showToast("Wybierz pracownika lub menadżera.", "error")
+      return
+    }
+    if (!workDate) {
+      showToast("Podaj datę pracy.", "error")
+      return
+    }
+    if (!startTime || !endTime) {
+      showToast("Podaj godzinę rozpoczęcia i zakończenia.", "error")
+      return
+    }
+    if (durationHours <= 0 || durationHours > 24) {
+      showToast("Sprawdź wpisane godziny pracy.", "error")
+      return
+    }
+
+    setSaving(true)
+    try {
+      await onSave({
+        id: initialLog?.id,
+        user_id: userId,
+        work_date: workDate,
+        start_time: startTime,
+        end_time: endTime,
+        hours_worked: durationHours,
+        note: note.trim() || null,
+      })
+      onClose()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl overflow-hidden border border-zinc-200 animate-in fade-in zoom-in duration-150">
+        <div className="p-4 sm:p-5 border-b border-zinc-100 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <span className="text-2xl">⏱️</span>
+            <div>
+              <h3 className="font-bold text-base text-zinc-900">
+                {initialLog ? "Edytuj wpis obecności" : "Wpisz godziny pracy"}
+              </h3>
+              <p className="text-xs text-zinc-500">
+                {initialLog ? "Korekta godzin lub notatki do zmiany" : "Rejestracja faktycznego czasu pracy na zmianie"}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-zinc-400 hover:text-zinc-700 text-lg p-1 rounded-lg"
+          >
+            ✕
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-4 sm:p-5 space-y-4">
+          {/* Szybki wybór menadżera */}
+          {currentUserId && !initialLog && (
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant={userId === currentUserId ? "default" : "outline"}
+                className={`text-xs h-7 gap-1 font-semibold ${
+                  userId === currentUserId ? "bg-zinc-900 text-white" : ""
+                }`}
+                onClick={() => setUserId(currentUserId)}
+              >
+                <span>⭐</span>
+                <span>Ty ({currentUserName || "Menadżer"})</span>
+              </Button>
+              <span className="text-xs text-zinc-400">lub wybierz z listy:</span>
+            </div>
+          )}
+
+          {/* Pracownik */}
+          <div className="space-y-1">
+            <Label className="text-xs font-semibold text-zinc-700">
+              Pracownik / Menadżer *
+            </Label>
+            <select
+              value={userId}
+              onChange={(e) => setUserId(e.target.value)}
+              className="w-full h-9 rounded-md border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-800"
+              required
+            >
+              {staff.map((m) => {
+                const isMe = m.user_id === currentUserId
+                const name = m.users?.full_name || m.users?.email?.split("@")[0] || "Pracownik"
+                return (
+                  <option key={m.user_id} value={m.user_id}>
+                    {isMe ? `⭐ ${name} (Ty - Menadżer)` : `${name} (${m.role})`}
+                  </option>
+                )
+              })}
+            </select>
+          </div>
+
+          {/* Data pracy */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs font-semibold text-zinc-700">Data zmiany *</Label>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setWorkDate(defaultDate)}
+                  className="text-[11px] font-semibold text-indigo-600 hover:underline"
+                >
+                  Dzisiaj
+                </button>
+                <span className="text-zinc-300">|</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const d = new Date()
+                    d.setDate(d.getDate() - 1)
+                    setWorkDate(d.toISOString().slice(0, 10))
+                  }}
+                  className="text-[11px] font-semibold text-indigo-600 hover:underline"
+                >
+                  Wczoraj
+                </button>
+              </div>
+            </div>
+            <Input
+              type="date"
+              value={workDate}
+              onChange={(e) => setWorkDate(e.target.value)}
+              className="h-9 text-xs"
+              required
+            />
+          </div>
+
+          {/* Godziny pracy */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold text-zinc-700">Godzina wejścia *</Label>
+              <Input
+                type="time"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+                className="h-9 text-xs font-mono font-bold"
+                required
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold text-zinc-700">Godzina wyjścia *</Label>
+              <Input
+                type="time"
+                value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+                className="h-9 text-xs font-mono font-bold"
+                required
+              />
+            </div>
+          </div>
+
+          {/* Podgląd czasu */}
+          <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-between">
+            <span className="text-xs font-medium text-blue-900">Przepracowany czas:</span>
+            <span className="text-base font-black text-blue-950 font-mono">
+              🕒 {durationHours > 0 ? `${durationHours.toFixed(1)} h` : "—"}
+            </span>
+          </div>
+
+          {/* Notatka */}
+          <div className="space-y-1">
+            <Label className="text-xs font-semibold text-zinc-700">
+              Notatka do zmiany (opcjonalnie)
+            </Label>
+            <Input
+              type="text"
+              placeholder="np. Zmiana managerska, inwentaryzacja, zamknięcie..."
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              className="h-9 text-xs"
+            />
+          </div>
+
+          {/* Przyciski */}
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100">
+            <Button type="button" variant="outline" size="sm" onClick={onClose} disabled={saving}>
+              Anuluj
+            </Button>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={saving || durationHours <= 0}
+              className="bg-zinc-900 text-white hover:bg-zinc-800 font-bold"
+            >
+              {saving ? "Zapisywanie..." : initialLog ? "Zapisz zmiany" : "Zapisz godziny"}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+
 export function AttendanceManagerModule({
   restaurantId,
   staff,
   roles,
+  currentUserId,
+  currentUserName,
 }: {
   restaurantId: string | null
   staff: StaffMember[]
   roles: RestaurantRole[]
+  currentUserId?: string | null
+  currentUserName?: string | null
 }) {
   const [selectedMonth, setSelectedMonth] = useState<string>(() => {
     const now = new Date()
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
   })
+  const effectiveStaff = useMemo(() => {
+    if (!currentUserId) return staff
+    const exists = staff.some((s) => s.user_id === currentUserId)
+    if (exists) return staff
+    return [
+      {
+        user_id: currentUserId,
+        role: "manager",
+        hourly_rate: 0,
+        users: {
+          full_name: currentUserName || "Menadżer",
+          email: null,
+        },
+      },
+      ...staff,
+    ]
+  }, [staff, currentUserId, currentUserName])
+
+  const [isLogModalOpen, setIsLogModalOpen] = useState(false)
+  const [editingLog, setEditingLog] = useState<AttendanceLog | null>(null)
+  const [modalTargetUserId, setModalTargetUserId] = useState<string | undefined>(undefined)
+
+  const [quickUserId, setQuickUserId] = useState<string>(() => currentUserId || staff[0]?.user_id || "")
+  const [quickWorkDate, setQuickWorkDate] = useState<string>(() => {
+    const now = new Date()
+    const yyyy = now.getFullYear()
+    const mm = String(now.getMonth() + 1).padStart(2, "0")
+    const dd = String(now.getDate()).padStart(2, "0")
+    return `${yyyy}-${mm}-${dd}`
+  })
+  const [quickStartTime, setQuickStartTime] = useState<string>("10:00")
+  const [quickEndTime, setQuickEndTime] = useState<string>("18:00")
+  const [quickNote, setQuickNote] = useState<string>("")
+  const [quickSaving, setQuickSaving] = useState(false)
+
+  useEffect(() => {
+    if (currentUserId && !quickUserId) {
+      setQuickUserId(currentUserId)
+    }
+  }, [currentUserId, quickUserId])
+
   const [todayStr] = useState<string>(() => {
     const now = new Date()
     const yyyy = now.getFullYear()
@@ -699,6 +1660,26 @@ export function AttendanceManagerModule({
     return `${yyyy}-${mm}-${dd}`
   })
   const [revAmount, setRevAmount] = useState<string>("")
+  const [revBreakdown, setRevBreakdown] = useState<Record<string, string>>({})
+  const [revenueFields, setRevenueFields] = useState<RevenueField[]>([])
+  useEffect(() => {
+
+    if (typeof window !== "undefined" && restaurantId && revenueFields.length > 0) {
+
+      try {
+
+        localStorage.setItem(`gastro_revenue_fields_v2_${restaurantId}`, JSON.stringify(revenueFields))
+
+      } catch {}
+
+    }
+
+  }, [revenueFields, restaurantId])
+
+
+
+  const [isRevenueSettingsOpen, setIsRevenueSettingsOpen] = useState(false)
+  const [savingRevenue, setSavingRevenue] = useState(false)
 
   const [isBonusModalOpen, setIsBonusModalOpen] = useState(false)
   const [isManualBonusModalOpen, setIsManualBonusModalOpen] = useState(false)
@@ -708,7 +1689,7 @@ export function AttendanceManagerModule({
     if (!restaurantId) return
     const fetchAll = async () => {
       setLoading(true)
-      const [logsRes, rulesRes, revRes, manRes] = await Promise.all([
+      const [logsRes, rulesRes, revRes, manRes, fieldsRes] = await Promise.all([
         supabase
           .from("attendance_logs")
           .select("*")
@@ -730,12 +1711,33 @@ export function AttendanceManagerModule({
           .select("*")
           .eq("restaurant_id", restaurantId)
           .order("bonus_date", { ascending: false }),
+        supabase
+          .from("restaurant_revenue_fields")
+          .select("*")
+          .eq("restaurant_id", restaurantId)
+          .order("sort_order", { ascending: true }),
       ])
 
       if (logsRes.data) setLogs(logsRes.data as AttendanceLog[])
       if (rulesRes.data) setRules(rulesRes.data as BonusRule[])
-      if (revRes.data) setRevenues(revRes.data as DailyRevenue[])
+      if (revRes.data) {
+        const fetchedRevs = revRes.data as DailyRevenue[]
+        setRevenues(fetchedRevs)
+        const currentDayRev = fetchedRevs.find((r) => r.work_date === revDate)
+        if (currentDayRev) {
+          setRevAmount(String(currentDayRev.amount))
+          const bObj: Record<string, string> = {}
+          if (currentDayRev.breakdown) {
+            Object.entries(currentDayRev.breakdown).forEach(([k, v]) => {
+              bObj[k] = String(v)
+            })
+          }
+          setRevBreakdown(bObj)
+        }
+      }
       if (manRes.data) setManualBonuses(manRes.data as ManualBonus[])
+
+      setRevenueFields(resolveRevenueFields(fieldsRes.data, restaurantId))
       setLoading(false)
     }
 
@@ -749,7 +1751,10 @@ export function AttendanceManagerModule({
   }
 
   const getMemberName = (userId: string) => {
-    const found = staff.find((s) => s.user_id === userId)
+    if (currentUserId && userId === currentUserId) {
+      return `${currentUserName || "Menadżer"} (Ty)`
+    }
+    const found = effectiveStaff.find((s) => s.user_id === userId)
     if (!found) return "Pracownik"
     return found.users?.full_name || found.users?.email?.split("@")[0] || "Pracownik"
   }
@@ -758,17 +1763,36 @@ export function AttendanceManagerModule({
     newRule: Omit<BonusRule, "id" | "restaurant_id" | "is_active">
   ) => {
     if (!restaurantId) return
-    const { data, error } = await supabase
+
+    let { data, error } = await supabase
       .from("bonus_rules")
       .insert([{ ...newRule, restaurant_id: restaurantId, is_active: true }])
       .select()
+
+    // Graceful fallback jeśli kolumny schedule_type / applicable_days jeszcze nie ma w bazie
+    if (error && (error.code === "42703" || error.message?.includes("schedule_type") || error.message?.includes("applicable_days"))) {
+      const { schedule_type, applicable_days, applicable_dates, ...legacyRule } = newRule as any
+      const fallbackRes = await supabase
+        .from("bonus_rules")
+        .insert([{ ...legacyRule, restaurant_id: restaurantId, is_active: true }])
+        .select()
+      data = fallbackRes.data
+      error = fallbackRes.error
+    }
 
     if (error) {
       showToast("Błąd tworzenia reguły premiowania: " + error.message, "error")
       return
     }
+
     if (data && data[0]) {
-      setRules((prev) => [data[0] as BonusRule, ...prev])
+      const created: BonusRule = {
+        ...(data[0] as BonusRule),
+        schedule_type: newRule.schedule_type || "all",
+        applicable_days: newRule.applicable_days || null,
+        applicable_dates: newRule.applicable_dates || null,
+      }
+      setRules((prev) => [created, ...prev])
       showToast("Utworzono nową zasadę premiowania", "success")
     }
   }
@@ -840,22 +1864,106 @@ export function AttendanceManagerModule({
     }
   }
 
+  const handleSelectRevDate = (newDate: string) => {
+    setRevDate(newDate)
+    const existing = revenues.find((r) => r.work_date === newDate)
+    if (existing) {
+      setRevAmount(String(existing.amount))
+      const bObj: Record<string, string> = {}
+      if (existing.breakdown) {
+        Object.entries(existing.breakdown).forEach(([k, v]) => {
+          bObj[k] = String(v)
+        })
+      }
+      setRevBreakdown(bObj)
+    } else {
+      setRevAmount("")
+      setRevBreakdown({})
+    }
+  }
+
+  // Inteligentna kalkulacja utargu: Pozycje wliczane (Karty, Grube, Zasyp) minus Zasyp z wczoraj. Raport fiskalny osobno.
+  const breakdownCalc = useMemo(() => {
+    let positiveSum = 0
+    let deductionSum = 0
+    const parts: string[] = []
+
+    revenueFields
+      .filter((f) => f.is_active)
+      .forEach((f) => {
+        const val = parseFloat(revBreakdown[f.name] || "") || 0
+
+        // Czy pozycja wlicza się do sumy utargu całkowitego?
+        if (f.include_in_total !== false) {
+          if (val > 0) {
+            positiveSum += val
+            parts.push(`${f.name} (+${val.toFixed(0)} zł)`)
+          }
+
+          // Jeśli odejmowany ma być stan z dnia poprzedniego (np. Zasyp)
+          if (f.deduct_previous_day) {
+            const yesterdayVal = getPreviousDayFieldValue(f.name, revDate, revenues)
+            if (yesterdayVal > 0) {
+              deductionSum += yesterdayVal
+              parts.push(`wczorajszy ${f.name} (-${yesterdayVal.toFixed(0)} zł)`)
+            }
+          }
+        }
+      })
+
+    const calculatedTotal = Math.max(0, Math.round((positiveSum - deductionSum) * 100) / 100)
+    return {
+      positiveSum,
+      deductionSum,
+      calculatedTotal,
+      formulaText: parts.length > 0 ? parts.join(" + ").replace(/ \+ wczorajszy/g, " - wczorajszy") : "",
+    }
+  }, [revBreakdown, revenueFields, revDate, revenues])
+
   const handleSaveDailyRevenue = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!restaurantId || !revDate || !revAmount) return
 
-    const parsed = parseFloat(revAmount) || 0
-    const { data, error } = await supabase
+    setSavingRevenue(true)
+    const parsedAmount = parseFloat(revAmount) || 0
+
+    const cleanBreakdown: Record<string, number> = {}
+    Object.entries(revBreakdown).forEach(([k, v]) => {
+      const num = parseFloat(v) || 0
+      if (num > 0) cleanBreakdown[k] = num
+    })
+
+    let { data, error } = await supabase
       .from("daily_revenues")
       .upsert(
         {
           restaurant_id: restaurantId,
           work_date: revDate,
-          amount: parsed,
+          amount: parsedAmount,
+          breakdown: cleanBreakdown,
         },
         { onConflict: "restaurant_id,work_date" }
       )
       .select()
+
+    // Graceful fallback jeśli kolumny breakdown jeszcze nie ma w bazie
+    if (error && (error.code === "42703" || error.message?.includes("breakdown"))) {
+      const fallbackRes = await supabase
+        .from("daily_revenues")
+        .upsert(
+          {
+            restaurant_id: restaurantId,
+            work_date: revDate,
+            amount: parsedAmount,
+          },
+          { onConflict: "restaurant_id,work_date" }
+        )
+        .select()
+      data = fallbackRes.data
+      error = fallbackRes.error
+    }
+
+    setSavingRevenue(false)
 
     if (error) {
       showToast("Błąd zapisywania utargu: " + error.message, "error")
@@ -864,12 +1972,288 @@ export function AttendanceManagerModule({
 
     if (data && data[0]) {
       const saved = data[0] as DailyRevenue
+      saved.breakdown = cleanBreakdown
       setRevenues((prev) => {
         const without = prev.filter((r) => r.work_date !== saved.work_date)
         return [saved, ...without].sort((a, b) => b.work_date.localeCompare(a.work_date))
       })
+      showToast(`Zapisano raport utargu z dnia ${revDate} (${parsedAmount.toFixed(2)} zł)`, "success")
+    }
+  }
+
+  const handleDeleteDailyRevenue = async (id: string, date: string) => {
+    const confirmed = await askConfirm(
+      `Czy na pewno chcesz usunąć raport utargu z dnia ${date}?`,
+      "Usuwanie raportu utargu"
+    )
+    if (!confirmed) return
+
+    const { error } = await supabase.from("daily_revenues").delete().eq("id", id)
+    if (error) {
+      showToast("Błąd usuwania utargu: " + error.message, "error")
+      return
+    }
+
+    setRevenues((prev) => prev.filter((r) => r.id !== id))
+    if (revDate === date) {
       setRevAmount("")
-      showToast(`Zapisano utarg dnia (${parsed} zł)`, "success")
+      setRevBreakdown({})
+    }
+    showToast(`Usunięto utarg z dnia ${date}`, "info")
+  }
+
+  const handleAddRevenueField = async (
+    name: string,
+    includeInTotal: boolean = true,
+    deductPreviousDay: boolean = false
+  ) => {
+    if (!restaurantId || !name.trim()) return
+    let { data, error } = await supabase
+      .from("restaurant_revenue_fields")
+      .insert([
+        {
+          restaurant_id: restaurantId,
+          name: name.trim(),
+          sort_order: revenueFields.length + 1,
+          is_active: true,
+          include_in_total: includeInTotal,
+          deduct_previous_day: deductPreviousDay,
+        },
+      ])
+      .select()
+
+    // Fallback if columns not yet added to DB
+    if (error && (error.code === "42703" || error.message?.includes("include_in_total"))) {
+      const fb = await supabase
+        .from("restaurant_revenue_fields")
+        .insert([
+          {
+            restaurant_id: restaurantId,
+            name: name.trim(),
+            sort_order: revenueFields.length + 1,
+            is_active: true,
+          },
+        ])
+        .select()
+      data = fb.data
+      error = fb.error
+    }
+
+    if (error) {
+      setRevenueFields((prev) => [
+        ...prev,
+        {
+          id: `local-${Date.now()}`,
+          restaurant_id: restaurantId,
+          name: name.trim(),
+          sort_order: prev.length + 1,
+          is_active: true,
+          include_in_total: includeInTotal,
+          deduct_previous_day: deductPreviousDay,
+        },
+      ])
+      showToast(`Dodano pozycję "${name}" (stan lokalny)`, "info")
+    } else if (data && data[0]) {
+      const created: RevenueField = {
+        ...(data[0] as RevenueField),
+        include_in_total: includeInTotal,
+        deduct_previous_day: deductPreviousDay,
+      }
+      setRevenueFields((prev) => [...prev, created])
+      showToast(`Dodano pozycję "${name}" do raportu utargu.`, "success")
+    }
+  }
+
+  const handleUpdateRevenueField = async (id: string, updates: Partial<RevenueField>) => {
+    const updatedList = revenueFields.map((f) => (f.id === id ? { ...f, ...updates } : f))
+    setRevenueFields(updatedList)
+
+    try {
+      if (typeof window !== "undefined" && restaurantId) {
+        localStorage.setItem(`gastro_revenue_fields_v2_${restaurantId}`, JSON.stringify(updatedList))
+      }
+    } catch {}
+
+    if (!id.startsWith("local-")) {
+      const { error } = await supabase.from("restaurant_revenue_fields").update(updates).eq("id", id)
+      if (error && (error.code === "42703" || error.message?.includes("include_in_total"))) {
+        // Kolumny jeszcze nie ma w bazie SQL – zaktualizuj to co się da
+        const { include_in_total, deduct_previous_day, ...safeUpdates } = updates as any
+        if (Object.keys(safeUpdates).length > 0) {
+          await supabase.from("restaurant_revenue_fields").update(safeUpdates).eq("id", id)
+        }
+      }
+    }
+    showToast("Zaktualizowano pozycję utargu.", "info")
+  }
+
+  const handleDeleteRevenueField = async (id: string, name: string) => {
+    const confirmed = await askConfirm(
+      `Czy na pewno chcesz usunąć pozycję "${name}" z raportu?`,
+      "Usuwanie pozycji utargu"
+    )
+    if (!confirmed) return
+
+    if (!id.startsWith("local-")) {
+      await supabase.from("restaurant_revenue_fields").delete().eq("id", id)
+    }
+    const filtered = revenueFields.filter((f) => f.id !== id)
+    setRevenueFields(filtered)
+    try {
+      if (typeof window !== "undefined" && restaurantId) {
+        localStorage.setItem(`gastro_revenue_fields_v2_${restaurantId}`, JSON.stringify(filtered))
+      }
+    } catch {}
+    showToast(`Usunięto pozycję "${name}".`, "info")
+  }
+
+  const handleLoadSuggestedFields = async () => {
+    if (!restaurantId) return
+    const toInsert = DEFAULT_REVENUE_FIELD_PRESETS
+      .filter((s) => !revenueFields.some((f) => f.name.toLowerCase() === s.name.toLowerCase()))
+      .map((preset, idx) => ({
+        restaurant_id: restaurantId,
+        name: preset.name,
+        sort_order: revenueFields.length + idx + 1,
+        is_active: true,
+        include_in_total: preset.include_in_total,
+        deduct_previous_day: preset.deduct_previous_day,
+      }))
+
+    if (toInsert.length === 0) {
+      showToast("Wszystkie standardowe pozycje są już na liście.", "info")
+      return
+    }
+
+    let { data, error } = await supabase
+      .from("restaurant_revenue_fields")
+      .insert(toInsert)
+      .select()
+
+    if (error && (error.code === "42703" || error.message?.includes("include_in_total"))) {
+      const stripped = toInsert.map(({ name, sort_order, is_active, restaurant_id }) => ({
+        restaurant_id,
+        name,
+        sort_order,
+        is_active,
+      }))
+      const fb = await supabase.from("restaurant_revenue_fields").insert(stripped).select()
+      data = fb.data
+      error = fb.error
+    }
+
+    if (!error && data) {
+      const mapped = (data as RevenueField[]).map((d) => {
+        const foundPreset = DEFAULT_REVENUE_FIELD_PRESETS.find((p) => p.name.toLowerCase() === d.name.toLowerCase())
+        return {
+          ...d,
+          include_in_total: foundPreset ? foundPreset.include_in_total : true,
+          deduct_previous_day: foundPreset ? foundPreset.deduct_previous_day : false,
+        }
+      })
+      setRevenueFields((prev) => [...prev, ...mapped])
+      showToast(`Dodano ${data.length} standardowych pozycji.`, "success")
+    } else {
+      const localItems = toInsert.map((item, idx) => ({
+        ...item,
+        id: `local-sug-${Date.now()}-${idx}`,
+      }))
+      setRevenueFields((prev) => [...prev, ...localItems])
+      showToast("Dodano standardowe pozycje (stan lokalny).", "info")
+    }
+  }
+
+  const handleOpenLogModal = (logToEdit?: AttendanceLog | null, targetUserId?: string) => {
+    setEditingLog(logToEdit || null)
+    setModalTargetUserId(targetUserId || (logToEdit ? logToEdit.user_id : currentUserId || undefined))
+    setIsLogModalOpen(true)
+  }
+
+  const handleSaveAttendanceLog = async (payload: {
+    id?: string
+    user_id: string
+    work_date: string
+    start_time: string
+    end_time: string
+    hours_worked: number
+    note: string | null
+  }) => {
+    if (!restaurantId) return
+
+    if (payload.id) {
+      const { data, error } = await supabase
+        .from("attendance_logs")
+        .update({
+          user_id: payload.user_id,
+          work_date: payload.work_date,
+          start_time: payload.start_time,
+          end_time: payload.end_time,
+          hours_worked: payload.hours_worked,
+          note: payload.note,
+        })
+        .eq("id", payload.id)
+        .select()
+
+      if (error) {
+        showToast("Błąd aktualizacji wpisu: " + error.message, "error")
+        return
+      }
+
+      setLogs((prev) =>
+        prev.map((l) => (l.id === payload.id ? (data[0] as AttendanceLog) : l))
+      )
+      showToast(`Zaktualizowano godziny (${payload.hours_worked} h).`, "success")
+    } else {
+      const { data, error } = await supabase
+        .from("attendance_logs")
+        .insert([
+          {
+            restaurant_id: restaurantId,
+            user_id: payload.user_id,
+            work_date: payload.work_date,
+            start_time: payload.start_time,
+            end_time: payload.end_time,
+            hours_worked: payload.hours_worked,
+            note: payload.note,
+          },
+        ])
+        .select()
+
+      if (error) {
+        showToast("Błąd zapisu obecności: " + error.message, "error")
+        return
+      }
+
+      if (data && data[0]) {
+        setLogs((prev) => [data[0] as AttendanceLog, ...prev])
+      }
+      const memberName = getMemberName(payload.user_id)
+      showToast(`Zapisano godziny (${payload.hours_worked} h) dla: ${memberName}`, "success")
+    }
+  }
+
+  const handleQuickSaveAttendance = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!restaurantId || !quickUserId || !quickWorkDate || !quickStartTime || !quickEndTime) return
+    const dur = calculateShiftDurationHours(quickStartTime, quickEndTime)
+    if (dur <= 0 || dur > 24) {
+      showToast("Sprawdź wpisane godziny.", "error")
+      return
+    }
+
+    setQuickSaving(true)
+    try {
+      await handleSaveAttendanceLog({
+        user_id: quickUserId,
+        work_date: quickWorkDate,
+        start_time: quickStartTime,
+        end_time: quickEndTime,
+        hours_worked: dur,
+        note: quickNote.trim() || null,
+      })
+      setQuickNote("")
+    } finally {
+      setQuickSaving(false)
     }
   }
 
@@ -922,6 +2306,15 @@ export function AttendanceManagerModule({
 
               <Button
                 type="button"
+                onClick={() => handleOpenLogModal(null, currentUserId || undefined)}
+                className="bg-zinc-900 hover:bg-zinc-800 text-white font-bold gap-1.5"
+              >
+                <span>⏱️</span>
+                <span>Wpisz godziny pracy</span>
+              </Button>
+
+              <Button
+                type="button"
                 variant="outline"
                 onClick={() => setIsManualBonusModalOpen(true)}
               >
@@ -949,7 +2342,7 @@ export function AttendanceManagerModule({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {staff.map((member) => {
+              {effectiveStaff.map((member) => {
                 const summary = calculateUserMonthlyPayroll({
                   userId: member.user_id,
                   userRole: member.role,
@@ -970,9 +2363,19 @@ export function AttendanceManagerModule({
                           style={{ backgroundColor: roleColor }}
                         />
                         <div>
-                          <span className="font-bold text-zinc-900">
-                            {getMemberName(member.user_id)}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-zinc-900">
+                              {getMemberName(member.user_id)}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenLogModal(null, member.user_id)}
+                              className="text-[10px] font-semibold text-indigo-600 hover:text-indigo-800 hover:underline"
+                              title="Wpisz godziny dla tej osoby"
+                            >
+                              + Wpisz
+                            </button>
+                          </div>
                           <span className="block text-[11px] text-zinc-400">
                             {member.role}
                           </span>
@@ -986,7 +2389,7 @@ export function AttendanceManagerModule({
                       {summary.totalHours} h
                     </TableCell>
                     <TableCell className="text-right text-xs text-zinc-500">
-                      {member.hourly_rate} zł/h
+                      {Number(member.hourly_rate) || 0} zł/h
                     </TableCell>
                     <TableCell className="text-right font-medium">
                       {summary.basePay.toFixed(2)} zł
@@ -1025,62 +2428,304 @@ export function AttendanceManagerModule({
         </CardContent>
       </Card>
 
+      {/* ========================================================================= */}
+      {/* SEKCJA: UTARGI DZIENNE I POZYCJE RAPORTU */}
+      {/* ========================================================================= */}
       <Card>
-        <CardHeader className="pb-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <CardHeader className="pb-3 border-b border-zinc-100">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <CardTitle className="text-base">💰 Utargi Dzienne ({monthRevenues.length} dni)</CardTitle>
-              <CardDescription className="text-xs">
-                Utargi wpisane przez pracowników lub managera.
+              <div className="flex items-center gap-2">
+                <CardTitle className="text-base sm:text-lg font-bold text-zinc-900 flex items-center gap-2">
+                  <span>💰 Utargi Dzienne i Raporty</span>
+                  <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold">
+                    {monthRevenues.length} {monthRevenues.length === 1 ? "dzień" : "dni"}
+                  </span>
+                </CardTitle>
+              </div>
+              <CardDescription className="text-xs text-zinc-500 mt-0.5">
+                Wprowadzanie utargu całkowitego (podstawa premii) oraz pozycji raportu (np. karty, grube, zasyp).
               </CardDescription>
             </div>
 
-            <form onSubmit={handleSaveDailyRevenue} className="flex flex-wrap items-center gap-2">
-              <Input
-                type="date"
-                value={revDate}
-                onChange={(e) => setRevDate(e.target.value)}
-                className="h-8 w-36 text-xs"
-                required
-              />
-              <Input
-                type="number"
-                step="any"
-                min="0"
-                placeholder="Kwota (PLN)"
-                value={revAmount}
-                onChange={(e) => setRevAmount(e.target.value)}
-                className="h-8 w-32 text-xs"
-                required
-              />
-              <Button type="submit" size="sm" className="h-8 text-xs">
-                Zapisz utarg
-              </Button>
-            </form>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setIsRevenueSettingsOpen(true)}
+              className="h-8 text-xs font-semibold gap-1.5 border-zinc-300 hover:bg-zinc-100 shrink-0"
+              title="Skonfiguruj dodatkowe pozycje raportu dla tego lokalu"
+            >
+              <span>⚙️</span>
+              <span>Ustawienia pozycji utargu</span>
+              {revenueFields.length > 0 && (
+                <span className="ml-0.5 px-1.5 py-0.2 rounded-full text-[10px] bg-zinc-200 text-zinc-800 font-bold">
+                  {revenueFields.filter((f) => f.is_active).length}
+                </span>
+              )}
+            </Button>
           </div>
         </CardHeader>
-        <CardContent>
-          {monthRevenues.length === 0 ? (
-            <p className="text-xs text-zinc-400">Brak wpisanych utargów w tym miesiącu.</p>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {monthRevenues.map((r) => {
-                const workersCount = new Set(
-                  monthLogs.filter((l) => l.work_date === r.work_date).map((l) => l.user_id)
-                ).size
-                return (
-                  <div
-                    key={r.id}
-                    className="px-3 py-1.5 rounded-lg border bg-zinc-50 text-xs flex items-center gap-2"
-                  >
-                    <span className="font-semibold text-zinc-700">📅 {r.work_date}:</span>
-                    <strong className="text-emerald-700">{Number(r.amount).toFixed(2)} zł</strong>
-                    <span className="text-[11px] text-zinc-400">({workersCount} os. w pracy)</span>
-                  </div>
-                )
-              })}
+
+        <CardContent className="pt-4 space-y-5">
+          {/* FORMULARZ WPISYWANIA / EDYCJI UTARGU DNIA */}
+          <form onSubmit={handleSaveDailyRevenue} className="p-4 rounded-xl bg-zinc-50/80 border border-zinc-200 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-200/80 pb-2.5">
+              <span className="text-xs font-bold text-zinc-800 uppercase tracking-wide">
+                📝 Wprowadź raport dla wybranego dnia
+              </span>
+              {revenues.some((r) => r.work_date === revDate) && (
+                <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full">
+                  ℹ️ Dla tego dnia istnieje już wpis – formularz go edytuje
+                </span>
+              )}
             </div>
-          )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs font-semibold text-zinc-700">Dzień utargu *</Label>
+                <Input
+                  type="date"
+                  value={revDate}
+                  onChange={(e) => handleSelectRevDate(e.target.value)}
+                  className="h-9 text-xs bg-white font-semibold cursor-pointer"
+                  required
+                />
+              </div>
+
+              {/* POLE BAZOWE: UTARG CAŁKOWITY */}
+              <div className="sm:col-span-2 space-y-1">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                    <span>💰 Utarg całkowity lokalu (PLN) *</span>
+                    <span className="text-[10px] font-bold px-1.5 py-0.2 bg-emerald-200 text-emerald-900 rounded">
+                      Pole bazowe (premie)
+                    </span>
+                  </Label>
+                  {breakdownCalc.calculatedTotal > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setRevAmount(String(breakdownCalc.calculatedTotal))}
+                      className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 hover:underline flex items-center gap-1"
+                      title="Wstaw wyliczony utarg (wliczane pozycje minus wczorajszy zasyp)"
+                    >
+                      <span>↙ Wstaw wyliczony utarg: {breakdownCalc.calculatedTotal.toFixed(2)} zł</span>
+                    </button>
+                  )}
+                </div>
+                <Input
+                  type="number"
+                  step="any"
+                  min="0"
+                  placeholder="Wprowadź łączną kwotę utargu lokalu..."
+                  value={revAmount}
+                  onChange={(e) => setRevAmount(e.target.value)}
+                  className="h-9 text-sm font-bold bg-white border-emerald-300 focus-visible:ring-emerald-500"
+                  required
+                />
+              </div>
+            </div>
+
+            {/* ROZBICIE NA SKŁADOWE (KARTY, GRUBE, ZASYP, RAPORT FISKALNY I INNE) */}
+            {revenueFields.filter((f) => f.is_active).length > 0 && (
+              <div className="pt-2 border-t border-zinc-200/70 space-y-2.5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+                  <span className="text-xs font-bold text-zinc-700 flex items-center gap-1">
+                    <span>📋 Składniki raportu dziennego:</span>
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-zinc-700">
+                      Wyliczony utarg: <strong className="text-emerald-700">{breakdownCalc.calculatedTotal.toFixed(2)} zł</strong>
+                    </span>
+                    {breakdownCalc.calculatedTotal > 0 && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => setRevAmount(String(breakdownCalc.calculatedTotal))}
+                        className="h-6 px-2 text-[11px] font-bold bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border border-emerald-300"
+                      >
+                        Wstaw do całości ➔
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {/* PODGLĄD WZORU NA ŻYWO */}
+                {breakdownCalc.formulaText && (
+                  <div className="px-2.5 py-1.5 rounded-lg bg-zinc-100/80 border border-zinc-200 text-[11px] text-zinc-600 font-mono flex items-center gap-1.5 overflow-x-auto">
+                    <span className="font-bold text-zinc-800">Wzór:</span>
+                    <span>{breakdownCalc.formulaText} = <strong>{breakdownCalc.calculatedTotal.toFixed(2)} zł</strong></span>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  {revenueFields
+                    .filter((f) => f.is_active)
+                    .map((field) => {
+                      const val = revBreakdown[field.name] || ""
+                      const isControlOnly = field.include_in_total === false
+                      const yesterdayVal = field.deduct_previous_day
+                        ? getPreviousDayFieldValue(field.name, revDate, revenues)
+                        : 0
+
+                      return (
+                        <div
+                          key={field.id}
+                          className={`p-2.5 rounded-lg border space-y-1.5 shadow-2xs ${
+                            isControlOnly
+                              ? "bg-zinc-50/70 border-zinc-200"
+                              : "bg-white border-zinc-200"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-1">
+                            <Label className="text-[11px] font-bold text-zinc-800 block truncate" title={field.name}>
+                              {field.name}
+                            </Label>
+                            {isControlOnly ? (
+                              <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-zinc-200 text-zinc-700 shrink-0" title="Nie dolicza się do sumy utargu całkowitego">
+                                Kontrolna
+                              </span>
+                            ) : field.deduct_previous_day ? (
+                              <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-amber-100 text-amber-900 shrink-0" title="Odejmuje stan z dnia poprzedniego">
+                                - Wczoraj
+                              </span>
+                            ) : (
+                              <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-emerald-100 text-emerald-800 shrink-0">
+                                + Do utargu
+                              </span>
+                            )}
+                          </div>
+
+                          <Input
+                            type="number"
+                            step="any"
+                            min="0"
+                            placeholder="0.00 zł"
+                            value={val}
+                            onChange={(e) =>
+                              setRevBreakdown((prev) => ({
+                                ...prev,
+                                [field.name]: e.target.value,
+                              }))
+                            }
+                            className="h-8 text-xs font-bold bg-zinc-50 focus:bg-white"
+                          />
+
+                          {field.deduct_previous_day && (
+                            <p className="text-[10px] text-amber-800/90 font-medium leading-tight">
+                              Wczorajszy stan: -{yesterdayVal.toFixed(0)} zł
+                            </p>
+                          )}
+                          {isControlOnly && (
+                            <p className="text-[10px] text-zinc-400 font-medium leading-tight">
+                              Stoi osobno (kontrola kasy)
+                            </p>
+                          )}
+                        </div>
+                      )
+                    })}
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end pt-1">
+              <Button type="submit" size="sm" disabled={savingRevenue} className="font-bold text-xs h-9 px-4">
+                {savingRevenue ? "Zapisywanie..." : "💾 Zapisz raport utargu"}
+              </Button>
+            </div>
+          </form>
+
+          {/* LISTA ZAPISANYCH UTARGÓW W WYBRANYM MIESIĄCU */}
+          <div className="space-y-2">
+            <h4 className="text-xs font-bold text-zinc-700 uppercase tracking-wide">
+              Zapisane utargi w miesiącu {selectedMonth} ({monthRevenues.length})
+            </h4>
+
+            {monthRevenues.length === 0 ? (
+              <div className="p-8 text-center text-xs text-zinc-400 border border-dashed rounded-xl">
+                Brak wpisanych utargów w miesiącu {selectedMonth}.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                {monthRevenues.map((r) => {
+                  const workersCount = new Set(
+                    monthLogs.filter((l) => l.work_date === r.work_date).map((l) => l.user_id)
+                  ).size
+
+                  const [y, m, d] = r.work_date.split("-").map(Number)
+                  const weekday = new Date(y, m - 1, d, 12, 0, 0).toLocaleDateString("pl-PL", { weekday: "short" })
+
+                  const breakdownEntries = r.breakdown ? Object.entries(r.breakdown) : []
+
+                  return (
+                    <div
+                      key={r.id}
+                      className="p-3 rounded-xl border border-zinc-200 bg-white hover:border-zinc-300 transition-all space-y-2 shadow-2xs"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-zinc-900 text-xs">
+                              📅 {r.work_date}
+                            </span>
+                            <span className="text-[10px] text-zinc-500 uppercase font-semibold">
+                              ({weekday})
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-zinc-500 mt-0.5">
+                            Załoga na zmianie: <strong>{workersCount} os.</strong>
+                          </p>
+                        </div>
+
+                        <div className="text-right">
+                          <p className="text-xs text-zinc-400 font-medium">Utarg całkowity:</p>
+                          <p className="text-sm font-extrabold text-emerald-700 font-mono">
+                            {Number(r.amount).toFixed(2)} zł
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* BADGE'E Z POZYCJAMI RAPORTU */}
+                      {breakdownEntries.length > 0 && (
+                        <div className="pt-2 border-t border-zinc-100 flex flex-wrap gap-1">
+                          {breakdownEntries.map(([name, val]) => (
+                            <span
+                              key={name}
+                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-zinc-100 text-zinc-700 border border-zinc-200/60"
+                            >
+                              {name}: <strong>{Number(val).toFixed(0)} zł</strong>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-end gap-1.5 pt-1 border-t border-zinc-50">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleSelectRevDate(r.work_date)}
+                          className="h-6 px-2 text-[11px] text-zinc-600 hover:text-zinc-900"
+                        >
+                          ✏️ Edytuj
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDeleteDailyRevenue(r.id, r.work_date)}
+                          className="h-6 px-2 text-[11px] text-red-500 hover:text-red-700 hover:bg-red-50"
+                        >
+                          🗑️ Usuń
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
 
@@ -1094,25 +2739,132 @@ export function AttendanceManagerModule({
               </CardDescription>
             </div>
 
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-zinc-500">Filtruj osobę:</span>
-              <select
-                value={filterUserId}
-                onChange={(e) => setFilterUserId(e.target.value)}
-                className="h-9 rounded-md border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-800"
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => handleOpenLogModal(null, currentUserId || undefined)}
+                className="h-9 text-xs font-bold bg-zinc-900 hover:bg-zinc-800 text-white gap-1.5"
               >
-                <option value="all">Wszyscy pracownicy</option>
-                {staff.map((m) => (
-                  <option key={m.user_id} value={m.user_id}>
-                    {getMemberName(m.user_id)} ({m.role})
-                  </option>
-                ))}
-              </select>
+                <span>+</span>
+                <span>Wpisz godziny</span>
+              </Button>
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-zinc-500">Filtruj:</span>
+                <select
+                  value={filterUserId}
+                  onChange={(e) => setFilterUserId(e.target.value)}
+                  className="h-9 rounded-md border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-800"
+                >
+                  <option value="all">Wszyscy pracownicy</option>
+                  {effectiveStaff.map((m) => {
+                    const isMe = m.user_id === currentUserId
+                    const name = m.users?.full_name || m.users?.email?.split("@")[0] || "Pracownik"
+                    return (
+                      <option key={m.user_id} value={m.user_id}>
+                        {isMe ? `⭐ ${name} (Ty - Menadżer)` : `${name} (${m.role})`}
+                      </option>
+                    )
+                  })}
+                </select>
+              </div>
             </div>
           </div>
         </CardHeader>
 
-        <CardContent>
+        <CardContent className="space-y-4">
+          {/* SZYBKIE WPISANIE GODZIN */}
+          <div className="p-3.5 rounded-xl border border-dashed border-zinc-300 bg-zinc-50/70 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-base">⏱️</span>
+                <span className="text-xs font-bold text-zinc-800">
+                  Szybkie wpisanie godzin obecności
+                </span>
+              </div>
+              {currentUserId && quickUserId !== currentUserId && (
+                <button
+                  type="button"
+                  onClick={() => setQuickUserId(currentUserId)}
+                  className="text-[11px] font-bold text-indigo-600 hover:underline"
+                >
+                  ⭐ Przełącz na: Ty ({currentUserName || "Menadżer"})
+                </button>
+              )}
+            </div>
+
+            <form onSubmit={handleQuickSaveAttendance} className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end">
+              <div className="sm:col-span-3 space-y-1">
+                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Osoba</span>
+                <select
+                  value={quickUserId}
+                  onChange={(e) => setQuickUserId(e.target.value)}
+                  className="w-full h-8 rounded-md border border-zinc-200 bg-white px-2.5 text-xs font-medium text-zinc-800"
+                >
+                  {effectiveStaff.map((m) => {
+                    const isMe = m.user_id === currentUserId
+                    const name = m.users?.full_name || m.users?.email?.split("@")[0] || "Pracownik"
+                    return (
+                      <option key={m.user_id} value={m.user_id}>
+                        {isMe ? `⭐ ${name} (Ty - Menadżer)` : `${name} (${m.role})`}
+                      </option>
+                    )
+                  })}
+                </select>
+              </div>
+
+              <div className="sm:col-span-2 space-y-1">
+                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Data</span>
+                <Input
+                  type="date"
+                  value={quickWorkDate}
+                  onChange={(e) => setQuickWorkDate(e.target.value)}
+                  className="h-8 text-xs bg-white"
+                  required
+                />
+              </div>
+
+              <div className="sm:col-span-2 space-y-1">
+                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Od</span>
+                <Input
+                  type="time"
+                  value={quickStartTime}
+                  onChange={(e) => setQuickStartTime(e.target.value)}
+                  className="h-8 text-xs font-mono font-bold bg-white"
+                  required
+                />
+              </div>
+
+              <div className="sm:col-span-2 space-y-1">
+                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Do</span>
+                <Input
+                  type="time"
+                  value={quickEndTime}
+                  onChange={(e) => setQuickEndTime(e.target.value)}
+                  className="h-8 text-xs font-mono font-bold bg-white"
+                  required
+                />
+              </div>
+
+              <div className="sm:col-span-3 flex items-center gap-1.5">
+                <span className="text-xs font-mono font-black text-blue-900 bg-blue-100 px-2 py-1.5 rounded shrink-0">
+                  {calculateShiftDurationHours(quickStartTime, quickEndTime) > 0
+                    ? `${calculateShiftDurationHours(quickStartTime, quickEndTime).toFixed(1)} h`
+                    : "0 h"}
+                </span>
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={quickSaving || calculateShiftDurationHours(quickStartTime, quickEndTime) <= 0}
+                  className="h-8 text-xs font-bold bg-zinc-900 text-white hover:bg-zinc-800 flex-1"
+                >
+                  {quickSaving ? "Zapis..." : "+ Zapisz"}
+                </Button>
+              </div>
+            </form>
+          </div>
+
           {filteredLogs.length === 0 ? (
             <div className="text-center py-10 border-2 border-dashed rounded-xl text-sm text-zinc-500">
               Brak wpisanych obecności w wybranym miesiącu.
@@ -1151,15 +2903,26 @@ export function AttendanceManagerModule({
                       )}
                     </div>
 
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      size="sm"
-                      className="h-8 text-xs shrink-0"
-                      onClick={() => handleDeleteAttendanceLog(log.id)}
-                    >
-                      Usuń wpis
-                    </Button>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs font-semibold hover:bg-zinc-100"
+                        onClick={() => handleOpenLogModal(log)}
+                      >
+                        ✏️ Edytuj
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        className="h-8 text-xs shrink-0"
+                        onClick={() => handleDeleteAttendanceLog(log.id)}
+                      >
+                        Usuń wpis
+                      </Button>
+                    </div>
                   </div>
                 )
               })}
@@ -1181,12 +2944,38 @@ export function AttendanceManagerModule({
       <ManualBonusModal
         isOpen={isManualBonusModalOpen}
         onClose={() => setIsManualBonusModalOpen(false)}
-        staff={staff}
+        staff={effectiveStaff}
         defaultDate={todayStr}
         manualBonuses={monthManual}
         onAddManualBonus={handleAddManualBonus}
         onDeleteManualBonus={handleDeleteManualBonus}
         getMemberName={getMemberName}
+      />
+
+      <AttendanceLogModal
+        isOpen={isLogModalOpen}
+        onClose={() => {
+          setIsLogModalOpen(false)
+          setEditingLog(null)
+          setModalTargetUserId(undefined)
+        }}
+        staff={effectiveStaff}
+        currentUserId={currentUserId}
+        currentUserName={currentUserName}
+        defaultDate={todayStr}
+        initialLog={editingLog}
+        targetUserId={modalTargetUserId}
+        onSave={handleSaveAttendanceLog}
+      />
+
+      <RevenueFieldsSettingsModal
+        isOpen={isRevenueSettingsOpen}
+        onClose={() => setIsRevenueSettingsOpen(false)}
+        fields={revenueFields}
+        onAddField={handleAddRevenueField}
+        onUpdateField={handleUpdateRevenueField}
+        onDeleteField={handleDeleteRevenueField}
+        onLoadSuggested={handleLoadSuggestedFields}
       />
     </div>
   )

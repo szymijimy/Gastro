@@ -1,4 +1,4 @@
-﻿"use client"
+"use client"
 
 import { useState, useCallback } from "react"
 import { showToast, askConfirm } from "@/components/ui/feedback"
@@ -43,8 +43,8 @@ export interface UseTasks {
   setTodos: React.Dispatch<React.SetStateAction<TodoItem[]>>
   /** Dodaje wiele zadań na raz (logika z TodoBatchModal). */
   handleSaveBatch: (validTasks: DraftTask[], targetDate: string) => Promise<void>
-  /** Przełącza status is_completed zadania. */
-  handleToggle: (todo: TodoItem) => Promise<void>
+  /** Przełącza status is_completed zadania i zapisuje kto je wykonał. */
+  handleToggle: (todo: TodoItem, overrideUserId?: string | null) => Promise<void>
   /** Aktualizuje priorytet zadania. */
   handleUpdatePriority: (todoId: string, newPriority: PriorityLevel) => Promise<void>
   /** Zapisuje lub usuwa uwagę do zadania (null = usuwa). */
@@ -71,15 +71,17 @@ export interface UseTasks {
  * Odpowiedzialności:
  * - lokalny stan listy zadań i filtra daty
  * - stan modal-open
- * - komunikacja z `tasksService` (wszystkie operacje CRUD)
+ * - komunikacja z `tasksService` (wszystkie operacje CRUD z ewidencją wykonawcy)
  * - powiadomienia toast po każdej operacji
  *
  * @param restaurantId  ID aktywnego lokalu (może być null gdy sesja się jeszcze ładuje)
  * @param todayStr      Bieżąca data w formacie YYYY-MM-DD (przekazywana z komponentu)
+ * @param currentUserId Opcjonalne ID aktualnie zalogowanego użytkownika (do ewidencji wykonania)
  */
 export function useTasks(
   restaurantId: string | null,
-  todayStr: string
+  todayStr: string,
+  currentUserId?: string | null
 ): UseTasks {
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [selectedDateState, setSelectedDateState] = useState<string>("")
@@ -154,23 +156,51 @@ export function useTasks(
     [restaurantId, selectedDate, todayStr, setSelectedDate]
   )
 
-  const handleToggle = useCallback(async (todo: TodoItem) => {
-    const newStatus = !todo.is_completed
-    // Optymistyczna aktualizacja UI
-    setTodos((prev) =>
-      prev.map((t) => (t.id === todo.id ? { ...t, is_completed: newStatus } : t))
-    )
+  const handleToggle = useCallback(
+    async (todo: TodoItem, overrideUserId?: string | null) => {
+      const newStatus = !todo.is_completed
+      const actingUserId = newStatus ? (overrideUserId ?? currentUserId ?? null) : null
+      const completedAt = newStatus ? new Date().toISOString() : null
 
-    const { error: svcError } = await toggleTodoCompleted(todo.id, newStatus)
-
-    if (svcError) {
-      // Rollback przy błędzie
+      // Optymistyczna aktualizacja UI
       setTodos((prev) =>
-        prev.map((t) => (t.id === todo.id ? { ...t, is_completed: todo.is_completed } : t))
+        prev.map((t) =>
+          t.id === todo.id
+            ? {
+                ...t,
+                is_completed: newStatus,
+                completed_by_user_id: actingUserId,
+                completed_at: completedAt,
+              }
+            : t
+        )
       )
-      showToast("Nie udało się zaktualizować zadania: " + svcError, "error")
-    }
-  }, [])
+
+      const { error: svcError } = await toggleTodoCompleted(
+        todo.id,
+        newStatus,
+        actingUserId
+      )
+
+      if (svcError) {
+        // Rollback przy błędzie
+        setTodos((prev) =>
+          prev.map((t) =>
+            t.id === todo.id
+              ? {
+                  ...t,
+                  is_completed: todo.is_completed,
+                  completed_by_user_id: todo.completed_by_user_id,
+                  completed_at: todo.completed_at,
+                }
+              : t
+          )
+        )
+        showToast("Nie udało się zaktualizować zadania: " + svcError, "error")
+      }
+    },
+    [currentUserId]
+  )
 
   const handleUpdatePriority = useCallback(
     async (todoId: string, newPriority: PriorityLevel) => {

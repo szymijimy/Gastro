@@ -15,6 +15,8 @@ export type TodoItem = {
   is_completed: boolean
   note: string | null
   created_at: string
+  completed_by_user_id?: string | null
+  completed_at?: string | null
 }
 
 /**

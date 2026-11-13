@@ -45,12 +45,12 @@ const getDatesInRange = (startStr: string, endStr: string): string[] => {
   if (!startStr || !endStr) return []
   const [sy, sm, sd] = startStr.split("-").map(Number)
   const [ey, em, ed] = endStr.split("-").map(Number)
-  const cur = new Date(sy, sm - 1, sd)
-  const end = new Date(ey, em - 1, ed)
+  const cur = new Date(sy, sm - 1, sd, 12, 0, 0)
+  const end = new Date(ey, em - 1, ed, 12, 0, 0)
 
   const dates: string[] = []
   let safety = 0
-  while (cur <= end && safety < 65) {
+  while (cur <= end && safety < 180) {
     const yyyy = cur.getFullYear()
     const mm = String(cur.getMonth() + 1).padStart(2, "0")
     const dd = String(cur.getDate()).padStart(2, "0")
@@ -62,8 +62,10 @@ const getDatesInRange = (startStr: string, endStr: string): string[] => {
 }
 
 const formatDayReadable = (dateStr: string) => {
+  if (!dateStr || !dateStr.includes("-")) return { weekday: "", dayMonth: dateStr || "" }
   const [y, m, d] = dateStr.split("-").map(Number)
-  const dateObj = new Date(y, m - 1, d)
+  const dateObj = new Date(y, m - 1, d, 12, 0, 0)
+  if (isNaN(dateObj.getTime())) return { weekday: "", dayMonth: dateStr }
   const weekday = dateObj.toLocaleDateString("pl-PL", { weekday: "long" })
   const dayMonth = dateObj.toLocaleDateString("pl-PL", { day: "2-digit", month: "long" })
   return {
