@@ -12,14 +12,47 @@ export default function AuthPage() {
   const router = useRouter()
 
   const [mode, setMode] = useState<"login" | "register">("login")
-  const [email, setEmail] = useState("")
+  const [email, setEmail] = useState(() => {
+    if (typeof window !== "undefined") {
+      try {
+        return localStorage.getItem("gastro_remembered_email") || ""
+      } catch {
+        return ""
+      }
+    }
+    return ""
+  })
   const [password, setPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
+  const [rememberMe, setRememberMe] = useState(() => {
+    if (typeof window !== "undefined") {
+      try {
+        return !!localStorage.getItem("gastro_remembered_email")
+      } catch {
+        return false
+      }
+    }
+    return false
+  })
 
   const [loading, setLoading] = useState(false)
   const [checkingSession, setCheckingSession] = useState(true)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
-  const [infoMsg, setInfoMsg] = useState<string | null>(null)
+  const [infoMsg, setInfoMsg] = useState<string | null>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const urlParams = new URLSearchParams(window.location.search)
+        const reason = urlParams.get("reason")
+        const storedLogoutMsg = sessionStorage.getItem("gastro_logout_message")
+        if (reason === "inactivity" || storedLogoutMsg) {
+          return "Zostałeś automatycznie wylogowany z powodu braku aktywności"
+        }
+      } catch {
+        return null
+      }
+    }
+    return null
+  })
 
   const [unassignedUserEmail, setUnassignedUserEmail] = useState<string | null>(null)
 
@@ -32,54 +65,8 @@ export default function AuthPage() {
       normalizedEmail === "kd@t.pl" ||
       normalizedEmail === "owner@gastro.pl"
 
-    // 1. Jeśli to konto głównego właściciela, natychmiast zapewnij rolę 'owner' we wszystkich lokalach
+    // 1. Jeśli to konto głównego właściciela, przekieruj bezpośrednio do panelu właściciela
     if (isOwnerAccount) {
-      try {
-        // Zapewnij profil w public.users dla obecnego ID sesji
-        await supabase.from("users").upsert(
-          {
-            id: userId,
-            email: normalizedEmail,
-            full_name: "Krzysztof D.",
-            is_active: true,
-            default_hourly_rate: 0,
-          },
-          { onConflict: "id" }
-        )
-
-        // Pobierz wszystkie lokale w systemie i przypisz bieżącego użytkownika jako owner
-        const { data: venues } = await supabase.from("restaurants").select("id")
-        if (venues && venues.length > 0) {
-          const ownerAssignments = venues.map((v: { id: string }) => ({
-            restaurant_id: v.id,
-            user_id: userId,
-            role: "owner",
-            hourly_rate: 0,
-          }))
-          await supabase.from("restaurant_users").upsert(ownerAssignments, {
-            onConflict: "restaurant_id,user_id",
-          })
-        }
-
-        // Usunięcie ewentualnych starych/osieroconych ID dla tego samego e-maila
-        const { data: otherUsers } = await supabase
-          .from("users")
-          .select("id")
-          .eq("email", normalizedEmail)
-          .neq("id", userId)
-
-        const otherIds = (otherUsers || []).map((u: { id: string }) => u.id)
-        otherIds.push("aaaaaaaa-aaaa-aaaa-aaaa-000000000001")
-
-        const validOtherIds = otherIds.filter((id) => id !== userId)
-        if (validOtherIds.length > 0) {
-          await supabase.from("restaurant_users").delete().in("user_id", validOtherIds)
-          await supabase.from("users").delete().in("id", validOtherIds)
-        }
-      } catch (err) {
-        console.warn("Auto-assignment for owner fallback error:", err)
-      }
-
       setLoading(false)
       router.replace("/owner")
       return
@@ -114,6 +101,19 @@ export default function AuthPage() {
   }, [router])
 
   useEffect(() => {
+    // Czyszczenie parametrów wylogowania po zainicjalizowaniu stanu
+    if (typeof window !== "undefined") {
+      try {
+        sessionStorage.removeItem("gastro_logout_message")
+        const urlParams = new URLSearchParams(window.location.search)
+        if (urlParams.get("reason") === "inactivity") {
+          window.history.replaceState({}, "", window.location.pathname)
+        }
+      } catch (err) {
+        console.warn("Storage access error:", err)
+      }
+    }
+
     const checkInitialSession = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (session?.user) {
@@ -129,6 +129,19 @@ export default function AuthPage() {
     setErrorMsg(null)
     setInfoMsg(null)
     setLoading(true)
+
+    // Obsługa 'Zapamiętaj mnie' (zapisujemy wyłącznie adres email, nigdy hasło)
+    if (typeof window !== "undefined") {
+      try {
+        if (rememberMe) {
+          localStorage.setItem("gastro_remembered_email", email.trim())
+        } else {
+          localStorage.removeItem("gastro_remembered_email")
+        }
+      } catch (storageErr) {
+        console.warn("Storage write error:", storageErr)
+      }
+    }
 
     const { data, error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
@@ -153,8 +166,8 @@ export default function AuthPage() {
     setErrorMsg(null)
     setInfoMsg(null)
 
-    if (password.length < 6) {
-      setErrorMsg("Hasło musi mieć co najmniej 6 znaków.")
+    if (password.length < 8) {
+      setErrorMsg("Hasło musi mieć co najmniej 8 znaków.")
       return
     }
 
@@ -358,6 +371,22 @@ export default function AuthPage() {
                 />
               </div>
 
+              <div className="flex items-center space-x-2 pt-1 pb-1">
+                <input
+                  id="remember-me"
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="h-4 w-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900 cursor-pointer accent-zinc-900"
+                />
+                <Label
+                  htmlFor="remember-me"
+                  className="text-xs font-normal text-zinc-600 cursor-pointer select-none"
+                >
+                  Zapamiętaj mnie
+                </Label>
+              </div>
+
               <Button type="submit" className="w-full" disabled={loading}>
                 {loading ? "Logowanie..." : "Zaloguj się"}
               </Button>
@@ -377,7 +406,7 @@ export default function AuthPage() {
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="reg-password">Utwórz hasło (min. 6 znaków)</Label>
+                <Label htmlFor="reg-password">Utwórz hasło (min. 8 znaków)</Label>
                 <Input
                   id="reg-password"
                   type="password"

@@ -107,6 +107,15 @@ function OwnerDashboard() {
   const [isSyncingKsef, setIsSyncingKsef] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
 
+  const getAuthHeaders = async (): Promise<Record<string, string>> => {
+    const { data: { session } } = await supabase.auth.getSession()
+    const token = session?.access_token
+    return {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    }
+  }
+
   // --------------------------------------------------------------------------
   // 1. Sprawdzanie uprawnień i sesji
   // --------------------------------------------------------------------------
@@ -116,16 +125,12 @@ function OwnerDashboard() {
         const { data: { session } } = await supabase.auth.getSession()
 
         if (!session?.user) {
-          // Dla ułatwienia testów lokalnych: jeśli brak sesji, sprawdź czy jest w localStorage
-          const localOwnerMock = typeof window !== "undefined" ? localStorage.getItem("gastro_owner_mock") : null
-          if (!localOwnerMock) {
-            router.replace("/")
-            return
-          }
+          router.replace("/")
+          return
         }
 
-        const uid = session?.user?.id || "aaaaaaaa-aaaa-aaaa-aaaa-000000000001"
-        const email = session?.user?.email || "kd@t.pl"
+        const uid = session.user.id
+        const email = session.user.email || ""
 
         // Pobierz imię i nazwisko z public.users lub auth metadata, domyślnie 'Krzysztof D.'
         let resolvedName = "Krzysztof D."
@@ -197,11 +202,14 @@ function OwnerDashboard() {
           .select("role")
           .eq("user_id", uid)
 
-        const roles = (rolesData || []).map((r: { role: string }) => r.role)
-        // Jeśli nie jest właścicielem w bazie, ale loguje się testowo, pozwalamy na podgląd
-        if (rolesData && rolesData.length > 0 && !roles.includes("owner") && !roles.includes("manager")) {
+        const roles = (rolesData || []).map((r: { role: string }) => r.role?.toLowerCase())
+        const isSuperOwner = email.toLowerCase() === "kd@t.pl" || email.toLowerCase() === "owner@gastro.pl"
+        const isOwner = isSuperOwner || roles.includes("owner")
+
+        // Ścisła weryfikacja uprawnień: tylko rola 'owner' ma wstęp do panelu właściciela
+        if (!isOwner) {
           showToast("Brak uprawnień właściciela do panelu MIS", "error")
-          router.replace("/bartender")
+          router.replace(roles.includes("manager") ? "/manager" : "/bartender")
           return
         }
 
@@ -242,7 +250,8 @@ function OwnerDashboard() {
 
       // B. Faktury KSeF
       try {
-        const res = await fetch("/api/ksef/invoices")
+        const authHeaders = await getAuthHeaders()
+        const res = await fetch("/api/ksef/invoices", { headers: authHeaders })
         if (res.ok) {
           const invData = await res.json()
           if (Array.isArray(invData) && invData.length > 0) {
@@ -264,7 +273,8 @@ function OwnerDashboard() {
       const configMap: Record<string, KsefConfig | null> = {}
       for (const v of loadedVenues) {
         try {
-          const res = await fetch(`/api/ksef/config?restaurantId=${v.id}`)
+          const authHeaders = await getAuthHeaders()
+          const res = await fetch(`/api/ksef/config?restaurantId=${v.id}`, { headers: authHeaders })
           if (res.ok) {
             const cfg = await res.json()
             configMap[v.id] = cfg
@@ -709,10 +719,11 @@ function OwnerDashboard() {
 
     try {
       const targetVenueId = venueId || (selectedVenueId !== "all" ? selectedVenueId : undefined)
+      const authHeaders = await getAuthHeaders()
 
       const res = await fetch("/api/ksef/sync", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders,
         body: JSON.stringify({
           restaurant_id: targetVenueId,
           environment: "test",
@@ -756,9 +767,10 @@ function OwnerDashboard() {
     is_active: boolean
   }): Promise<boolean> => {
     try {
+      const authHeaders = await getAuthHeaders()
       const res = await fetch("/api/ksef/config", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders,
         body: JSON.stringify(cfg),
       })
 
@@ -788,9 +800,10 @@ function OwnerDashboard() {
         prev.map((i) => (i.id === invoiceId ? { ...i, payment_status: status } : i))
       )
 
+      const authHeaders = await getAuthHeaders()
       const res = await fetch("/api/ksef/invoices", {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders,
         body: JSON.stringify({ id: invoiceId, payment_status: status }),
       })
 
@@ -1029,7 +1042,6 @@ function OwnerDashboard() {
   const handleLogout = async () => {
     await supabase.auth.signOut()
     if (typeof window !== "undefined") {
-      localStorage.removeItem("gastro_owner_mock")
       localStorage.removeItem("gastro_owner_name")
     }
     router.replace("/")

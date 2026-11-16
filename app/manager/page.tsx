@@ -896,8 +896,6 @@ function ManagerDashboard() {
       const isKnownOwner =
         session.user.email?.toLowerCase() === "kd@t.pl" ||
         session.user.email?.toLowerCase() === "owner@gastro.pl" ||
-        session.user.user_metadata?.role === "owner" ||
-        (typeof window !== "undefined" && localStorage.getItem("gastro_owner_mock") === "true") ||
         (userRestaurantsData && userRestaurantsData.some((ur: any) => ur.role?.toLowerCase() === "owner"))
 
       if (isKnownOwner) {

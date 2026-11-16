@@ -106,6 +106,7 @@ export function StaffAttendanceModule({
           .from("attendance_logs")
           .select("*")
           .eq("restaurant_id", restaurantId)
+          .eq("user_id", currentUserId)
           .order("work_date", { ascending: false })
           .order("created_at", { ascending: false }),
         supabase
@@ -263,7 +264,7 @@ export function StaffAttendanceModule({
         if (num > 0) cleanBreakdown[k] = num
       })
 
-      let { data: revData, error: revError } = await supabase
+      const { data: initialRevData, error: revError } = await supabase
         .from("daily_revenues")
         .upsert(
           {
@@ -276,6 +277,8 @@ export function StaffAttendanceModule({
           { onConflict: "restaurant_id,work_date" }
         )
         .select()
+
+      let revData = initialRevData
 
       // Graceful fallback
       if (revError && (revError.code === "42703" || revError.message?.includes("breakdown"))) {
